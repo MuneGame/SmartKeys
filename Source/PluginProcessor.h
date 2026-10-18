@@ -4,6 +4,15 @@
     PluginProcessor.h
     SmartKeys — Piano inteligente, generador de acordes y controlador vocal.
 
+    Se compila en dos variantes desde el mismo código:
+      - SmartKeys     (instrumento: Channel Rack de FL / pista MIDI de Ableton).
+                      Entrada de micrófono como sidechain (como un vocoder).
+      - SmartKeys FX  (efecto, SMARTKEYS_FX_VARIANT=1): se inserta en la pista
+                      del micrófono del Mixer y recibe la voz como entrada
+                      principal, sin ruteos.
+    Ambas pueden además leer el micrófono DIRECTAMENTE desde la interfaz de
+    audio (selector "DEVICE"), sin depender del ruteo del DAW.
+
   ==============================================================================
 */
 
@@ -12,10 +21,17 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <array>
 #include <atomic>
+#include <vector>
 #include "ScaleChordEngine.h"
 #include "VoicePitchTracker.h"
 #include "FlKeysPianoSynth.h"
 #include "MidiOutputRouter.h"
+#include "HardwareMicInput.h"
+#include "ChordRecorder.h"
+
+#ifndef SMARTKEYS_FX_VARIANT
+ #define SMARTKEYS_FX_VARIANT 0
+#endif
 
 namespace ParamIDs
 {
@@ -26,20 +42,28 @@ namespace ParamIDs
     inline constexpr const char* chordExt    = "chordExt";
     inline constexpr const char* complexVar  = "complexVar";
     inline constexpr const char* micOn       = "micOn";
+    inline constexpr const char* micSource   = "micSource";
     inline constexpr const char* micGate     = "micGate";
-    inline constexpr const char* pianoOn     = "pianoOn";
+    inline constexpr const char* outputMode  = "outputMode";
+    inline constexpr const char* midiOutCh   = "midiOutCh";
     inline constexpr const char* masterGain  = "masterGain";
     inline constexpr const char* microTuning = "microTuning";
 }
 
+namespace OutputMode { enum : int { InternalPiano = 0, ExternalMidi = 1, Both = 2 }; }
+namespace MicSource  { enum : int { DawInput = 0, HardwareDevice = 1 }; }
+
 //==============================================================================
 class SmartKeysAudioProcessor : public juce::AudioProcessor,
                                 public juce::VST3ClientExtensions,
-                                private juce::AudioProcessorValueTreeState::Listener
+                                private juce::AudioProcessorValueTreeState::Listener,
+                                private juce::Timer
 {
 public:
     SmartKeysAudioProcessor();
     ~SmartKeysAudioProcessor() override;
+
+    static constexpr bool isFxVariant = SMARTKEYS_FX_VARIANT != 0;
 
     //==========================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -68,9 +92,10 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     //==========================================================================
-    // VST3: el bus de entrada se declara como auxiliar (sidechain), igual que un vocoder
+    // VST3: en el instrumento la entrada es auxiliar (sidechain, como un vocoder);
+    // en SmartKeys FX es la entrada principal de la pista donde se inserta.
     juce::VST3ClientExtensions* getVST3ClientExtensions() override { return this; }
-    bool getPluginHasMainInput() const override                     { return false; }
+    bool getPluginHasMainInput() const override                     { return isFxVariant; }
 
     //==========================================================================
     // API para la interfaz (hilo de mensajes)
@@ -79,7 +104,7 @@ public:
     uint16_t getCustomMask() const noexcept     { return customMask.load(); }
     void toggleCustomNote (int pitchClass) noexcept;
 
-    // Teclado en pantalla -> FIFO lock-free -> hilo de audio
+    // Teclado en pantalla / teclado de la PC -> FIFO lock-free -> hilo de audio
     void pushScreenNote (int note, int velocity, bool isNoteOn) noexcept;
 
     void requestPanic() noexcept                { panicRequested.store (true); }
@@ -87,18 +112,51 @@ public:
     // Notas de salida que suenan (bitmask atómico de 128 bits)
     uint64_t getActiveNotesLo() const noexcept  { return activeNotesBitmask[0].load (std::memory_order_acquire); }
     uint64_t getActiveNotesHi() const noexcept  { return activeNotesBitmask[1].load (std::memory_order_acquire); }
-    uint64_t getLastEventPacked() const noexcept { return router.lastEventPacked.load (std::memory_order_acquire); }
+    uint64_t getLastEventPacked() const noexcept      { return router.lastEventPacked.load (std::memory_order_acquire); }
+    uint64_t getLastVoiceEventPacked() const noexcept { return router.lastVoiceEventPacked.load (std::memory_order_acquire); }
 
-    const smartkeys::VoicePitchTracker& getVoiceTracker() const noexcept { return voiceTracker; }
+    // Micrófono: detector de la fuente activa, nivel y estado
+    const smartkeys::VoicePitchTracker& getActiveVoiceTracker() const noexcept
+    {
+        return activeVoiceSource.load() == MicSource::HardwareDevice ? hardwareTracker : dawTracker;
+    }
+    float getMicLevelDb() const noexcept          { return micLevelDb.load(); }
+    bool  isMicSourceAvailable() const noexcept   { return micSourceAvailable.load(); }
+    bool  isVoiceChordSounding() const noexcept   { return voiceChordSounding.load(); }
+
+    // Micrófono de hardware (vía B) — hilo de mensajes
+    juce::StringArray getHardwareInputDevices()   { return hardwareMic.getInputDeviceNames(); }
+    juce::String getDefaultHardwareInputDevice()  { return hardwareMic.getDefaultInputDeviceName(); }
+    juce::String getHardwareDeviceName() const    { const juce::ScopedLock sl (hardwareStateLock); return hardwareDeviceName; }
+    int  getHardwareChannelMode() const noexcept  { return hardwareChannelMode.load(); }
+    bool isHardwareMicOpen() const noexcept       { return hardwareMic.isOpen(); }
+    juce::String getHardwareStatus() const        { const juce::ScopedLock sl (hardwareStateLock); return hardwareStatus; }
+    double getHardwareMsSinceSignal() const noexcept { return hardwareMic.getMillisecondsSinceSignal(); }
+    double getHardwareMsSinceStart() const noexcept  { return hardwareMic.getMillisecondsSinceStart(); }
+    void setHardwareInput (const juce::String& deviceName, int channelMode, bool activate);
+    void retryHardwareInput();
+
+    // Grabador de acordes (DRAG CHORDS TO PIANO ROLL) — hilo de mensajes
+    int  getNumCapturedChords() const noexcept    { return recorder.getNumChords(); }
+    bool isCaptureFull() const noexcept           { return recorder.isFull(); }
+    void clearCapturedChords();
+    juce::File exportCapturedChords (const juce::String& baseName);
+    bool getExportQuantize() const noexcept       { return exportQuantize.load(); }
+    void setExportQuantize (bool q) noexcept      { exportQuantize.store (q); }
+    double getHostBpm() const noexcept            { return hostBpm.load(); }
 
     static juce::StringArray getKeyNames();
 
 private:
     //==========================================================================
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    static BusesProperties createBuses();
     void parameterChanged (const juce::String& parameterID, float newValue) override;
+    void timerCallback() override;
     void updateEngineIfNeeded();
-    void drainScreenNotes (juce::MidiBuffer& out);
+    void drainScreenNotes (juce::MidiBuffer& out, int outChannel);
+    void captureOutputNotes (const juce::MidiBuffer& notes, double sampleRate, double bpm, int numSamples);
+    void openHardwareMicIfNeeded();
 
     //==========================================================================
     juce::AudioProcessorValueTreeState apvts;
@@ -110,15 +168,19 @@ private:
     std::atomic<float>* pChordExt    = nullptr;
     std::atomic<float>* pComplexVar  = nullptr;
     std::atomic<float>* pMicOn       = nullptr;
+    std::atomic<float>* pMicSource   = nullptr;
     std::atomic<float>* pMicGate     = nullptr;
-    std::atomic<float>* pPianoOn     = nullptr;
+    std::atomic<float>* pOutputMode  = nullptr;
+    std::atomic<float>* pMidiOutCh   = nullptr;
     std::atomic<float>* pMasterGain  = nullptr;
     std::atomic<float>* pMicroTuning = nullptr;
 
     smartkeys::ScaleChordEngine  engine;
-    smartkeys::VoicePitchTracker voiceTracker;
+    smartkeys::VoicePitchTracker dawTracker;        // vía A: bus de entrada del DAW
+    smartkeys::VoicePitchTracker hardwareTracker;   // vía B: micrófono directo
     smartkeys::FlKeysPianoSynth  pianoSynth;
     smartkeys::MidiOutputRouter  router;
+    smartkeys::HardwareMicInput  hardwareMic;
 
     // Personalización de las 12 notas (bit 0 = C)
     std::atomic<uint16_t> customMask { 0b101010110101 };
@@ -129,7 +191,26 @@ private:
     float    appliedRef = 0.0f;
     bool     appliedMicro = false;
     bool     micWasOn = false;
-    bool     pianoWasOn = true;
+    bool     pianoWasActive = true;
+    int      lastVoiceSource = -1;
+    double   currentSampleRate = 44100.0;
+
+    // Estado del micrófono para la interfaz
+    std::atomic<int>   activeVoiceSource { MicSource::DawInput };
+    std::atomic<float> micLevelDb { -100.0f };
+    std::atomic<bool>  micSourceAvailable { false };
+    std::atomic<bool>  voiceChordSounding { false };
+
+    // Micrófono de hardware. Lo usan el hilo de mensajes y setStateInformation
+    // (que algunos hosts llaman desde otro hilo): protegido por un candado que
+    // el hilo de audio nunca toma.
+    juce::CriticalSection hardwareStateLock;
+    juce::String     hardwareDeviceName;
+    juce::String     hardwareStatus;
+    bool             hardwareOpenFailed = false;
+    std::atomic<int>  hardwareChannelMode { (int) smartkeys::HardwareMicInput::ChannelMode::Mix };
+    std::atomic<bool> hardwareReopenRequested { false };
+    std::vector<float> hardwareScratch;   // reservado en prepareToPlay
 
     // FIFO del teclado en pantalla
     struct ScreenNoteEvent { int note = 60; int velocity = 100; bool on = true; };
@@ -138,10 +219,16 @@ private:
     std::array<ScreenNoteEvent, kScreenFifoSize> screenEvents {};
 
     std::atomic<bool> panicRequested { false };
-
     std::array<std::atomic<uint64_t>, 2> activeNotesBitmask {};
 
-    juce::MidiBuffer outMidi;
+    // Grabador de acordes
+    smartkeys::CaptureFifo   captureFifo;
+    smartkeys::ChordRecorder recorder;
+    double captureClockQn = 0.0;                  // reloj musical (hilo de audio)
+    std::atomic<double> hostBpm { 120.0 };
+    std::atomic<bool>   exportQuantize { true };
+
+    juce::MidiBuffer expandedChordMidi;           // acordes completos de salida
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> gainSmoothed;
 
     static constexpr size_t kMidiReserveBytes = 16384;

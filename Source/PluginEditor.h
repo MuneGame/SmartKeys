@@ -2,7 +2,7 @@
   ==============================================================================
 
     PluginEditor.h
-    SmartKeys — Interfaz gráfica vectorial (850 x 560 px).
+    SmartKeys — Interfaz gráfica vectorial (850 x 640 px).
 
   ==============================================================================
 */
@@ -29,12 +29,16 @@ namespace Colours
     inline const juce::Colour label        { 0xFF8A93A6 };
     inline const juce::Colour softPanel    { 0xFFF7F8FA };
     inline const juce::Colour ledBack      { 0xFF1B1D21 };
+    inline const juce::Colour warning      { 0xFFD92D20 };
 }
 
 juce::Font makeFont (float height, bool bold = true);
 
 // Rectángulo redondeado con brillo rosa (selección activa)
 void drawGlowBox (juce::Graphics& g, juce::Rectangle<float> r, float corner, juce::Colour fill, bool glow);
+
+// Propiedad de componente para fijar el tamaño de letra de un botón concreto
+inline const juce::Identifier fontSizeProperty { "skFontSize" };
 
 //==============================================================================
 class SmartKeysLookAndFeel : public juce::LookAndFeel_V4
@@ -51,6 +55,11 @@ public:
                            juce::Slider::SliderStyle, juce::Slider&) override;
     juce::Label* createSliderTextBox (juce::Slider&) override;
     juce::Font getPopupMenuFont() override;
+
+    void drawComboBox (juce::Graphics&, int width, int height, bool isButtonDown,
+                       int buttonX, int buttonY, int buttonW, int buttonH, juce::ComboBox&) override;
+    juce::Font getComboBoxFont (juce::ComboBox&) override;
+    void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
 };
 
 //==============================================================================
@@ -160,7 +169,7 @@ public:
     void setState (float levelDb, float gateDb, bool gateOpen, bool enabled);
 
 private:
-    float level = -100.0f, gate = -40.0f, displayLevel = -100.0f;
+    float level = -100.0f, gate = -48.0f, displayLevel = -100.0f;
     bool open = false, active = false;
 };
 
@@ -207,8 +216,35 @@ private:
     bool isLit = false;
 };
 
-// Propiedad de componente para fijar el tamaño de letra de un botón concreto
-inline const juce::Identifier fontSizeProperty { "skFontSize" };
+//==============================================================================
+// [ DRAG CHORDS TO PIANO ROLL ]: arrastra la progresión grabada (todas las
+// notas de cada acorde) como archivo .mid al Piano Roll; un clic la guarda
+// y la muestra en el Finder / Explorador.
+class DragChordsButton : public juce::Component,
+                         public juce::SettableTooltipClient
+{
+public:
+    DragChordsButton (SmartKeysAudioProcessor& p, std::function<juce::String()> baseNameProvider);
+
+    void paint (juce::Graphics&) override;
+    void mouseEnter (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+
+    void setCount (int numChords, bool isFull);
+
+private:
+    juce::File exportNow();
+
+    SmartKeysAudioProcessor& processor;
+    std::function<juce::String()> makeBaseName;
+    int count = 0;
+    bool full = false, hover = false, pressed = false, dragStarted = false;
+    juce::String flashText;
+    juce::uint32 flashUntilMs = 0;
+};
 
 } // namespace smartkeys::ui
 
@@ -229,21 +265,37 @@ public:
 private:
     void timerCallback() override;
     void updateDisplay();
+    void updateMicStatus();
+    void refreshDeviceList();
+    void applyDeviceSelection();
     void setRefPitch (float hz);
+    juce::String makeExportBaseName() const;
 
     SmartKeysAudioProcessor& processor;
     juce::AudioProcessorValueTreeState& apvts;
     smartkeys::ui::SmartKeysLookAndFeel lookAndFeel;
 
-    // Cabecera
+    // Fila 1: modo + salida
     smartkeys::ui::ChoiceButtons modeSwitch;
-    juce::TextButton pianoButton, micButton, microButton;
-    juce::Slider gainSlider, gateSlider, tuningSlider;
-    juce::TextButton tune440 { "440" }, tune442 { "442" };
-    smartkeys::ui::LevelMeter micMeter;
+    smartkeys::ui::ChoiceButtons outputSwitch;
 
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> pianoAttach, micAttach, microAttach;
+    // Fila 2: afinación, canal MIDI, microafinación, pánico, ganancia
+    juce::Slider tuningSlider, gainSlider, gateSlider;
+    juce::TextButton tune440 { "440" }, tune442 { "442" };
+    juce::ComboBox midiChannelBox;
+    juce::TextButton microButton, panicButton { "ALL NOTES OFF" };
+
+    // Tira MIC: controlador de voz, fuente, dispositivo, canal, medidor, gate, estado
+    juce::TextButton micButton;
+    smartkeys::ui::ChoiceButtons sourceSwitch;
+    juce::ComboBox deviceBox, channelBox;
+    juce::TextButton rescanButton { "RESCAN" };
+    smartkeys::ui::LevelMeter micMeter;
+    juce::Label micStatusLabel;
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> micAttach, microAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gainAttach, gateAttach, tuningAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> midiChannelAttach;
 
     // Módulos
     smartkeys::ui::KeySelector keySelector;
@@ -253,23 +305,28 @@ private:
     smartkeys::ui::ChordDisplay chordDisplay;
     smartkeys::ui::ChoiceButtons chordTypeSwitch;     // SMART CHORDS: TRIAD / +8VA / 7TH
     smartkeys::ui::ChoiceButtons variationSwitch;     // COMPLEX CHORDS: Lush / Neo-Soul / Cinematic
-    juce::TextButton panicButton { "ALL NOTES OFF" };
-    int shownMode = -1, shownVariation = -1;
 
-    juce::TooltipWindow tooltipWindow { this, 600 };
+    // Grabador de acordes
+    smartkeys::ui::DragChordsButton dragButton;
+    juce::TextButton quantizeButton { "QUANTIZE 1/16" }, clearButton { "CLEAR" };
 
     // Motor local (hilo de mensajes) para nombres de escala y acordes
     smartkeys::ScaleChordEngine displayEngine;
-    int shownRoot = -1, shownScale = -1;
+    int shownRoot = -1, shownScale = -1, shownMode = -1, shownVariation = -1;
     uint16_t shownMask = 0;
     uint64_t shownEvent = ~(uint64_t) 0, shownLo = ~(uint64_t) 0, shownHi = ~(uint64_t) 0;
     int shownVoiceNote = -2;
+    juce::StringArray shownDevices;
+    bool autoDeviceAttempted = false;
+    int stateSyncCounter = 0;   // re-sincroniza los selectores con el proyecto cargado (~4 veces/s)
 
     // Teclado de la computadora (A W S E D F T G Y H U J K, Z/X = octava)
     static constexpr const char* kKeyMap = "awsedftgyhujk";
     std::array<bool, 13> computerKeysDown {};
     std::array<int, 13> computerKeyNotes {};
     int computerOctave = 4;
+
+    juce::TooltipWindow tooltipWindow { this, 600 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SmartKeysAudioProcessorEditor)
 };

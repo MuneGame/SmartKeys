@@ -1,0 +1,9 @@
+#!/bin/bash
+# SmartKeys — después de instalar los Audio Units: obliga a macOS, FL Studio y
+# Ableton Live a leer el binario nuevo desde cero.
+SK_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Dentro del .pkg las funciones van junto al script; en el repositorio, una carpeta arriba
+if [ -f "$SK_DIR/cleanup_common.sh" ]; then source "$SK_DIR/cleanup_common.sh"; else source "$SK_DIR/../cleanup_common.sh"; fi
+sk_log "== postinstall AU =="
+sk_flush_audio_unit_cache
+exit 0

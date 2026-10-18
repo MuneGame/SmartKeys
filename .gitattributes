@@ -1,0 +1,4 @@
+# Finales de línea: los .bat necesitan CRLF en Windows; los scripts de macOS, LF
+*.bat text eol=crlf
+*.sh  text eol=lf
+Installer/macos/scripts-*/* text eol=lf

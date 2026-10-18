@@ -1,0 +1,10 @@
+#!/bin/bash
+# SmartKeys — antes de instalar los Audio Units: borra versiones anteriores
+# (/Library y ~/Library de cada usuario) y la caché de Audio Units de macOS.
+SK_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Dentro del .pkg las funciones van junto al script; en el repositorio, una carpeta arriba
+if [ -f "$SK_DIR/cleanup_common.sh" ]; then source "$SK_DIR/cleanup_common.sh"; else source "$SK_DIR/../cleanup_common.sh"; fi
+sk_log "== preinstall AU =="
+sk_remove_bundles "Components" ".component"
+sk_flush_audio_unit_cache
+exit 0

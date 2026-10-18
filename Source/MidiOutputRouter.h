@@ -87,6 +87,7 @@ public:
     {
         registry.clear();
         lastEventPacked.store (0);
+        lastVoiceEventPacked.store (0);
     }
 
     //==========================================================================
@@ -189,6 +190,9 @@ public:
     //   bits 61-62 : modo (0 Smart, 1 Single, 2 Complex)
     std::atomic<uint64_t> lastEventPacked { 0 };
 
+    // Último acorde disparado por la VOZ (etiqueta en vivo "Mic: A3 -> F Maj7")
+    std::atomic<uint64_t> lastVoiceEventPacked { 0 };
+
     struct DecodedEvent
     {
         bool valid = false;
@@ -239,6 +243,8 @@ private:
         packed |= (uint64_t) 1 << 60;
         packed |= (uint64_t) (mode & 0x3) << 61;
         lastEventPacked.store (packed, std::memory_order_release);
+        if (source == Source::Voice)
+            lastVoiceEventPacked.store (packed, std::memory_order_release);
     }
 
     ActiveNoteRegistry registry;

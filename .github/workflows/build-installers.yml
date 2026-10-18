@@ -1,12 +1,18 @@
 # ==============================================================================
-#  SmartKeys — compila y empaqueta los instaladores en la nube (GitHub Actions)
+#  SmartKeys — compila, prueba y empaqueta los instaladores en la nube (GitHub Actions)
 #
-#  macOS  : SmartKeys-1.0.0-macOS.pkg          (Universal: Apple Silicon + Intel,
-#                                                VST3 + AU + Standalone)
-#  Windows: SmartKeys-1.0.0-Windows-Setup.exe  (VST3 + Standalone)
+#  macOS  : SmartKeys-<versión>-macOS.pkg          (Universal: Apple Silicon + Intel;
+#                                                    SmartKeys VST3 + AU + Standalone,
+#                                                    SmartKeys FX VST3 + AU)
+#  Windows: SmartKeys-<versión>-Windows-Setup.exe  (SmartKeys VST3 + Standalone,
+#                                                    SmartKeys FX VST3)
+#
+#  En cada máquina de pruebas se simula una versión ANTERIOR instalada y se
+#  comprueba que el instalador nuevo la borra antes de instalar. Después se
+#  validan los plugins instalados (auval de Apple + pluginval nivel 10).
 #
 #  Se ejecuta en cada push a main o manualmente desde la pestaña "Actions".
-#  Los instaladores quedan como "Artifacts" descargables en cada ejecución.
+#  Los instaladores se publican en la Release v<versión> y en la rama "installers".
 # ==============================================================================
 name: Build installers
 
@@ -18,11 +24,14 @@ on:
 permissions:
   contents: write
 
+env:
+  SK_VERSION: "1.1.0"
+
 jobs:
   macos:
     name: macOS (.pkg)
     runs-on: macos-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -45,43 +54,87 @@ jobs:
           path: Installer/Output/*.pkg
           if-no-files-found: error
 
-      - name: Instalar el .pkg en la máquina de pruebas
+      - name: El .pkg lleva los scripts de limpieza
         run: |
-          sudo installer -pkg Installer/Output/SmartKeys-1.0.0-macOS.pkg -target /
-          ls -la /Library/Audio/Plug-Ins/VST3 /Library/Audio/Plug-Ins/Components /Applications | grep -i smartkeys
-          lipo -info "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3/Contents/MacOS/SmartKeys"
-          lipo -info "/Library/Audio/Plug-Ins/Components/SmartKeys.component/Contents/MacOS/SmartKeys"
-          codesign --verify --deep --strict --verbose=2 "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3"
+          pkgutil --expand Installer/Output/SmartKeys-$SK_VERSION-macOS.pkg "$RUNNER_TEMP/pkgx"
+          for c in vst3 au app; do
+            ls -la "$RUNNER_TEMP/pkgx/$c.pkg/Scripts"
+            test -x "$RUNNER_TEMP/pkgx/$c.pkg/Scripts/preinstall"
+            test -f "$RUNNER_TEMP/pkgx/$c.pkg/Scripts/cleanup_common.sh"
+          done
+          test -x "$RUNNER_TEMP/pkgx/au.pkg/Scripts/postinstall"
 
-      - name: Validar el Audio Unit (auval de Apple)
+      - name: Simular una versión ANTERIOR instalada (global y en ~/Library)
+        run: |
+          for d in "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3" "/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3" \
+                   "/Library/Audio/Plug-Ins/Components/SmartKeys.component" "/Applications/SmartKeys.app"; do
+            sudo mkdir -p "$d/Contents" && sudo touch "$d/Contents/OLD_VERSION"
+          done
+          for d in "$HOME/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3" "$HOME/Library/Audio/Plug-Ins/Components/SmartKeys FX.component"; do
+            mkdir -p "$d/Contents" && touch "$d/Contents/OLD_VERSION"
+          done
+          FL="$HOME/Documents/Image-Line/FL Studio/Presets/Plugin database/Installed/Generators/VST3"
+          mkdir -p "$FL" && touch "$FL/SmartKeys.nfo" "$FL/OtroPlugin.nfo"
+          sudo mkdir -p "/Library/Audio/Plug-Ins/VST3/OtroPlugin.vst3"
+          find /Library/Audio/Plug-Ins "$HOME/Library/Audio/Plug-Ins" /Applications -maxdepth 4 -name OLD_VERSION
+
+      - name: Instalar el .pkg y comprobar que borró la versión anterior
+        run: |
+          sudo installer -pkg Installer/Output/SmartKeys-$SK_VERSION-macOS.pkg -target / -verboseR
+          echo "--- registro de limpieza"; cat /tmp/smartkeys-install.log
+          if find /Library/Audio/Plug-Ins "$HOME/Library/Audio/Plug-Ins" /Applications -name OLD_VERSION | grep .; then
+            echo "ERROR: quedaron archivos de la versión anterior"; exit 1
+          fi
+          test ! -e "$HOME/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3"
+          test ! -e "$HOME/Library/Audio/Plug-Ins/Components/SmartKeys FX.component"
+          test ! -e "$HOME/Documents/Image-Line/FL Studio/Presets/Plugin database/Installed/Generators/VST3/SmartKeys.nfo"
+          test -e "$HOME/Documents/Image-Line/FL Studio/Presets/Plugin database/Installed/Generators/VST3/OtroPlugin.nfo"
+          test -d "/Library/Audio/Plug-Ins/VST3/OtroPlugin.vst3"
+          for b in "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3/Contents/MacOS/SmartKeys" \
+                   "/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3/Contents/MacOS/SmartKeys FX" \
+                   "/Library/Audio/Plug-Ins/Components/SmartKeys.component/Contents/MacOS/SmartKeys" \
+                   "/Library/Audio/Plug-Ins/Components/SmartKeys FX.component/Contents/MacOS/SmartKeys FX" \
+                   "/Applications/SmartKeys.app/Contents/MacOS/SmartKeys"; do
+            lipo -info "$b"
+            lipo "$b" -verify_arch arm64 x86_64
+          done
+          for b in "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3" "/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3" \
+                   "/Library/Audio/Plug-Ins/Components/SmartKeys.component" "/Library/Audio/Plug-Ins/Components/SmartKeys FX.component" \
+                   "/Applications/SmartKeys.app"; do
+            codesign --verify --deep --strict --verbose=2 "$b"
+          done
+
+      - name: Validar los Audio Units (auval de Apple)
         run: |
           killall -9 AudioComponentRegistrar || true
           sleep 3
           auval -a | grep -i -e smartkeys -e Jpau || true
           auval -v aumu Smk1 Jpau
+          auval -v aumf Smkf Jpau
 
-      - name: Validar el VST3 (pluginval, nivel 10)
+      - name: Validar los VST3 (pluginval, nivel 10)
         run: |
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip
           unzip -q pluginval.zip
-          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process \
-            --skip-gui-tests --timeout-ms 300000 \
-            --validate /Library/Audio/Plug-Ins/VST3/SmartKeys.vst3
+          for p in "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3" "/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3"; do
+            ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process \
+              --skip-gui-tests --timeout-ms 300000 --validate "$p"
+          done
 
   windows:
     name: Windows (.exe)
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
       - name: Instalar Inno Setup
         run: choco install innosetup -y --no-progress
 
-      - name: Compilar (VST3 + Standalone)
+      - name: Compilar (SmartKeys VST3 + Standalone, SmartKeys FX VST3)
         run: |
           cmake --version
-          cmake -B build -A x64
+          cmake -B build -A x64 -DSMARTKEYS_BUILD_FX=ON -DSMARTKEYS_COPY_AFTER_BUILD=OFF
           cmake --build build --config Release --parallel
 
       - name: Generar el instalador .exe
@@ -96,12 +149,33 @@ jobs:
           path: Installer/Output/*.exe
           if-no-files-found: error
 
-      - name: Validar el VST3 (pluginval, nivel 10)
+      - name: Simular una versión ANTERIOR, instalar y comprobar que se borró
+        run: |
+          $vst3 = "${env:CommonProgramFiles}\VST3"
+          $old = @("$vst3\SmartKeys.vst3\Contents", "$vst3\SmartKeys FX.vst3\Contents",
+                   "${env:LOCALAPPDATA}\Programs\Common\VST3\SmartKeys.vst3\Contents")
+          foreach ($d in $old) { New-Item -ItemType Directory -Force -Path $d | Out-Null; Set-Content -Path "$d\OLD_VERSION" -Value "old" }
+          $setup = (Resolve-Path "Installer\Output\SmartKeys-${env:SK_VERSION}-Windows-Setup.exe").Path
+          $p = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/LOG=install.log" -Wait -PassThru
+          Get-Content install.log | Select-String -Pattern "Deleting|InstallDelete|Dest filename" | Select-Object -First 40
+          if ($p.ExitCode -ne 0) { Write-Error "El instalador terminó con código $($p.ExitCode)"; exit 1 }
+          $left = Get-ChildItem -Recurse -Filter OLD_VERSION -Path "$vst3", "${env:LOCALAPPDATA}\Programs\Common\VST3" -ErrorAction SilentlyContinue
+          if ($left) { $left | ForEach-Object { $_.FullName }; Write-Error "Quedaron archivos de la versión anterior"; exit 1 }
+          foreach ($f in @("$vst3\SmartKeys.vst3\Contents\x86_64-win\SmartKeys.vst3",
+                           "$vst3\SmartKeys FX.vst3\Contents\x86_64-win\SmartKeys FX.vst3",
+                           "${env:ProgramFiles}\SmartKeys\SmartKeys.exe")) {
+            if (-not (Test-Path $f)) { Write-Error "Falta $f"; exit 1 }
+            Get-Item $f | Select-Object FullName, Length
+          }
+
+      - name: Validar los VST3 instalados (pluginval, nivel 10)
         run: |
           Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pv
-          .\pv\pluginval.exe --strictness-level 10 --validate-in-process --skip-gui-tests --timeout-ms 300000 --validate "build\SmartKeys_artefacts\Release\VST3\SmartKeys.vst3"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($p in @("${env:CommonProgramFiles}\VST3\SmartKeys.vst3", "${env:CommonProgramFiles}\VST3\SmartKeys FX.vst3")) {
+            .\pv\pluginval.exe --strictness-level 10 --validate-in-process --skip-gui-tests --timeout-ms 300000 --validate "$p"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
   publish:
     name: Publicar instaladores
@@ -117,18 +191,20 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Release v1.0.0 (página de descargas del repositorio)
+      - name: Release v${{ env.SK_VERSION }} (página de descargas del repositorio)
         run: |
           ls -la dist
-          NOTES="Instaladores de SmartKeys compilados automáticamente (commit ${GITHUB_SHA::7}).
-          - macOS: SmartKeys-1.0.0-macOS.pkg (Apple Silicon + Intel; VST3, AU y app Standalone)
-          - Windows: SmartKeys-1.0.0-Windows-Setup.exe (VST3 y app Standalone)"
-          if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload v1.0.0 dist/* --clobber --repo "$GITHUB_REPOSITORY"
-            gh release edit v1.0.0 --notes "$NOTES" --repo "$GITHUB_REPOSITORY"
+          TAG="v$SK_VERSION"
+          NOTES="Instaladores de SmartKeys $SK_VERSION compilados y probados automáticamente (commit ${GITHUB_SHA::7}).
+          - macOS: SmartKeys-$SK_VERSION-macOS.pkg (Apple Silicon + Intel; SmartKeys VST3/AU/Standalone + SmartKeys FX VST3/AU)
+          - Windows: SmartKeys-$SK_VERSION-Windows-Setup.exe (SmartKeys VST3/Standalone + SmartKeys FX VST3)
+          Ambos instaladores borran automáticamente cualquier versión anterior antes de instalar."
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --notes "$NOTES" --repo "$GITHUB_REPOSITORY"
           else
-            gh release create v1.0.0 dist/* --title "SmartKeys 1.0.0" --notes "$NOTES" \
-              --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
+            gh release create "$TAG" dist/* --title "SmartKeys $SK_VERSION" --notes "$NOTES" \
+              --target "$GITHUB_SHA" --latest --repo "$GITHUB_REPOSITORY"
           fi
 
       - name: Rama "installers" con los archivos
@@ -139,5 +215,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -q -m "Instaladores SmartKeys 1.0.0 (${GITHUB_SHA::7})"
+          git commit -q -m "Instaladores SmartKeys $SK_VERSION (${GITHUB_SHA::7})"
           git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" installers

@@ -1,0 +1,10 @@
+#!/bin/bash
+# SmartKeys — antes de instalar los VST3: borra cualquier versión anterior
+# (/Library y ~/Library de cada usuario) y su ficha en la base de datos de FL Studio.
+SK_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Dentro del .pkg las funciones van junto al script; en el repositorio, una carpeta arriba
+if [ -f "$SK_DIR/cleanup_common.sh" ]; then source "$SK_DIR/cleanup_common.sh"; else source "$SK_DIR/../cleanup_common.sh"; fi
+sk_log "== preinstall VST3 =="
+sk_remove_bundles "VST3" ".vst3"
+sk_forget_in_fl_studio
+exit 0

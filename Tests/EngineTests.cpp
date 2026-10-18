@@ -13,6 +13,8 @@
 #include "VoicePitchTracker.h"
 #include "FlKeysPianoSynth.h"
 #include "MidiOutputRouter.h"
+#include "ChordRecorder.h"
+#include "HardwareMicInput.h"
 
 #if defined (__GNUC__) && ! defined (__clang__)
  #pragma GCC diagnostic ignored "-Wmismatched-new-delete"
@@ -835,6 +837,87 @@ static void testComplexPolyphonyAndLevel()
     CHECK (peak7 > 0.1f && peak7 < 1.0f, "nivel audible y sin clip");
 }
 
+
+//==============================================================================
+static void testChordRecorder()
+{
+    std::printf ("[16] Grabador de acordes -> .mid para el Piano Roll\n");
+    ChordRecorder rec;
+    auto on  = [&] (double t, int n) { rec.add ({ t, n, 100, true }); };
+    auto off = [&] (double t, int n) { rec.add ({ t, n, 0, false }); };
+
+    on (0.02, 60); on (0.02, 64); on (0.021, 67);        // C-E-G
+    off (1.93, 60); off (1.93, 64); off (1.93, 67);
+    on (2.05, 62); on (2.05, 65); on (2.06, 69);          // D-F-A (aún sostenido)
+
+    CHECK (rec.getNumChords() == 2, "agrupa las notas simultáneas en 2 acordes");
+
+    const auto spans = rec.buildExportSpans (true);
+    CHECK (spans.size() == 6, "6 notas exportadas");
+    bool firstChordOk = true, secondChordOk = true;
+    for (const auto& s : spans)
+    {
+        if (s.note == 60 || s.note == 64 || s.note == 67)
+            firstChordOk = firstChordOk && std::abs (s.start - 0.0) < 1e-9 && std::abs (s.end - 2.0) < 1e-9;
+        else
+            secondChordOk = secondChordOk && std::abs (s.start - 2.0) < 1e-9 && std::abs (s.end - 3.0) < 1e-9;
+    }
+    CHECK (firstChordOk, "1er acorde cuantizado a 0 -> 2 negras");
+    CHECK (secondChordOk, "2o acorde sostenido: 2 -> 3 negras (cierre automático)");
+
+    const auto midi = rec.createMidiFile (95.0, true);
+    CHECK (midi.getTimeFormat() == ChordRecorder::kTicksPerQuarter, "960 ticks por negra");
+    juce::MemoryOutputStream out;
+    CHECK (midi.writeTo (out, 1), "escribe el MIDI");
+    juce::MidiFile back;
+    juce::MemoryInputStream in (out.getData(), out.getDataSize(), false);
+    CHECK (back.readFrom (in), "el .mid se vuelve a leer");
+    int noteOns = 0, tempo = 0;
+    if (back.getNumTracks() > 0)
+        for (const auto* ev : *back.getTrack (0))
+        {
+            if (ev->message.isNoteOn()) ++noteOns;
+            if (ev->message.isTempoMetaEvent()) tempo = (int) std::lround (60.0 / ev->message.getTempoSecondsPerQuarterNote());
+        }
+    std::printf ("    .mid: %d notas, tempo %d bpm, %d bytes\n", noteOns, tempo, (int) out.getDataSize());
+    CHECK (noteOns == 6 && tempo == 95, "6 NoteOn y tempo del proyecto en el .mid");
+
+    const auto file = rec.writeMidiFile ("SmartKeys test", 120.0, true);
+    CHECK (file.existsAsFile() && file.getSize() > 30, "guarda el .mid en disco");
+    file.deleteFile();
+
+    // Una nota repetida nunca se solapa consigo misma
+    ChordRecorder r2;
+    r2.add ({ 0.0, 60, 100, true });  r2.add ({ 0.9, 60, 100, true });
+    r2.add ({ 1.0, 60, 0, false });   r2.add ({ 1.5, 60, 0, false });
+    const auto s2 = r2.buildExportSpans (false);
+    CHECK (s2.size() == 2 && s2[0].end <= s2[1].start + 1e-9, "sin solapes de la misma nota");
+
+    rec.clear();
+    CHECK (rec.isEmpty() && rec.writeMidiFile ("x", 120.0, true) == juce::File(), "CLEAR vacía el grabador");
+}
+
+static void testMicFifo()
+{
+    std::printf ("[17] FIFO del micrófono directo (lock-free, latencia acotada)\n");
+    MicSampleFifo f (1024);
+    std::vector<float> in (300), out (4096);
+    for (int i = 0; i < 300; ++i) in[(size_t) i] = (float) i;
+
+    CHECK (f.push (in.data(), 300) == 300, "escribe 300 muestras");
+    const int n1 = f.pull (out.data(), 4096, 1000);
+    CHECK (n1 == 300 && std::abs (out[0]) < 1.0e-6f && std::abs (out[299] - 299.0f) < 1.0e-6f, "lee en orden");
+
+    for (int k = 0; k < 3; ++k) f.push (in.data(), 300);   // 900 acumuladas
+    const int n2 = f.pull (out.data(), 4096, 400);
+    CHECK (n2 == 200 && std::abs (out[(size_t) n2 - 1] - 299.0f) < 1.0e-6f, "descarta lo antiguo y conserva lo más reciente");
+
+    std::vector<float> big (2000, 1.0f);
+    CHECK (f.push (big.data(), 2000) == 1023, "nunca desborda el buffer");
+    f.discardAll();
+    CHECK (f.getNumReady() == 0, "discardAll vacía el FIFO");
+}
+
 //==============================================================================
 static void testRealtimeAllocations()
 {
@@ -907,6 +990,8 @@ int main()
     testComplexExhaustive();
     testComplexRouterAndVoice();
     testComplexPolyphonyAndLevel();
+    testChordRecorder();
+    testMicFifo();
     testRealtimeAllocations();
 
     std::printf ("\n%d comprobaciones, %d fallos\n", gChecks, gFailures);

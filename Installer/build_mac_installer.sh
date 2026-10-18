@@ -3,13 +3,14 @@
 #  SmartKeys — compila (Universal: Apple Silicon + Intel) y genera el instalador
 #  .pkg para macOS con pkgbuild + productbuild.
 #
-#  Instala automáticamente:
-#    VST3       -> /Library/Audio/Plug-Ins/VST3/SmartKeys.vst3
-#    AU         -> /Library/Audio/Plug-Ins/Components/SmartKeys.component
-#    Standalone -> /Applications/SmartKeys.app            (opcional en el instalador)
+#  Instala automáticamente (borrando ANTES cualquier versión anterior en
+#  /Library y en ~/Library de cada usuario, con scripts preinstall):
+#    VST3 -> /Library/Audio/Plug-Ins/VST3/SmartKeys.vst3 y "SmartKeys FX.vst3"
+#    AU   -> /Library/Audio/Plug-Ins/Components/SmartKeys.component y "SmartKeys FX.component"
+#    App  -> /Applications/SmartKeys.app                        (opcional)
+#  y refresca la caché de Audio Units (killall AudioComponentRegistrar).
 #
 #  Uso:
-#    chmod +x Installer/build_mac_installer.sh
 #    ./Installer/build_mac_installer.sh
 #
 #  Firma / notarización opcionales (recomendadas para distribuir):
@@ -20,28 +21,31 @@
 # ==============================================================================
 set -euo pipefail
 
-VERSION="1.0.0"
-NAME="SmartKeys"
+VERSION="1.1.0"
 ID_BASE="com.jeanpaulaudio.smartkeys"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
-ART="$BUILD/${NAME}_artefacts/Release"
 WORK="$ROOT/Installer/.pkgwork"
 OUT="$ROOT/Installer/Output"
+SCRIPTS_SRC="$ROOT/Installer/macos"
 
-echo "==> [1/5] Compilando Release (arm64 + x86_64)"
+echo "==> [1/5] Compilando Release (arm64 + x86_64): SmartKeys + SmartKeys FX"
 # Ninja si está instalado; si no, Makefiles (sólo requiere las Command Line Tools)
 GENERATOR="Unix Makefiles"
 if command -v ninja >/dev/null 2>&1; then GENERATOR="Ninja"; fi
 cmake -S "$ROOT" -B "$BUILD" -G "$GENERATOR" -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+      -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DSMARTKEYS_BUILD_FX=ON -DSMARTKEYS_COPY_AFTER_BUILD=OFF
 cmake --build "$BUILD" --config Release --parallel
 
-VST3="$ART/VST3/$NAME.vst3"
-AU="$ART/AU/$NAME.component"
-APP="$ART/Standalone/$NAME.app"
-for b in "$VST3" "$AU" "$APP"; do
+ART="$BUILD/SmartKeys_artefacts/Release"
+ART_FX="$BUILD/SmartKeysFX_artefacts/Release"
+VST3="$ART/VST3/SmartKeys.vst3"
+AU="$ART/AU/SmartKeys.component"
+APP="$ART/Standalone/SmartKeys.app"
+VST3_FX="$ART_FX/VST3/SmartKeys FX.vst3"
+AU_FX="$ART_FX/AU/SmartKeys FX.component"
+for b in "$VST3" "$AU" "$APP" "$VST3_FX" "$AU_FX"; do
     [[ -d "$b" ]] || { echo "No se encontró $b"; exit 1; }
 done
 
@@ -50,7 +54,7 @@ SIGN_ID="${DEV_ID_APP:--}"
 TIMESTAMP="--timestamp=none"
 [[ "$SIGN_ID" != "-" ]] && TIMESTAMP="--timestamp"
 
-# Permiso de micrófono para la app Standalone (Hardened Runtime lo exige)
+# Permiso de micrófono (Hardened Runtime lo exige)
 ENTITLEMENTS="$ROOT/Installer/.standalone.entitlements"
 cat > "$ENTITLEMENTS" <<'EOS'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -63,66 +67,70 @@ cat > "$ENTITLEMENTS" <<'EOS'
 </plist>
 EOS
 
-for b in "$VST3" "$AU"; do
+for b in "$VST3" "$AU" "$VST3_FX" "$AU_FX"; do
     codesign --force --deep --options runtime "$TIMESTAMP" --sign "$SIGN_ID" "$b"
 done
 codesign --force --deep --options runtime "$TIMESTAMP" --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$APP"
 rm -f "$ENTITLEMENTS"
 
-for b in "$VST3" "$AU" "$APP"; do
+for b in "$VST3" "$AU" "$APP" "$VST3_FX" "$AU_FX"; do
     codesign --verify --deep --strict "$b"
 done
 
-echo "==> [3/5] Preparando payloads"
-rm -rf "$WORK" && mkdir -p "$WORK"/{vst3,au,app,scripts,pkgs} "$OUT"
+echo "==> [3/5] Preparando payloads y scripts de limpieza"
+rm -rf "$WORK" && mkdir -p "$WORK"/{vst3,au,app,pkgs} "$OUT"
 mkdir -p "$WORK/vst3/Library/Audio/Plug-Ins/VST3" \
          "$WORK/au/Library/Audio/Plug-Ins/Components" \
          "$WORK/app/Applications"
-ditto "$VST3" "$WORK/vst3/Library/Audio/Plug-Ins/VST3/$NAME.vst3"
-ditto "$AU"   "$WORK/au/Library/Audio/Plug-Ins/Components/$NAME.component"
-ditto "$APP"  "$WORK/app/Applications/$NAME.app"
+ditto "$VST3"    "$WORK/vst3/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3"
+ditto "$VST3_FX" "$WORK/vst3/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3"
+ditto "$AU"      "$WORK/au/Library/Audio/Plug-Ins/Components/SmartKeys.component"
+ditto "$AU_FX"   "$WORK/au/Library/Audio/Plug-Ins/Components/SmartKeys FX.component"
+ditto "$APP"     "$WORK/app/Applications/SmartKeys.app"
 
-# postinstall del AU: refresca la caché de Audio Units para que Logic/Live lo vean ya
-cat > "$WORK/scripts/postinstall" <<'EOS'
-#!/bin/bash
-killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true
-exit 0
-EOS
-chmod +x "$WORK/scripts/postinstall"
+# Cada componente lleva su preinstall (borra SOLO su tipo de archivo) + funciones comunes
+for c in vst3 au app; do
+    mkdir -p "$WORK/scripts-$c"
+    cp "$SCRIPTS_SRC/cleanup_common.sh" "$WORK/scripts-$c/"
+    cp "$SCRIPTS_SRC/scripts-$c/"* "$WORK/scripts-$c/"
+    chmod +x "$WORK/scripts-$c/"*
+done
 
 echo "==> [4/5] pkgbuild (componentes no reubicables)"
-build_component () {   # $1=nombre  $2=raíz  $3=identificador  [$4=scripts]
+build_component () {   # $1=nombre  $2=raíz  $3=identificador  $4=scripts
     local plist="$WORK/$1.plist"
     pkgbuild --analyze --root "$2" "$plist" >/dev/null
-    # Evita que el instalador "reubique" el bundle a una copia antigua en otra carpeta
-    /usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" "$plist" 2>/dev/null || true
-    local extra=()
-    [[ -n "${4:-}" ]] && extra=(--scripts "$4")
+    # Evita que el instalador "reubique" un bundle a una copia antigua en otra carpeta
+    local i=0
+    while /usr/libexec/PlistBuddy -c "Print :$i" "$plist" >/dev/null 2>&1; do
+        /usr/libexec/PlistBuddy -c "Set :$i:BundleIsRelocatable false" "$plist"
+        i=$((i + 1))
+    done
     pkgbuild --root "$2" --component-plist "$plist" --identifier "$3" \
-             --version "$VERSION" --install-location "/" ${extra[@]+"${extra[@]}"} "$WORK/pkgs/$1.pkg"
+             --version "$VERSION" --install-location "/" --scripts "$4" "$WORK/pkgs/$1.pkg"
 }
-build_component vst3 "$WORK/vst3" "$ID_BASE.vst3"
-build_component au   "$WORK/au"   "$ID_BASE.au" "$WORK/scripts"
-build_component app  "$WORK/app"  "$ID_BASE.app"
+build_component vst3 "$WORK/vst3" "$ID_BASE.vst3" "$WORK/scripts-vst3"
+build_component au   "$WORK/au"   "$ID_BASE.au"   "$WORK/scripts-au"
+build_component app  "$WORK/app"  "$ID_BASE.app"  "$WORK/scripts-app"
 
 cat > "$WORK/distribution.xml" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>$NAME $VERSION</title>
-    <options customize="allow" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <title>SmartKeys $VERSION</title>
+    <options customize="allow" require-scripts="true" hostArchitectures="arm64,x86_64"/>
     <domains enable_localSystem="true"/>
     <choices-outline>
         <line choice="vst3"/>
         <line choice="au"/>
         <line choice="app"/>
     </choices-outline>
-    <choice id="vst3" title="VST3 Plug-in" description="/Library/Audio/Plug-Ins/VST3">
+    <choice id="vst3" title="VST3: SmartKeys + SmartKeys FX" description="/Library/Audio/Plug-Ins/VST3 (borra antes la versión anterior)">
         <pkg-ref id="$ID_BASE.vst3"/>
     </choice>
-    <choice id="au" title="Audio Unit (AU)" description="/Library/Audio/Plug-Ins/Components">
+    <choice id="au" title="Audio Unit: SmartKeys + SmartKeys FX" description="/Library/Audio/Plug-Ins/Components (borra antes la versión anterior y la caché AU)">
         <pkg-ref id="$ID_BASE.au"/>
     </choice>
-    <choice id="app" title="Standalone App" description="/Applications">
+    <choice id="app" title="App SmartKeys (Standalone)" description="/Applications">
         <pkg-ref id="$ID_BASE.app"/>
     </choice>
     <pkg-ref id="$ID_BASE.vst3" version="$VERSION">vst3.pkg</pkg-ref>
@@ -132,7 +140,7 @@ cat > "$WORK/distribution.xml" <<EOF
 EOF
 
 echo "==> [5/5] productbuild"
-PKG="$OUT/$NAME-$VERSION-macOS.pkg"
+PKG="$OUT/SmartKeys-$VERSION-macOS.pkg"
 if [[ -n "${DEV_ID_INSTALLER:-}" ]]; then
     productbuild --distribution "$WORK/distribution.xml" --package-path "$WORK/pkgs" \
                  --sign "$DEV_ID_INSTALLER" "$PKG"
