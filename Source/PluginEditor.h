@@ -271,7 +271,7 @@ private:
     void setRefPitch (float hz);
     juce::String makeExportBaseName() const;
 
-    SmartKeysAudioProcessor& processor;
+    SmartKeysAudioProcessor& audioProcessor;
     juce::AudioProcessorValueTreeState& apvts;
     smartkeys::ui::SmartKeysLookAndFeel lookAndFeel;
 

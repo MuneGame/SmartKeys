@@ -221,7 +221,6 @@ void ChoiceButtons::resized()
 //==============================================================================
 namespace
 {
-    constexpr int kWhitePcs[7]   = { 0, 2, 4, 5, 7, 9, 11 };
     constexpr int kWhiteIndex[12] = { 0, -1, 1, -1, 2, 3, -1, 4, -1, 5, -1, 6 };
     // Para cada sostenido: índice de la tecla blanca a su izquierda
     constexpr int kBlackLeftWhite[12] = { -1, 0, -1, 1, -1, -1, 3, -1, 4, -1, 5, -1 };
@@ -984,7 +983,7 @@ namespace
 
 SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProcessor& p)
     : AudioProcessorEditor (&p),
-      processor (p),
+      audioProcessor (p),
       apvts (p.getValueTreeState()),
       modeSwitch (*apvts.getParameter (ParamIDs::mode), { "SMART CHORDS", "SINGLE NOTES", "COMPLEX CHORDS" }),
       outputSwitch (*apvts.getParameter (ParamIDs::outputMode), { "PIANO", "MIDI OUT", "BOTH" }),
@@ -1057,7 +1056,7 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     microButton.onStateChange();
 
     panicButton.getProperties().set (fontSizeProperty, 11.5f);
-    panicButton.onClick = [this] { processor.requestPanic(); };
+    panicButton.onClick = [this] { audioProcessor.requestPanic(); };
     addAndMakeVisible (panicButton);
 
     //--------------------------------------------------------------------------
@@ -1081,7 +1080,7 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     channelBox.addItem ("CH 1", 1);
     channelBox.addItem ("CH 2", 2);
     channelBox.addItem ("CH 1+2", 3);
-    channelBox.setSelectedId (processor.getHardwareChannelMode() + 1, juce::dontSendNotification);
+    channelBox.setSelectedId (audioProcessor.getHardwareChannelMode() + 1, juce::dontSendNotification);
     channelBox.setTooltip (u8 ("Canal de la interfaz donde está conectado el micrófono"));
     channelBox.onChange = [this] { applyDeviceSelection(); };
     addAndMakeVisible (channelBox);
@@ -1091,7 +1090,7 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     rescanButton.onClick = [this]
     {
         refreshDeviceList();
-        processor.retryHardwareInput();
+        audioProcessor.retryHardwareInput();
     };
     addAndMakeVisible (rescanButton);
 
@@ -1132,14 +1131,14 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
 
     quantizeButton.setClickingTogglesState (true);
     quantizeButton.getProperties().set (fontSizeProperty, 11.0f);
-    quantizeButton.setToggleState (processor.getExportQuantize(), juce::dontSendNotification);
+    quantizeButton.setToggleState (audioProcessor.getExportQuantize(), juce::dontSendNotification);
     quantizeButton.setTooltip (u8 ("Ajusta el inicio y el final de cada acorde a semicorcheas al exportar"));
-    quantizeButton.onClick = [this] { processor.setExportQuantize (quantizeButton.getToggleState()); };
+    quantizeButton.onClick = [this] { audioProcessor.setExportQuantize (quantizeButton.getToggleState()); };
     addAndMakeVisible (quantizeButton);
 
     clearButton.getProperties().set (fontSizeProperty, 11.0f);
     clearButton.setTooltip (u8 ("Borra la progresión grabada y empieza una nueva"));
-    clearButton.onClick = [this] { processor.clearCapturedChords(); };
+    clearButton.onClick = [this] { audioProcessor.clearCapturedChords(); };
     addAndMakeVisible (clearButton);
 
     setWantsKeyboardFocus (true);
@@ -1149,7 +1148,7 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     // En la app Standalone JUCE silencia la entrada por defecto "para evitar
     // realimentación". SmartKeys nunca envía la voz a la salida, así que la
     // reactivamos para que el controlador vocal funcione de inmediato.
-    if (processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone)
+    if (audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_Standalone)
         if (auto* holder = juce::StandalonePluginHolder::getInstance())
             holder->getMuteInputValue().setValue (false);
    #endif
@@ -1164,7 +1163,7 @@ SmartKeysAudioProcessorEditor::~SmartKeysAudioProcessorEditor()
     stopTimer();
     for (size_t i = 0; i < computerKeysDown.size(); ++i)
         if (computerKeysDown[i] && computerKeyNotes[i] >= 0)
-            processor.pushScreenNote (computerKeyNotes[i], 0, false);
+            audioProcessor.pushScreenNote (computerKeyNotes[i], 0, false);
     setLookAndFeel (nullptr);
 }
 
@@ -1186,7 +1185,7 @@ juce::String SmartKeysAudioProcessorEditor::makeExportBaseName() const
 
 void SmartKeysAudioProcessorEditor::refreshDeviceList()
 {
-    shownDevices = processor.getHardwareInputDevices();
+    shownDevices = audioProcessor.getHardwareInputDevices();
     deviceBox.clear (juce::dontSendNotification);
 
     if (shownDevices.isEmpty())
@@ -1199,7 +1198,7 @@ void SmartKeysAudioProcessorEditor::refreshDeviceList()
     for (int i = 0; i < shownDevices.size(); ++i)
         deviceBox.addItem (shownDevices[i], i + 1);
 
-    const int index = shownDevices.indexOf (processor.getHardwareDeviceName());
+    const int index = shownDevices.indexOf (audioProcessor.getHardwareDeviceName());
     if (index >= 0)
         deviceBox.setSelectedId (index + 1, juce::dontSendNotification);
 }
@@ -1209,7 +1208,7 @@ void SmartKeysAudioProcessorEditor::applyDeviceSelection()
     const int id = deviceBox.getSelectedId();
     if (id <= 0 || id > shownDevices.size())
         return;
-    processor.setHardwareInput (shownDevices[id - 1], juce::jmax (0, channelBox.getSelectedId() - 1), true);
+    audioProcessor.setHardwareInput (shownDevices[id - 1], juce::jmax (0, channelBox.getSelectedId() - 1), true);
 }
 
 //==============================================================================
@@ -1330,7 +1329,7 @@ void SmartKeysAudioProcessorEditor::timerCallback()
 {
     const int root  = juce::jlimit (0, 11, (int) apvts.getRawParameterValue (ParamIDs::rootKey)->load());
     const int scale = juce::jlimit (0, smartkeys::kNumScales - 1, (int) apvts.getRawParameterValue (ParamIDs::scale)->load());
-    const uint16_t mask = processor.getCustomMask();
+    const uint16_t mask = audioProcessor.getCustomMask();
 
     if (root != shownRoot || scale != shownScale || mask != shownMask)
     {
@@ -1356,23 +1355,23 @@ void SmartKeysAudioProcessorEditor::timerCallback()
         shownEvent = ~(uint64_t) 0;
     }
 
-    piano.setActiveNotes (processor.getActiveNotesLo(), processor.getActiveNotesHi());
+    piano.setActiveNotes (audioProcessor.getActiveNotesLo(), audioProcessor.getActiveNotesHi());
 
     // Micrófono: medidor, dispositivo y estado en vivo
     const int source = juce::jlimit (0, 1, juce::roundToInt (apvts.getRawParameterValue (ParamIDs::micSource)->load()));
-    const auto& tracker = processor.getActiveVoiceTracker();
-    micMeter.setState (processor.getMicLevelDb(), apvts.getRawParameterValue (ParamIDs::micGate)->load(),
-                       tracker.gateOpen.load(), processor.isMicSourceAvailable());
+    const auto& tracker = audioProcessor.getActiveVoiceTracker();
+    micMeter.setState (audioProcessor.getMicLevelDb(), apvts.getRawParameterValue (ParamIDs::micGate)->load(),
+                       tracker.gateOpen.load(), audioProcessor.isMicSourceAvailable());
 
     const bool deviceSource = source == MicSource::HardwareDevice;
     deviceBox.setAlpha (deviceSource ? 1.0f : 0.6f);
     channelBox.setAlpha (deviceSource ? 1.0f : 0.6f);
 
-    if (deviceSource && ! autoDeviceAttempted && processor.getHardwareDeviceName().isEmpty())
+    if (deviceSource && ! autoDeviceAttempted && audioProcessor.getHardwareDeviceName().isEmpty())
     {
         // Primera vez en DEVICE: proponer la entrada por defecto del sistema
         autoDeviceAttempted = true;
-        const int index = shownDevices.indexOf (processor.getDefaultHardwareInputDevice());
+        const int index = shownDevices.indexOf (audioProcessor.getDefaultHardwareInputDevice());
         if (index >= 0)
             deviceBox.setSelectedId (index + 1, juce::sendNotificationSync);
     }
@@ -1383,18 +1382,18 @@ void SmartKeysAudioProcessorEditor::timerCallback()
     if (++stateSyncCounter >= 15)
     {
         stateSyncCounter = 0;
-        const int deviceIndex = shownDevices.indexOf (processor.getHardwareDeviceName());
+        const int deviceIndex = shownDevices.indexOf (audioProcessor.getHardwareDeviceName());
         if (deviceIndex >= 0 && deviceBox.getSelectedId() != deviceIndex + 1)
             deviceBox.setSelectedId (deviceIndex + 1, juce::dontSendNotification);
-        const int channelId = processor.getHardwareChannelMode() + 1;
+        const int channelId = audioProcessor.getHardwareChannelMode() + 1;
         if (channelBox.getSelectedId() != channelId)
             channelBox.setSelectedId (channelId, juce::dontSendNotification);
-        if (quantizeButton.getToggleState() != processor.getExportQuantize())
-            quantizeButton.setToggleState (processor.getExportQuantize(), juce::dontSendNotification);
+        if (quantizeButton.getToggleState() != audioProcessor.getExportQuantize())
+            quantizeButton.setToggleState (audioProcessor.getExportQuantize(), juce::dontSendNotification);
     }
 
     updateMicStatus();
-    dragButton.setCount (processor.getNumCapturedChords(), processor.isCaptureFull());
+    dragButton.setCount (audioProcessor.getNumCapturedChords(), audioProcessor.isCaptureFull());
     updateDisplay();
 }
 
@@ -1402,27 +1401,27 @@ void SmartKeysAudioProcessorEditor::updateMicStatus()
 {
     const bool micOn = apvts.getRawParameterValue (ParamIDs::micOn)->load() > 0.5f;
     const int source = juce::jlimit (0, 1, juce::roundToInt (apvts.getRawParameterValue (ParamIDs::micSource)->load()));
-    const auto& tracker = processor.getActiveVoiceTracker();
-    const bool standalone = processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
+    const auto& tracker = audioProcessor.getActiveVoiceTracker();
+    const bool standalone = audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
 
     juce::String text;
     auto colour = Colours::label;
 
-    if (source == MicSource::HardwareDevice && ! processor.isHardwareMicOpen())
+    if (source == MicSource::HardwareDevice && ! audioProcessor.isHardwareMicOpen())
     {
-        const auto status = processor.getHardwareStatus();
+        const auto status = audioProcessor.getHardwareStatus();
         text = status.isNotEmpty() ? u8 ("No se pudo abrir el micrófono: ") + status
                                    : u8 ("Elige tu micrófono en la lista de arriba");
         colour = status.isNotEmpty() ? Colours::warning : Colours::label;
     }
     else if (source == MicSource::HardwareDevice
-             && processor.getHardwareMsSinceStart() > 2500.0 && processor.getHardwareMsSinceSignal() > 2500.0)
+             && audioProcessor.getHardwareMsSinceStart() > 2500.0 && audioProcessor.getHardwareMsSinceSignal() > 2500.0)
     {
         text = standalone ? u8 ("Sin señal: permite el micrófono a SmartKeys (Ajustes > Privacidad y seguridad > Micrófono)")
                           : u8 ("Sin señal: permite el micrófono a tu DAW (Ajustes > Privacidad y seguridad > Micrófono)");
         colour = Colours::warning;
     }
-    else if (! processor.isMicSourceAvailable() || processor.getMicLevelDb() < -90.0f)
+    else if (! audioProcessor.isMicSourceAvailable() || audioProcessor.getMicLevelDb() < -90.0f)
     {
         if (source == MicSource::DawInput)
             text = SmartKeysAudioProcessor::isFxVariant ? u8 ("Sin señal en la pista: canta o revisa la entrada del Mixer")
@@ -1449,9 +1448,9 @@ void SmartKeysAudioProcessorEditor::updateMicStatus()
             {
                 text = "Mic: " + noteName + u8 ("  ·  activa MIC VOICE para disparar acordes");
             }
-            else if (processor.isVoiceChordSounding())
+            else if (audioProcessor.isVoiceChordSounding())
             {
-                const auto ev = smartkeys::MidiOutputRouter::decodeLastEvent (processor.getLastVoiceEventPacked());
+                const auto ev = smartkeys::MidiOutputRouter::decodeLastEvent (audioProcessor.getLastVoiceEventPacked());
                 text = "Mic: " + noteName + " -> " + displayEngine.getChordName (ev.notes);
                 colour = Colours::accent;
             }
@@ -1471,10 +1470,10 @@ void SmartKeysAudioProcessorEditor::updateMicStatus()
 
 void SmartKeysAudioProcessorEditor::updateDisplay()
 {
-    const uint64_t packed = processor.getLastEventPacked();
-    const uint64_t lo = processor.getActiveNotesLo();
-    const uint64_t hi = processor.getActiveNotesHi();
-    const float detected = processor.getActiveVoiceTracker().detectedMidiNote.load();
+    const uint64_t packed = audioProcessor.getLastEventPacked();
+    const uint64_t lo = audioProcessor.getActiveNotesLo();
+    const uint64_t hi = audioProcessor.getActiveNotesHi();
+    const float detected = audioProcessor.getActiveVoiceTracker().detectedMidiNote.load();
     const int voiceNote = detected >= 0.0f ? (int) std::lround (detected) : -1;
 
     if (packed == shownEvent && lo == shownLo && hi == shownHi && voiceNote == shownVoiceNote)
@@ -1556,11 +1555,11 @@ bool SmartKeysAudioProcessorEditor::keyStateChanged (bool)
         {
             const int note = juce::jlimit (0, 127, (computerOctave + 1) * 12 + i);
             computerKeyNotes[(size_t) i] = note;
-            processor.pushScreenNote (note, 100, true);
+            audioProcessor.pushScreenNote (note, 100, true);
         }
         else if (computerKeyNotes[(size_t) i] >= 0)
         {
-            processor.pushScreenNote (computerKeyNotes[(size_t) i], 0, false);
+            audioProcessor.pushScreenNote (computerKeyNotes[(size_t) i], 0, false);
             computerKeyNotes[(size_t) i] = -1;
         }
     }
