@@ -13,6 +13,17 @@ SmartKeys es un instrumento (JUCE 8, C++17) que:
 
 ---
 
+## Descargar los instaladores (sin compilar nada)
+
+GitHub compila SmartKeys automáticamente en cada cambio y publica los instaladores en la página **Releases** de este repositorio (**SmartKeys 1.0.0**):
+
+- **Mac:** `SmartKeys-1.0.0-macOS.pkg`. Funciona en Mac con chip Apple e Intel e instala VST3, AU y la app Standalone.
+- **Windows:** `SmartKeys-1.0.0-Windows-Setup.exe`. Instala el VST3 y la app Standalone.
+
+En Mac, el `.pkg` no está firmado con un certificado de Apple. La primera vez que lo abras, macOS dirá que no puede verificar al desarrollador. Para abrirlo: **Ajustes del Sistema → Privacidad y seguridad → "Abrir igualmente"** y después vuelve a abrir el `.pkg`. Luego, en FL Studio: **Options → Manage plugins → Find installed plugins**.
+
+---
+
 ## Estructura
 
 ```

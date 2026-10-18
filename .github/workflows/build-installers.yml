@@ -15,6 +15,9 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   macos:
     name: macOS (.pkg)
@@ -99,3 +102,42 @@ jobs:
           Expand-Archive pluginval.zip -DestinationPath pv
           .\pv\pluginval.exe --strictness-level 10 --validate-in-process --skip-gui-tests --timeout-ms 300000 --validate "build\SmartKeys_artefacts\Release\VST3\SmartKeys.vst3"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  publish:
+    name: Publicar instaladores
+    needs: [ macos, windows ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Descargar los instaladores de esta compilación
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release v1.0.0 (página de descargas del repositorio)
+        run: |
+          ls -la dist
+          NOTES="Instaladores de SmartKeys compilados automáticamente (commit ${GITHUB_SHA::7}).
+          - macOS: SmartKeys-1.0.0-macOS.pkg (Apple Silicon + Intel; VST3, AU y app Standalone)
+          - Windows: SmartKeys-1.0.0-Windows-Setup.exe (VST3 y app Standalone)"
+          if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload v1.0.0 dist/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit v1.0.0 --notes "$NOTES" --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create v1.0.0 dist/* --title "SmartKeys 1.0.0" --notes "$NOTES" \
+              --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
+          fi
+
+      - name: Rama "installers" con los archivos
+        run: |
+          mkdir publish && cp dist/* publish/
+          cd publish
+          git init -q -b installers
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Instaladores SmartKeys 1.0.0 (${GITHUB_SHA::7})"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" installers
