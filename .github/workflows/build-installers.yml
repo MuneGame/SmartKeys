@@ -45,7 +45,25 @@ jobs:
       - name: Compilar (Universal) y generar el .pkg
         run: |
           chmod +x Installer/build_mac_installer.sh
-          ./Installer/build_mac_installer.sh
+          ./Installer/build_mac_installer.sh 2>&1 | tee "$RUNNER_TEMP/build-mac.log"
+
+      - name: Mostrar el error de compilación (si falló)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LOG="$RUNNER_TEMP/build-mac.log"
+          [ -f "$LOG" ] || echo "(sin registro)" > "$LOG"
+          errs=$(grep -n -i -E "error|fatal|failed|No se encontr" "$LOG" | head -n 40 | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          tailmsg=$(tail -n 60 "$LOG" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::error title=Errores::$errs"
+          echo "::error title=Final del registro::$tailmsg"
+          mkdir -p "$RUNNER_TEMP/logs" && cp "$LOG" "$RUNNER_TEMP/logs/" && cd "$RUNNER_TEMP/logs"
+          git init -q -b ci-logs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "Registro de compilación macOS (${GITHUB_SHA::7})"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-logs || true
 
       - name: Subir el instalador
         uses: actions/upload-artifact@v4
