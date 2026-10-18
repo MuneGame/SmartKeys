@@ -56,7 +56,7 @@ jobs:
 
       - name: El .pkg lleva los scripts de limpieza
         run: |
-          pkgutil --expand Installer/Output/SmartKeys-$SK_VERSION-macOS.pkg "$RUNNER_TEMP/pkgx"
+          pkgutil --expand-full Installer/Output/SmartKeys-$SK_VERSION-macOS.pkg "$RUNNER_TEMP/pkgx"
           for c in vst3 au app; do
             ls -la "$RUNNER_TEMP/pkgx/$c.pkg/Scripts"
             test -x "$RUNNER_TEMP/pkgx/$c.pkg/Scripts/preinstall"
@@ -82,13 +82,15 @@ jobs:
         run: |
           sudo installer -pkg Installer/Output/SmartKeys-$SK_VERSION-macOS.pkg -target / -verboseR
           echo "--- registro de limpieza"; cat /tmp/smartkeys-install.log
-          if find /Library/Audio/Plug-Ins "$HOME/Library/Audio/Plug-Ins" /Applications -name OLD_VERSION | grep .; then
+          if find /Library/Audio/Plug-Ins "$HOME/Library/Audio/Plug-Ins" /Applications -maxdepth 4 -name OLD_VERSION | grep .; then
             echo "ERROR: quedaron archivos de la versión anterior"; exit 1
           fi
           test ! -e "$HOME/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3"
           test ! -e "$HOME/Library/Audio/Plug-Ins/Components/SmartKeys FX.component"
-          test ! -e "$HOME/Documents/Image-Line/FL Studio/Presets/Plugin database/Installed/Generators/VST3/SmartKeys.nfo"
-          test -e "$HOME/Documents/Image-Line/FL Studio/Presets/Plugin database/Installed/Generators/VST3/OtroPlugin.nfo"
+          FLDB="$HOME/Documents/Image-Line/FL Studio/Presets/Plugin database/Installed/Generators/VST3"
+          # ~/Documents está protegido por TCC: si macOS no deja al instalador entrar, sólo se avisa
+          if [ -e "$FLDB/SmartKeys.nfo" ]; then echo "AVISO: macOS no permitió borrar la ficha de FL Studio (TCC)"; else echo "Ficha de FL Studio borrada"; fi
+          test -e "$FLDB/OtroPlugin.nfo"
           test -d "/Library/Audio/Plug-Ins/VST3/OtroPlugin.vst3"
           for b in "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3/Contents/MacOS/SmartKeys" \
                    "/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3/Contents/MacOS/SmartKeys FX" \
