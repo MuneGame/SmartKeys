@@ -101,11 +101,14 @@ build_component () {   # $1=nombre  $2=raíz  $3=identificador  $4=scripts
     local plist="$WORK/$1.plist"
     pkgbuild --analyze --root "$2" "$plist" >/dev/null
     # Evita que el instalador "reubique" un bundle a una copia antigua en otra carpeta
+    # (pkgbuild --analyze no siempre incluye la clave: si no existe, se añade)
     local i=0
     while /usr/libexec/PlistBuddy -c "Print :$i" "$plist" >/dev/null 2>&1; do
-        /usr/libexec/PlistBuddy -c "Set :$i:BundleIsRelocatable false" "$plist"
+        /usr/libexec/PlistBuddy -c "Set :$i:BundleIsRelocatable false" "$plist" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :$i:BundleIsRelocatable bool false" "$plist"
         i=$((i + 1))
     done
+    plutil -p "$plist"
     pkgbuild --root "$2" --component-plist "$plist" --identifier "$3" \
              --version "$VERSION" --install-location "/" --scripts "$4" "$WORK/pkgs/$1.pkg"
 }
