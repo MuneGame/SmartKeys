@@ -1,0 +1,8 @@
+build/
+build-*/
+Installer/Output/
+Installer/.pkgwork/
+Installer/.standalone.entitlements
+.DS_Store
+*.user
+.vs/

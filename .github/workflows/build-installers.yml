@@ -1,0 +1,101 @@
+# ==============================================================================
+#  SmartKeys — compila y empaqueta los instaladores en la nube (GitHub Actions)
+#
+#  macOS  : SmartKeys-1.0.0-macOS.pkg          (Universal: Apple Silicon + Intel,
+#                                                VST3 + AU + Standalone)
+#  Windows: SmartKeys-1.0.0-Windows-Setup.exe  (VST3 + Standalone)
+#
+#  Se ejecuta en cada push a main o manualmente desde la pestaña "Actions".
+#  Los instaladores quedan como "Artifacts" descargables en cada ejecución.
+# ==============================================================================
+name: Build installers
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  macos:
+    name: macOS (.pkg)
+    runs-on: macos-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Herramientas
+        run: |
+          sw_vers
+          xcodebuild -version
+          cmake --version
+          brew install ninja || true
+
+      - name: Compilar (Universal) y generar el .pkg
+        run: |
+          chmod +x Installer/build_mac_installer.sh
+          ./Installer/build_mac_installer.sh
+
+      - name: Subir el instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartKeys-macOS-pkg
+          path: Installer/Output/*.pkg
+          if-no-files-found: error
+
+      - name: Instalar el .pkg en la máquina de pruebas
+        run: |
+          sudo installer -pkg Installer/Output/SmartKeys-1.0.0-macOS.pkg -target /
+          ls -la /Library/Audio/Plug-Ins/VST3 /Library/Audio/Plug-Ins/Components /Applications | grep -i smartkeys
+          lipo -info "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3/Contents/MacOS/SmartKeys"
+          lipo -info "/Library/Audio/Plug-Ins/Components/SmartKeys.component/Contents/MacOS/SmartKeys"
+          codesign --verify --deep --strict --verbose=2 "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3"
+
+      - name: Validar el Audio Unit (auval de Apple)
+        run: |
+          killall -9 AudioComponentRegistrar || true
+          sleep 3
+          auval -a | grep -i -e smartkeys -e Jpau || true
+          auval -v aumu Smk1 Jpau
+
+      - name: Validar el VST3 (pluginval, nivel 10)
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process \
+            --skip-gui-tests --timeout-ms 300000 \
+            --validate /Library/Audio/Plug-Ins/VST3/SmartKeys.vst3
+
+  windows:
+    name: Windows (.exe)
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compilar (VST3 + Standalone)
+        run: |
+          cmake --version
+          cmake -B build -A x64
+          cmake --build build --config Release --parallel
+
+      - name: Generar el instalador .exe
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" Installer\Installer_Windows.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Subir el instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartKeys-Windows-exe
+          path: Installer/Output/*.exe
+          if-no-files-found: error
+
+      - name: Validar el VST3 (pluginval, nivel 10)
+        run: |
+          Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath pv
+          .\pv\pluginval.exe --strictness-level 10 --validate-in-process --skip-gui-tests --timeout-ms 300000 --validate "build\SmartKeys_artefacts\Release\VST3\SmartKeys.vst3"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
