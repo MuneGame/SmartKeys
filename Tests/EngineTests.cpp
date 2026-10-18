@@ -13,7 +13,8 @@
 #include "VoicePitchTracker.h"
 #include "FlKeysPianoSynth.h"
 #include "MidiOutputRouter.h"
-#include "ChordRecorder.h"
+#include "StrumScheduler.h"
+#include "Progression.h"
 #include "HardwareMicInput.h"
 
 #if defined (__GNUC__) && ! defined (__clang__)
@@ -839,67 +840,374 @@ static void testComplexPolyphonyAndLevel()
 
 
 //==============================================================================
-static void testChordRecorder()
+static CaptureEvent captureEvent (uint8_t type, int pass, double ppq, double ppqEnd = 0.0)
 {
-    std::printf ("[16] Grabador de acordes -> .mid para el Piano Roll\n");
-    ChordRecorder rec;
-    auto on  = [&] (double t, int n) { rec.add ({ t, n, 100, true }); };
-    auto off = [&] (double t, int n) { rec.add ({ t, n, 0, false }); };
+    CaptureEvent e;
+    e.type = type;
+    e.passId = pass;
+    e.ppq = ppq;
+    e.ppqEnd = ppqEnd;
+    e.replace = true;   // toma "nueva" (valor por defecto del plugin)
+    return e;
+}
 
-    on (0.02, 60); on (0.02, 64); on (0.021, 67);        // C-E-G
-    off (1.93, 60); off (1.93, 64); off (1.93, 67);
-    on (2.05, 62); on (2.05, 65); on (2.06, 69);          // D-F-A (aún sostenido)
-
-    CHECK (rec.getNumChords() == 2, "agrupa las notas simultáneas en 2 acordes");
-
-    const auto spans = rec.buildExportSpans (true);
-    CHECK (spans.size() == 6, "6 notas exportadas");
-    bool firstChordOk = true, secondChordOk = true;
-    for (const auto& s : spans)
+static CaptureEvent chordOnEvent (int pass, uint32_t id, double ppq, std::initializer_list<int> notes,
+                                  float strumMs = 0.0f, bool desc = false, float bpm = 120.0f)
+{
+    auto e = captureEvent (CaptureEvent::ChordOn, pass, ppq);
+    e.chordId = id;
+    for (int n : notes)
     {
-        if (s.note == 60 || s.note == 64 || s.note == 67)
-            firstChordOk = firstChordOk && std::abs (s.start - 0.0) < 1e-9 && std::abs (s.end - 2.0) < 1e-9;
-        else
-            secondChordOk = secondChordOk && std::abs (s.start - 2.0) < 1e-9 && std::abs (s.end - 3.0) < 1e-9;
+        e.notes[(size_t) e.count] = (int8_t) n;
+        e.velocities[(size_t) e.count] = 100;
+        ++e.count;
     }
-    CHECK (firstChordOk, "1er acorde cuantizado a 0 -> 2 negras");
-    CHECK (secondChordOk, "2o acorde sostenido: 2 -> 3 negras (cierre automático)");
+    e.strumMs = strumMs;
+    e.strumDescending = desc;
+    e.bpm = bpm;
+    return e;
+}
 
-    const auto midi = rec.createMidiFile (95.0, true);
-    CHECK (midi.getTimeFormat() == ChordRecorder::kTicksPerQuarter, "960 ticks por negra");
+static CaptureEvent chordOffEvent (int pass, uint32_t id, double ppq)
+{
+    auto e = captureEvent (CaptureEvent::ChordOff, pass, ppq);
+    e.chordId = id;
+    return e;
+}
+
+static void testProgressionCapture()
+{
+    std::printf ("[16] Progresión: captura con el DAW, tomas, bucles y exportación\n");
+    ProgressionModel m;
+    const double bpb = 4.0;
+
+    // Toma con el DAW: C-E-G en el tiempo 1, D-F-A con STRUM 100 ms ASC en el tiempo 3
+    m.applyCaptureEvent (captureEvent (CaptureEvent::TakeStart, 1, 0.0), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::Region, 1, 0.0, 0.0), bpb);
+    m.applyCaptureEvent (chordOnEvent (1, 1, 0.0, { 60, 64, 67 }), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::Region, 1, 0.0, 1.9), bpb);
+    m.applyCaptureEvent (chordOffEvent (1, 1, 1.9), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::Region, 1, 1.9, 2.0), bpb);
+    m.applyCaptureEvent (chordOnEvent (1, 2, 2.0, { 62, 65, 69 }, 100.0f, false, 120.0f), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::Region, 1, 2.0, 2.4), bpb);
+    CHECK (m.size() == 2 && m.getBlocks()[1].open, "el acorde sostenido crece mientras suena");
+    m.applyCaptureEvent (chordOffEvent (1, 2, 2.4), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::TakeEnd, 1, 4.0), bpb);
+
+    const auto& blocks = m.getBlocks();
+    CHECK (m.size() == 2, "2 acordes completos capturados");
+    CHECK (blocks[0].count == 3 && std::abs (blocks[0].start) < 1e-9 && std::abs (blocks[0].length - 1.9) < 1e-9,
+           "C-E-G: 3 notas, posición 0, duración exacta 1.9 negras");
+    // STRUM 100 ms a 120 bpm: 0 / 115 ms / 260 ms = 0 / 0.23 / 0.52 negras; soltar a 0.4 cancela la 3ª
+    CHECK (blocks[1].count == 2 && std::abs (blocks[1].offsets[1] - 0.23) < 1e-6,
+           "D-F-A soltado antes de terminar el STRUM: la nota que no llegó a sonar no se guarda");
+
+    const auto notes = m.buildExportNotes (0.25, 0.0, false, 120.0);
+    bool chord1 = true, chord2 = true;
+    int n1 = 0, n2 = 0;
+    for (const auto& n : notes)
+    {
+        if (n.note == 60 || n.note == 64 || n.note == 67)
+        {
+            ++n1;
+            chord1 = chord1 && std::abs (n.start) < 1e-9 && std::abs (n.end - 2.0) < 1e-9;
+        }
+        else
+        {
+            ++n2;
+            chord2 = chord2 && std::abs (n.end - 2.5) < 1e-9;
+        }
+    }
+    CHECK (n1 == 3 && chord1, "exportación: C-E-G apilado de 0 a 2 negras (QUANTIZE 1/16)");
+    CHECK (n2 == 2 && chord2, "exportación: D-F-A conserva el desfase del STRUM y termina alineado");
+    bool strumKept = false;
+    for (const auto& n : notes)
+        strumKept = strumKept || (n.note == 65 && std::abs (n.start - 2.23) < 1e-6);
+    CHECK (strumKept, "la 2ª nota del STRUM queda 0.23 negras después");
+
+    const auto midi = m.createMidiFile (95.0, 0.25, 0.0, false, 3, 4);
     juce::MemoryOutputStream out;
     CHECK (midi.writeTo (out, 1), "escribe el MIDI");
     juce::MidiFile back;
     juce::MemoryInputStream in (out.getData(), out.getDataSize(), false);
-    CHECK (back.readFrom (in), "el .mid se vuelve a leer");
-    int noteOns = 0, tempo = 0;
+    CHECK (back.readFrom (in) && back.getTimeFormat() == ProgressionModel::kTicksPerQuarter, "el .mid se vuelve a leer (960 PPQ)");
+    int noteOns = 0, tempo = 0, numerator = 0;
+    double firstTick = -1.0;
     if (back.getNumTracks() > 0)
         for (const auto* ev : *back.getTrack (0))
         {
-            if (ev->message.isNoteOn()) ++noteOns;
+            if (ev->message.isNoteOn()) { ++noteOns; if (firstTick < 0.0) firstTick = ev->message.getTimeStamp(); }
             if (ev->message.isTempoMetaEvent()) tempo = (int) std::lround (60.0 / ev->message.getTempoSecondsPerQuarterNote());
+            if (ev->message.isTimeSignatureMetaEvent()) { int d = 0; ev->message.getTimeSignatureInfo (numerator, d); }
         }
-    std::printf ("    .mid: %d notas, tempo %d bpm, %d bytes\n", noteOns, tempo, (int) out.getDataSize());
-    CHECK (noteOns == 6 && tempo == 95, "6 NoteOn y tempo del proyecto en el .mid");
+    CHECK (noteOns == 5 && tempo == 95 && numerator == 3, "5 notas, tempo y compás del proyecto en el .mid");
 
-    const auto file = rec.writeMidiFile ("SmartKeys test", 120.0, true);
+    // Bucle del patrón: la vuelta nueva sobrescribe a la anterior (sin duplicados)
+    m.applyCaptureEvent (captureEvent (CaptureEvent::TakeStart, 2, 0.0), bpb);
+    m.applyCaptureEvent (chordOnEvent (2, 3, 0.0, { 57, 60, 64 }), bpb);   // toma nueva: reemplaza todo
+    CHECK (m.size() == 1 && m.canUndo(), "toma nueva: el 1er acorde reemplaza la progresión (con deshacer)");
+    m.applyCaptureEvent (captureEvent (CaptureEvent::Region, 2, 0.0, 1.0), bpb);
+    m.applyCaptureEvent (chordOffEvent (2, 3, 1.0), bpb);
+    m.applyCaptureEvent (chordOnEvent (2, 4, 1.0, { 53, 57, 60 }), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::Region, 2, 1.0, 4.0), bpb);
+    m.applyCaptureEvent (chordOffEvent (2, 4, 4.0), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::PassStart, 3, 0.0), bpb);      // el DAW vuelve al compás 1
+    m.applyCaptureEvent (captureEvent (CaptureEvent::Region, 3, 0.0, 0.5), bpb);
+    m.applyCaptureEvent (chordOnEvent (3, 5, 0.5, { 55, 59, 62 }), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::Region, 3, 0.5, 4.0), bpb);
+    m.applyCaptureEvent (chordOffEvent (3, 5, 4.0), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::TakeEnd, 3, 4.0), bpb);
+    CHECK (m.size() == 1 && m.getBlocks()[0].notes[0] == 55, "en bucle sólo queda la última vuelta");
+
+    m.undo();
+    CHECK (m.size() == 2 && m.getBlocks()[0].count == 3, "deshacer recupera la progresión anterior");
+
+    // Reproducir sin tocar nada nunca borra la progresión
+    const int before = m.size();
+    m.applyCaptureEvent (captureEvent (CaptureEvent::TakeStart, 4, 0.0), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::Region, 4, 0.0, 16.0), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::TakeEnd, 4, 16.0), bpb);
+    CHECK (m.size() == before, "DAW en PLAY sin notas: la progresión queda intacta");
+
+    // Añadir con REC (reloj propio): la toma empieza en el compás siguiente al contenido
+    auto addTake = captureEvent (CaptureEvent::TakeStart, 5, 0.0);
+    addTake.replace = false;
+    addTake.freeClock = true;
+    m.applyCaptureEvent (addTake, bpb);
+    m.applyCaptureEvent (chordOnEvent (5, 6, 3.3, { 67, 71, 74 }), bpb);
+    m.applyCaptureEvent (chordOffEvent (5, 6, 5.3), bpb);
+    m.applyCaptureEvent (captureEvent (CaptureEvent::TakeEnd, 5, 6.0), bpb);
+    const auto& last = m.getBlocks().back();
+    CHECK (m.size() == before + 1 && std::abs (last.start - 4.0) < 1e-9 && std::abs (last.length - 2.0) < 1e-9,
+           "toma añadida con REC: alineada al compás siguiente, duración exacta");
+
+    // Edición manual (paleta): añadir, insertar, mover, duplicar, borrar
+    ProgressionModel p;
+    const int cmaj[] = { 60, 64, 67 }, fmaj[] = { 53, 57, 60 }, gmaj[] = { 55, 59, 62 };
+    p.append (ProgressionModel::makeBlock (cmaj, nullptr, 3, 0.0, 4.0));
+    p.append (ProgressionModel::makeBlock (gmaj, nullptr, 3, 0.0, 4.0));
+    p.insertAt (ProgressionModel::makeBlock (fmaj, nullptr, 3, 0.0, 4.0), 4.0, 1.0);
+    CHECK (p.size() == 3 && p.getBlocks()[1].notes[0] == 53 && std::abs (p.getBlocks()[2].start - 8.0) < 1e-9,
+           "insertar entre acordes desplaza los siguientes");
+    p.duplicateBlock (0);
+    CHECK (p.size() == 4 && std::abs (p.getBlocks()[1].start - 4.0) < 1e-9 && std::abs (p.getContentEnd() - 16.0) < 1e-9,
+           "duplicar a continuación");
+    p.removeBlock (1);
+    CHECK (p.size() == 3, "borrar acorde");
+    const auto manual = p.buildExportNotes (0.0, 100.0, true, 120.0);
+    bool descOk = false;
+    for (const auto& n : manual)
+        descOk = descOk || (n.note == 67 && std::abs (n.start) < 1e-9);
+    CHECK (manual.size() == 9 && descOk, "acordes de la paleta: STRUM DESC aplicado al exportar (entra primero la aguda)");
+
+    // Estado del proyecto
+    auto xml = m.toXml();
+    ProgressionModel restored;
+    restored.fromXml (*xml);
+    CHECK (restored.size() == m.size() && std::abs (restored.getBlocks().back().start - 4.0) < 1e-9
+           && restored.getBlocks()[1].offsets[1] > 0.2, "la progresión se guarda y se recupera con el proyecto");
+
+    PreviewSnapshot snap;
+    m.fillSnapshot (snap, bpb);
+    CHECK (snap.numChords == m.size() && std::abs (snap.loopLength - 8.0) < 1e-9, "instantánea de la vista previa (bucle de 2 compases)");
+
+    const auto file = m.writeMidiFile ("SmartKeys test", 120.0, 0.25, 0.0, false, 4, 4);
     CHECK (file.existsAsFile() && file.getSize() > 30, "guarda el .mid en disco");
     file.deleteFile();
+    m.clear();
+    CHECK (m.isEmpty() && m.writeMidiFile ("x", 120.0, 0.25, 0.0, false, 4, 4) == juce::File(), "CLEAR vacía la progresión");
+}
 
-    // Una nota repetida nunca se solapa consigo misma
-    ChordRecorder r2;
-    r2.add ({ 0.0, 60, 100, true });  r2.add ({ 0.9, 60, 100, true });
-    r2.add ({ 1.0, 60, 0, false });   r2.add ({ 1.5, 60, 0, false });
-    const auto s2 = r2.buildExportSpans (false);
-    CHECK (s2.size() == 2 && s2[0].end <= s2[1].start + 1e-9, "sin solapes de la misma nota");
+//==============================================================================
+static void testPaletteAndNumerals()
+{
+    std::printf ("[18] Paleta de acordes (estilo Klimper) y grados romanos\n");
+    ScaleChordEngine e;
+    e.setState (0, 0, ScaleChordEngine::getPitchClassMask (0, 0));   // C mayor
+    const auto palette = buildChordPalette (0, ScaleChordEngine::getPitchClassMask (0, 0));
+    CHECK (palette.getNumColumns() == 7, "C mayor: 7 columnas");
 
-    rec.clear();
-    CHECK (rec.isEmpty() && rec.writeMidiFile ("x", 120.0, true) == juce::File(), "CLEAR vacía el grabador");
+    auto nameAt = [&] (PaletteRow row, int column, bool roman)
+    {
+        const auto& c = palette.at ((int) row, column);
+        if (! c.valid)
+            return juce::String ("-");
+        const std::vector<int> notes (c.notes.begin(), c.notes.begin() + c.count);
+        return roman ? e.getRomanNumeral (notes) : e.getShortChordName (notes);
+    };
+    auto rowString = [&] (PaletteRow row, bool roman)
+    {
+        juce::String s;
+        for (int c = 0; c < palette.getNumColumns(); ++c)
+            s << (c > 0 ? " " : "") << nameAt (row, c, roman);
+        return s;
+    };
+
+    const auto triads = rowString (PaletteRow::Triad, false);
+    const auto sevenths = rowString (PaletteRow::Seventh, false);
+    const auto sixths = rowString (PaletteRow::Sixth, false);
+    const auto sus4 = rowString (PaletteRow::Sus4, false);
+    std::printf ("    %s | %s | %s | %s\n", triads.toRawUTF8(), sevenths.toRawUTF8(), sixths.toRawUTF8(), sus4.toRawUTF8());
+    CHECK (triads == "C Dm Em F G Am Bdim", "tríadas diatónicas");
+    CHECK (sevenths == "CMaj7 Dm7 Em7 FMaj7 G7 Am7 Bm7b5", "cuatriadas diatónicas");
+    CHECK (sixths == "C6 Dm6 - F6 G6 - -", "sextas sólo si la 6ª mayor está en la escala");
+    CHECK (sus4 == "Csus4 Dsus4 Esus4 - Gsus4 Asus4 -", "sus4 sin notas fuera de escala");
+    CHECK (rowString (PaletteRow::Add9, false) == "Cadd9 Dm(add9) - Fadd9 Gadd9 Am(add9) -", "add9");
+
+    const auto romanTriads = rowString (PaletteRow::Triad, true);
+    const auto romanSevenths = rowString (PaletteRow::Seventh, true);
+    std::printf ("    %s | %s\n", romanTriads.toRawUTF8(), romanSevenths.toRawUTF8());
+    CHECK (romanTriads == juce::String::fromUTF8 ("I ii iii IV V vi vii\xc2\xb0"), "grados romanos: I ii iii IV V vi vii°");
+    CHECK (romanSevenths == juce::String::fromUTF8 ("I\xce\x94" "7 ii7 iii7 IV\xce\x94" "7 V7 vi7 vii\xc3\xb8" "7"),
+           "grados con séptima: IΔ7 ii7 iii7 IVΔ7 V7 vi7 viiø7");
+
+    // A menor natural: i ii° III iv v VI VII
+    e.setState (9, 1, ScaleChordEngine::getPitchClassMask (9, 1));
+    const auto minorPalette = buildChordPalette (9, ScaleChordEngine::getPitchClassMask (9, 1));
+    juce::String minorRoman;
+    for (int c = 0; c < minorPalette.getNumColumns(); ++c)
+    {
+        const auto& cell = minorPalette.at ((int) PaletteRow::Triad, c);
+        minorRoman << (c > 0 ? " " : "") << e.getRomanNumeral (std::vector<int> (cell.notes.begin(), cell.notes.begin() + cell.count));
+    }
+    CHECK (minorRoman == juce::String::fromUTF8 ("i ii\xc2\xb0 III iv v VI VII"), "A menor: i ii° III iv v VI VII");
+
+    // Pentatónica: columnas = 5 notas; acordes sólo con notas de la escala
+    const auto penta = buildChordPalette (0, ScaleChordEngine::getPitchClassMask (0, 18));
+    bool allInScale = true;
+    const uint16_t pentaMask = ScaleChordEngine::getPitchClassMask (0, 18);
+    for (const auto& c : penta.cells)
+        for (int i = 0; c.valid && i < c.count; ++i)
+            allInScale = allInScale && ((pentaMask >> (c.notes[(size_t) i] % 12)) & 1u);
+    CHECK (penta.getNumColumns() == 5 && allInScale, "pentatónica: 5 columnas y todas las notas dentro de la escala");
+}
+
+//==============================================================================
+static void testStrumScheduler()
+{
+    std::printf ("[19] STRUM: entrada progresiva por muestra, ASC/DESC y NoteOff anticipado\n");
+    const double sr = 48000.0;
+    const int block = 512;
+
+    struct Hit { int64_t time; int note; bool on; };
+    auto runCase = [&] (double ms, bool desc, int64_t releaseAt, std::vector<Hit>& hits, uint64_t* midMask = nullptr, uint64_t* midMaskHi = nullptr)
+    {
+        StrumScheduler s;
+        s.prepare (sr);
+        s.setStrum (ms, desc);
+        juce::MidiBuffer in, out;
+        for (int b = 0; b < 40; ++b)
+        {
+            in.clear();
+            out.clear();
+            const int64_t start = (int64_t) b * block;
+            if (b == 0)
+                for (int n : { 64, 60, 67 })
+                    in.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 10);
+            if (releaseAt >= start && releaseAt < start + block)
+                for (int n : { 60, 64, 67 })
+                    in.addEvent (juce::MidiMessage::noteOff (1, n), (int) (releaseAt - start));
+            s.process (in, out, block);
+            for (const auto meta : out)
+            {
+                const auto m = meta.getMessage();
+                if (m.isNoteOnOrOff())
+                    hits.push_back ({ start + meta.samplePosition, m.getNoteNumber(), m.isNoteOn() });
+            }
+            if (midMask != nullptr && midMaskHi != nullptr && b == 15)
+                s.getSoundingBitmask (*midMask, *midMaskHi);
+        }
+    };
+
+    auto onTime = [] (const std::vector<Hit>& hits, int note) -> int64_t
+    {
+        for (const auto& h : hits) if (h.on && h.note == note) return h.time;
+        return -1;
+    };
+    auto offTime = [] (const std::vector<Hit>& hits, int note) -> int64_t
+    {
+        for (const auto& h : hits) if (! h.on && h.note == note) return h.time;
+        return -1;
+    };
+
+    // ASC 100 ms: 0 / 115 ms / 260 ms
+    std::vector<Hit> asc;
+    uint64_t midMask = 0, midMaskHi = 0;
+    runCase (100.0, false, 19000, asc, &midMask, &midMaskHi);
+    std::printf ("    ASC 100 ms: C4 %lld · E4 %lld · G4 %lld muestras\n",
+                 (long long) onTime (asc, 60), (long long) onTime (asc, 64), (long long) onTime (asc, 67));
+    CHECK (onTime (asc, 60) == 10 && onTime (asc, 64) == 10 + 5520 && onTime (asc, 67) == 10 + 12480,
+           "ASC: grave -> aguda con t_i = i·base·(1+0.15·i) exacto a la muestra");
+    CHECK (offTime (asc, 60) == 19000 && offTime (asc, 64) == 19000 && offTime (asc, 67) == 19000,
+           "los NoteOff llegan todos juntos al soltar (final alineado)");
+    CHECK (((midMask >> 60) & 1u) && ((midMaskHi >> (64 - 64)) & 1u) && ! ((midMaskHi >> (67 - 64)) & 1u),
+           "el teclado se ilumina nota a nota (a mitad del barrido suenan 2 de 3)");
+
+    std::vector<Hit> descHits;
+    runCase (100.0, true, 19000, descHits);
+    CHECK (onTime (descHits, 67) == 10 && onTime (descHits, 64) == 10 + 5520 && onTime (descHits, 60) == 10 + 12480,
+           "DESC: aguda -> grave");
+
+    // Soltar antes de que termine el barrido: lo pendiente se cancela, nada queda colgado
+    std::vector<Hit> early;
+    runCase (100.0, false, 3000, early);
+    CHECK (onTime (early, 60) == 10 && offTime (early, 60) == 3000 && onTime (early, 64) < 0 && onTime (early, 67) < 0
+           && offTime (early, 64) < 0 && offTime (early, 67) < 0,
+           "NoteOff anticipado: cancela las notas pendientes y apaga la que sonaba");
+
+    std::vector<Hit> block0;
+    runCase (0.0, false, 19000, block0);
+    CHECK (onTime (block0, 60) == 10 && onTime (block0, 64) == 10 && onTime (block0, 67) == 10,
+           "STRUM en 0 ms: el acorde entra en bloque");
+
+    // Pánico (All Notes Off) cancela lo pendiente
+    StrumScheduler p;
+    p.prepare (sr);
+    p.setStrum (200.0, false);
+    juce::MidiBuffer in, out;
+    in.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+    in.addEvent (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100), 0);
+    p.process (in, out, block);
+    in.clear();
+    in.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+    p.process (in, out, block);
+    CHECK (p.getNumPending() == 0, "ALL NOTES OFF vacía la cola del STRUM");
+}
+
+//==============================================================================
+static void testRouterChordIds()
+{
+    std::printf ("[20] Router: identificadores de acorde y acordes explícitos\n");
+    ScaleChordEngine engine;
+    engine.setState (0, 0, ScaleChordEngine::getPitchClassMask (0, 0));
+    MidiOutputRouter router;
+    juce::MidiBuffer out;
+
+    MidiOutputRouter::ChordTriggerInfo a, b;
+    const auto idA = router.handleNoteOn (MidiOutputRouter::Source::Midi, 60, 1, 100, 0, engine, out, &a);
+    CHECK (idA != 0 && a.chordId == idA && a.count == 3 && a.notes[0] == 60 && a.notes[2] == 67, "C4 -> acorde 1 con sus 3 notas");
+    const auto idB = router.handleNoteOn (MidiOutputRouter::Source::Midi, 60, 1, 100, 10, engine, out, &b);
+    CHECK (idB != idA && b.releasedChordId == idA, "re-disparo sin NoteOff: avisa del acorde liberado");
+    CHECK (router.handleNoteOff (MidiOutputRouter::Source::Midi, 60, 20, out) == idB, "el NoteOff devuelve el acorde que suelta");
+    CHECK (router.handleNoteOff (MidiOutputRouter::Source::Midi, 60, 21, out) == 0, "soltar dos veces no devuelve nada");
+
+    out.clear();
+    const int notes[] = { 53, 57, 60 };
+    const juce::uint8 vels[] = { 90, 90, 90 };
+    router.handleExplicitChordOn (MidiOutputRouter::Source::Palette, notes, vels, 3, 2, 0, out);
+    int ons = 0;
+    for (const auto meta : out) ons += meta.getMessage().isNoteOn() && meta.getMessage().getChannel() == 2 ? 1 : 0;
+    CHECK (ons == 3 && router.isExplicitSlotActive (MidiOutputRouter::Source::Palette), "acorde de la paleta por el canal elegido");
+    out.clear();
+    router.releaseAll (0, out);
+    int offs = 0;
+    for (const auto meta : out) offs += meta.getMessage().isNoteOff() ? 1 : 0;
+    CHECK (offs == 3 && ! router.isExplicitSlotActive (MidiOutputRouter::Source::Palette), "el pánico también suelta la paleta");
 }
 
 static void testMicFifo()
 {
-    std::printf ("[17] FIFO del micrófono directo (lock-free, latencia acotada)\n");
+    std::printf ("[21] FIFO del micrófono directo (lock-free, latencia acotada)\n");
     MicSampleFifo f (1024);
     std::vector<float> in (300), out (4096);
     for (int i = 0; i < 300; ++i) in[(size_t) i] = (float) i;
@@ -932,26 +1240,50 @@ static void testRealtimeAllocations()
     FlKeysPianoSynth synth;
     synth.prepare (sr, block);
     MidiOutputRouter router;
-    juce::MidiBuffer out;
+    StrumScheduler strum;
+    strum.prepare (sr);
+    strum.setStrum (40.0, false);
+    auto captureFifo = std::make_unique<CaptureFifo>();
+    juce::MidiBuffer routed, out;
+    routed.ensureSize (16384);
     out.ensureSize (16384);
     juce::AudioBuffer<float> audio (2, block);
     std::vector<float> mic ((size_t) block);
 
     auto runBlock = [&] (int b)
     {
+        routed.clear();
         out.clear();
         for (int i = 0; i < block; ++i)
             mic[(size_t) i] = 0.3f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 220.0 * (double) (b * block + i) / sr);
         const float* chans[1] = { mic.data() };
         const int ne = tracker.process (chans, 1, block, engine);
+        MidiOutputRouter::ChordTriggerInfo info;
         for (int k = 0; k < ne; ++k)
         {
             const auto& ev = tracker.getEvent (k);
-            if (ev.isNoteOn) router.handleNoteOn (MidiOutputRouter::Source::Voice, ev.note, 1, (juce::uint8) ev.velocity, ev.sampleOffset, engine, out);
-            else             router.handleNoteOff (MidiOutputRouter::Source::Voice, ev.note, ev.sampleOffset, out);
+            if (ev.isNoteOn) router.handleNoteOn (MidiOutputRouter::Source::Voice, ev.note, 1, (juce::uint8) ev.velocity, ev.sampleOffset, engine, routed, &info);
+            else             router.handleNoteOff (MidiOutputRouter::Source::Voice, ev.note, ev.sampleOffset, routed);
         }
-        if (b % 7 == 0) router.handleNoteOn (MidiOutputRouter::Source::Midi, 60 + (b % 12), 1, 100, 3, engine, out);
-        if (b % 7 == 3) router.handleNoteOff (MidiOutputRouter::Source::Midi, 60 + ((b - 3) % 12), 9, out);
+        if (b % 7 == 0)
+        {
+            router.handleNoteOn (MidiOutputRouter::Source::Midi, 60 + (b % 12), 1, 100, 3, engine, routed, &info);
+            CaptureEvent e;
+            e.type = CaptureEvent::ChordOn;
+            e.chordId = info.chordId;
+            e.count = (uint8_t) info.count;
+            captureFifo->push (e);
+        }
+        if (b % 7 == 3) router.handleNoteOff (MidiOutputRouter::Source::Midi, 60 + ((b - 3) % 12), 9, routed);
+        if (b % 11 == 0)
+        {
+            const int pal[] = { 53, 57, 60, 64 };
+            const juce::uint8 vel[] = { 100, 100, 100, 100 };
+            router.handleExplicitChordOn (MidiOutputRouter::Source::Preview, pal, vel, 4, 1, 5, routed);
+        }
+        if (b % 11 == 5) router.handleExplicitChordOff (MidiOutputRouter::Source::Preview, 7, routed);
+        if (b % 200 == 199) captureFifo->drain ([] (const CaptureEvent&) {});
+        strum.process (routed, out, block);
         if (b % 50 == 0) engine.setState ((b / 50) % 12, (b / 50) % kNumScales, ScaleChordEngine::getPitchClassMask ((b / 50) % 12, (b / 50) % kNumScales));
         if (b % 90 == 0) engine.setMode ((OperationMode) ((b / 90) % 3));                 // Smart / Single / Complex
         if (b % 130 == 0) engine.setComplexVariation ((ComplexVariation) ((b / 130) % 3));
@@ -967,7 +1299,7 @@ static void testRealtimeAllocations()
         for (int b = 64; b < 2000; ++b) runBlock (b);
         allocs = guard.count();
     }
-    std::printf ("    1936 bloques (tracker + router + motor + sinte): %ld asignaciones\n", allocs);
+    std::printf ("    1936 bloques (tracker + router + STRUM + captura + motor + sinte): %ld asignaciones\n", allocs);
     CHECK (allocs == 0, "cero asignaciones en el hilo de audio");
 }
 
@@ -990,7 +1322,10 @@ int main()
     testComplexExhaustive();
     testComplexRouterAndVoice();
     testComplexPolyphonyAndLevel();
-    testChordRecorder();
+    testProgressionCapture();
+    testPaletteAndNumerals();
+    testStrumScheduler();
+    testRouterChordIds();
     testMicFifo();
     testRealtimeAllocations();
 

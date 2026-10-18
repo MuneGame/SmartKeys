@@ -16,6 +16,11 @@
       cambiado de escala, tónica, modo o variación mientras la mantenía.
     - Conteo de referencias por nota de salida: si dos acordes comparten una
       nota (C-E-G y A-C-E), soltar uno no corta la nota que el otro sostiene.
+    - Cada acorde recibe un identificador único: el capturador de la
+      progresión lo usa para guardar el acorde completo (todas sus notas, con
+      su posición y duración exactas) aunque comparta notas con otro.
+    - Acordes explícitos (paleta de acordes y vista previa de la progresión)
+      con sus propias ranuras, que pasan por el mismo conteo de referencias.
     - Sin asignaciones de memoria en el hilo de audio: todos los vectores
       tienen capacidad reservada en el constructor y el voicing usa arrays fijos.
 
@@ -46,6 +51,8 @@ public:
         for (auto& v : activeChordsByTriggerNote)
             v.reserve (kReserve);
         voiceChord.reserve (kReserve);
+        paletteChord.reserve (kReserve);
+        previewChord.reserve (kReserve);
         clear();
     }
 
@@ -54,8 +61,12 @@ public:
         for (auto& v : activeChordsByTriggerNote)
             v.clear();
         voiceChord.clear();
+        paletteChord.clear();
+        previewChord.clear();
         triggerChannel.fill (1);
+        triggerChordId.fill (0);
         voiceChannel = 1;
+        voiceChordId = paletteChordId = previewChordId = 0;
         outputRefCount.fill (0);
         outputChannel.fill (1);
     }
@@ -63,10 +74,16 @@ public:
     // Notas de acorde disparadas por cada tecla de entrada (0..127)
     std::array<std::vector<int>, 128> activeChordsByTriggerNote;
     std::array<int, 128> triggerChannel {};
+    std::array<uint32_t, 128> triggerChordId {};
 
     // Ranura independiente para el controlador vocal
     std::vector<int> voiceChord;
     int voiceChannel = 1;
+    uint32_t voiceChordId = 0;
+
+    // Ranuras de acordes explícitos: paleta de acordes (escucha) y vista previa de la progresión
+    std::vector<int> paletteChord, previewChord;
+    uint32_t paletteChordId = 0, previewChordId = 0;
 
     // Conteo de referencias y canal de cada nota de salida
     std::array<uint16_t, 128> outputRefCount {};
@@ -77,9 +94,20 @@ public:
 class MidiOutputRouter
 {
 public:
-    enum class Source : int { Midi = 0, Screen = 1, Voice = 2 };
+    enum class Source : int { Midi = 0, Screen = 1, Voice = 2, Palette = 3, Preview = 4 };
 
     static constexpr int kMaxPackedNotes = 7;
+    static constexpr int kMaxChordNotes  = ScaleChordEngine::kMaxChordNotes;
+
+    // Acorde completo generado por una tecla (para el capturador de la progresión)
+    struct ChordTriggerInfo
+    {
+        uint32_t chordId = 0;            // identificador único del acorde (0 = ninguno)
+        uint32_t releasedChordId = 0;    // acorde anterior liberado por un re-disparo
+        int count = 0;
+        std::array<int, kMaxChordNotes> notes {};
+        std::array<juce::uint8, kMaxChordNotes> velocities {};
+    };
 
     MidiOutputRouter() = default;
 
@@ -90,10 +118,14 @@ public:
         lastVoiceEventPacked.store (0);
     }
 
+    uint32_t getLastChordId() const noexcept { return chordIdCounter; }
+
     //==========================================================================
     // NoteOn de una nota disparadora -> NoteOn de todas las notas generadas
-    void handleNoteOn (Source source, int triggerNote, int channel, juce::uint8 velocity,
-                       int samplePosition, const ScaleChordEngine& engine, juce::MidiBuffer& out)
+    // Devuelve el id del acorde generado; 'info' (opcional) recibe todas sus notas.
+    uint32_t handleNoteOn (Source source, int triggerNote, int channel, juce::uint8 velocity,
+                           int samplePosition, const ScaleChordEngine& engine, juce::MidiBuffer& out,
+                           ChordTriggerInfo* info = nullptr)
     {
         triggerNote = juce::jlimit (0, 127, triggerNote);
         channel = juce::jlimit (1, 16, channel);
@@ -101,10 +133,22 @@ public:
 
         auto& slot = (source == Source::Voice) ? registry.voiceChord
                                                : registry.activeChordsByTriggerNote[(size_t) triggerNote];
+        auto& slotId = (source == Source::Voice) ? registry.voiceChordId
+                                                 : registry.triggerChordId[(size_t) triggerNote];
+
+        if (info != nullptr)
+        {
+            info->count = 0;
+            info->releasedChordId = 0;
+        }
 
         // Re-disparo sin NoteOff previo: liberar primero el acorde anterior
         if (! slot.empty())
+        {
+            if (info != nullptr)
+                info->releasedChordId = slotId;
             releaseSlot (slot, samplePosition, out);
+        }
 
         engine.generateVoicing (triggerNote, voicing);
 
@@ -114,31 +158,96 @@ public:
             if (note < 0 || note > 127 || slot.size() >= slot.capacity())
                 continue;
 
+            const int vel = juce::jlimit (1, 127, (int) std::lround ((float) inputVelocity
+                                                                     * voicing.velocityScale[(size_t) i]));
             auto& ref = registry.outputRefCount[(size_t) note];
             if (ref == 0)
             {
-                const int vel = juce::jlimit (1, 127, (int) std::lround ((float) inputVelocity
-                                                                         * voicing.velocityScale[(size_t) i]));
                 registry.outputChannel[(size_t) note] = channel;
                 out.addEvent (juce::MidiMessage::noteOn (channel, note, (juce::uint8) vel), samplePosition);
             }
             ++ref;
             slot.push_back (note);
+
+            if (info != nullptr && info->count < kMaxChordNotes)
+            {
+                info->notes[(size_t) info->count] = note;
+                info->velocities[(size_t) info->count] = (juce::uint8) vel;
+                ++info->count;
+            }
         }
 
         if (source == Source::Voice) registry.voiceChannel = channel;
         else                         registry.triggerChannel[(size_t) triggerNote] = channel;
 
+        slotId = nextChordId();
+        if (info != nullptr)
+            info->chordId = slotId;
+
         publishLastEvent (source, triggerNote, slot, (int) engine.getMode());
+        return slotId;
     }
 
-    // NoteOff de la nota disparadora -> NoteOff exacto de lo que disparó
-    void handleNoteOff (Source source, int triggerNote, int samplePosition, juce::MidiBuffer& out)
+    // NoteOff de la nota disparadora -> NoteOff exacto de lo que disparó.
+    // Devuelve el id del acorde liberado (0 si esa tecla no sonaba).
+    uint32_t handleNoteOff (Source source, int triggerNote, int samplePosition, juce::MidiBuffer& out)
     {
         triggerNote = juce::jlimit (0, 127, triggerNote);
         auto& slot = (source == Source::Voice) ? registry.voiceChord
                                                : registry.activeChordsByTriggerNote[(size_t) triggerNote];
+        auto& slotId = (source == Source::Voice) ? registry.voiceChordId
+                                                 : registry.triggerChordId[(size_t) triggerNote];
+        const uint32_t released = slot.empty() ? 0u : slotId;
         releaseSlot (slot, samplePosition, out);
+        slotId = 0;
+        return released;
+    }
+
+    //==========================================================================
+    // Acordes explícitos (paleta de acordes y vista previa de la progresión):
+    // las notas ya vienen decididas; se registran igual que las de una tecla.
+    uint32_t handleExplicitChordOn (Source source, const int* notes, const juce::uint8* velocities, int count,
+                                    int channel, int samplePosition, juce::MidiBuffer& out)
+    {
+        auto& slot = explicitSlot (source);
+        auto& slotId = explicitSlotId (source);
+        channel = juce::jlimit (1, 16, channel);
+
+        if (! slot.empty())
+            releaseSlot (slot, samplePosition, out);
+
+        for (int i = 0; i < juce::jmin (count, kMaxChordNotes); ++i)
+        {
+            const int note = notes[i];
+            if (note < 0 || note > 127 || slot.size() >= slot.capacity())
+                continue;
+
+            auto& ref = registry.outputRefCount[(size_t) note];
+            if (ref == 0)
+            {
+                registry.outputChannel[(size_t) note] = channel;
+                out.addEvent (juce::MidiMessage::noteOn (channel, note, (juce::uint8) juce::jlimit (1, 127, (int) velocities[i])),
+                              samplePosition);
+            }
+            ++ref;
+            slot.push_back (note);
+        }
+
+        slotId = nextChordId();
+        if (! slot.empty())
+            publishLastEvent (source, slot.front(), slot, kExplicitMode);
+        return slotId;
+    }
+
+    void handleExplicitChordOff (Source source, int samplePosition, juce::MidiBuffer& out)
+    {
+        releaseSlot (explicitSlot (source), samplePosition, out);
+        explicitSlotId (source) = 0;
+    }
+
+    bool isExplicitSlotActive (Source source) const noexcept
+    {
+        return source == Source::Preview ? ! registry.previewChord.empty() : ! registry.paletteChord.empty();
     }
 
     // Libera absolutamente todo (CC 120/123, pánico, reset)
@@ -147,6 +256,10 @@ public:
         for (auto& slot : registry.activeChordsByTriggerNote)
             releaseSlot (slot, samplePosition, out);
         releaseSlot (registry.voiceChord, samplePosition, out);
+        releaseSlot (registry.paletteChord, samplePosition, out);
+        releaseSlot (registry.previewChord, samplePosition, out);
+        registry.triggerChordId.fill (0);
+        registry.voiceChordId = registry.paletteChordId = registry.previewChordId = 0;
 
         // Seguridad extra: cualquier nota que quedara con referencias
         for (int n = 0; n < 128; ++n)
@@ -187,8 +300,10 @@ public:
     //   bits 52-58 : nota disparadora
     //   bit  59    : origen = voz
     //   bit  60    : válido
-    //   bits 61-62 : modo (0 Smart, 1 Single, 2 Complex)
+    //   bits 61-62 : modo (0 Smart, 1 Single, 2 Complex, 3 acorde explícito de la paleta / progresión)
     std::atomic<uint64_t> lastEventPacked { 0 };
+
+    static constexpr int kExplicitMode = 3;
 
     // Último acorde disparado por la VOZ (etiqueta en vivo "Mic: A3 -> F Maj7")
     std::atomic<uint64_t> lastVoiceEventPacked { 0 };
@@ -218,6 +333,23 @@ public:
     }
 
 private:
+    uint32_t nextChordId() noexcept
+    {
+        if (++chordIdCounter == 0)
+            chordIdCounter = 1;
+        return chordIdCounter;
+    }
+
+    std::vector<int>& explicitSlot (Source source) noexcept
+    {
+        return source == Source::Preview ? registry.previewChord : registry.paletteChord;
+    }
+
+    uint32_t& explicitSlotId (Source source) noexcept
+    {
+        return source == Source::Preview ? registry.previewChordId : registry.paletteChordId;
+    }
+
     void releaseSlot (std::vector<int>& slot, int samplePosition, juce::MidiBuffer& out)
     {
         for (int note : slot)
@@ -249,6 +381,7 @@ private:
 
     ActiveNoteRegistry registry;
     ScaleChordEngine::Voicing voicing;
+    uint32_t chordIdCounter = 0;
 };
 
 } // namespace smartkeys

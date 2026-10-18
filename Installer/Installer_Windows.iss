@@ -7,7 +7,7 @@
 ;    3) "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Installer\Installer_Windows.iss
 ;       (o simplemente ejecutar Installer\build_windows.bat)
 ;
-;  Resultado: Installer\Output\SmartKeys-1.1.0-Windows-Setup.exe
+;  Resultado: Installer\Output\SmartKeys-1.2.0-Windows-Setup.exe
 ;  - VST3       -> C:\Program Files\Common Files\VST3\SmartKeys.vst3         ({commoncf64}\VST3)
 ;                  C:\Program Files\Common Files\VST3\SmartKeys FX.vst3      (efecto para la pista del micrófono)
 ;  - Standalone -> C:\Program Files\SmartKeys\SmartKeys.exe                  (opcional)
@@ -18,7 +18,7 @@
 ; ==============================================================================
 
 #define AppName      "SmartKeys"
-#define AppVersion   "1.1.0"
+#define AppVersion   "1.2.0"
 #define AppPublisher "JeanPaul Audio"
 #define BuildDir     "..\build\SmartKeys_artefacts\Release"
 #define BuildDirFx   "..\build\SmartKeysFX_artefacts\Release"

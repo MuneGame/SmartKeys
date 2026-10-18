@@ -724,30 +724,40 @@ public:
         return getPitchClassName (rootKey, prefersFlats()) + " " + juce::String::fromUTF8 (getScale (scaleIndex).name);
     }
 
-    // Cifrado del acorde en tiempo real (hilo de mensajes; asigna un juce::String).
+    // Identidad de un acorde: fundamental, bajo y sufijo funcional
+    struct ChordIdentity
+    {
+        bool valid = false;        // false: no hay lectura coherente (se lista por notas)
+        int rootPc = 0;
+        int bassPc = 0;
+        juce::String suffix;       // "m7", "Maj9", "dim", "sus4"...
+        bool spaced = false;       // "F Maj", "B dim": sufijo separado por un espacio
+        int thirdInterval = -1, fifthInterval = -1, seventhInterval = -1;
+        int distinctPitchClasses = 0;
+    };
+
     // Analiza funciones (3ª, 5ª, 7ª y tensiones 9/11/13) para cada fundamental
     // posible y elige la lectura más coherente (con preferencia por el bajo).
-    // Ejemplos: "F Maj", "Dm", "E dim", "Gm7", "F Maj7", "F Maj9", "Gm9", "Dm11",
-    //           "C13", "Bb Maj9#11", "Em7b5(11)", "Cadd9", "Dsus4", "C Maj7/E".
-    juce::String getChordName (const std::vector<int>& chordNotes) const
+    static ChordIdentity identifyChord (const std::vector<int>& chordNotes)
     {
+        ChordIdentity id;
         if (chordNotes.empty())
-            return {};
+            return id;
 
-        const bool flats = prefersFlats();
         const int bass = *std::min_element (chordNotes.begin(), chordNotes.end());
-
         uint16_t pcMask = 0;
         for (int n : chordNotes)
             pcMask = (uint16_t) (pcMask | (1u << (unsigned) (((n % 12) + 12) % 12)));
 
-        int distinct = 0;
         for (int i = 0; i < 12; ++i)
-            distinct += (pcMask >> i) & 1;
+            id.distinctPitchClasses += (pcMask >> i) & 1;
 
-        if (distinct == 1)
-            return chordNotes.size() == 1 ? getNoteName (bass)
-                                          : getPitchClassName (bass, flats) + " (8va)";
+        const int bassPc = ((bass % 12) + 12) % 12;
+        id.bassPc = bassPc;
+        id.rootPc = bassPc;
+
+        if (id.distinctPitchClasses == 1)
+            return id;
 
         auto rotate = [] (uint16_t mask, int root) -> uint16_t
         {
@@ -758,7 +768,6 @@ public:
             return r;
         };
 
-        const int bassPc = ((bass % 12) + 12) % 12;
         int bestScore = -100000, bestRoot = -1;
         ChordAnalysis best;
 
@@ -794,19 +803,147 @@ public:
             }
         }
 
-        if (bestRoot >= 0)
+        if (bestRoot < 0)
+            return id;
+
+        id.valid = true;
+        id.rootPc = bestRoot;
+        id.suffix = best.suffix;
+        id.spaced = best.spaced;
+        id.thirdInterval = best.thirdInterval;
+        id.fifthInterval = best.fifthInterval;
+        id.seventhInterval = best.seventhInterval;
+        return id;
+    }
+
+    // Cifrado del acorde en tiempo real (hilo de mensajes; asigna un juce::String).
+    // Ejemplos: "F Maj", "Dm", "E dim", "Gm7", "F Maj7", "F Maj9", "Gm9", "Dm11",
+    //           "C13", "Bb Maj9#11", "Em7b5(11)", "Cadd9", "Dsus4", "C Maj7/E".
+    juce::String getChordName (const std::vector<int>& chordNotes) const
+    {
+        if (chordNotes.empty())
+            return {};
+
+        const bool flats = prefersFlats();
+        const auto id = identifyChord (chordNotes);
+        const int bass = *std::min_element (chordNotes.begin(), chordNotes.end());
+
+        if (id.distinctPitchClasses == 1)
+            return chordNotes.size() == 1 ? getNoteName (bass)
+                                          : getPitchClassName (bass, flats) + " (8va)";
+
+        if (id.valid)
         {
-            juce::String name = getPitchClassName (bestRoot, flats) + (best.spaced ? " " : "") + best.suffix;
-            if (bestRoot != bassPc)
-                name << "/" << getPitchClassName (bassPc, flats);
+            juce::String name = getPitchClassName (id.rootPc, flats) + (id.spaced ? " " : "") + id.suffix;
+            if (id.rootPc != id.bassPc)
+                name << "/" << getPitchClassName (id.bassPc, flats);
             return name;
         }
 
-        // Sin lectura reconocible: lista de notas
+        return listPitchClasses (chordNotes);
+    }
+
+    // Cifrado compacto para la paleta y la progresión: "C", "Dm7", "Bdim", "FMaj7"
+    juce::String getShortChordName (const std::vector<int>& chordNotes) const
+    {
+        if (chordNotes.empty())
+            return {};
+
+        const bool flats = prefersFlats();
+        const auto id = identifyChord (chordNotes);
+        if (id.distinctPitchClasses == 1)
+            return getPitchClassName (id.bassPc, flats);
+        if (! id.valid)
+            return listPitchClasses (chordNotes);
+
+        juce::String suffix = id.suffix == "Maj" ? juce::String() : id.suffix;
+        juce::String name = getPitchClassName (id.rootPc, flats) + suffix;
+        if (id.rootPc != id.bassPc)
+            name << "/" << getPitchClassName (id.bassPc, flats);
+        return name;
+    }
+
+    // Grado en números romanos respecto a la tónica y la escala activas:
+    // "I", "ii", "iii7", "IVΔ7", "V7", "vi", "vii°", "viiø7", "bVII", "IVsus4"...
+    juce::String getRomanNumeral (const std::vector<int>& chordNotes) const
+    {
+        if (chordNotes.empty())
+            return {};
+
+        const auto id = identifyChord (chordNotes);
+        const int rootPc = id.valid ? id.rootPc : id.bassPc;
+
+        static const char* numerals[7] = { "I", "II", "III", "IV", "V", "VI", "VII" };
+        juce::String degree;
+
+        if (numActivePitchClasses == 7)
+        {
+            // Grado dentro de la escala (I..VII); fuera de ella, alterado (b / #)
+            int indexOf[12];
+            int idx = 0;
+            for (int i = 0; i < 12; ++i)
+                indexOf[i] = -1;
+            for (int i = 0; i < 12; ++i)
+            {
+                const int pc = (rootKey + i) % 12;
+                if (isPitchClassActive (pc))
+                    indexOf[pc] = idx++;
+            }
+
+            if (indexOf[rootPc] >= 0)
+                degree = numerals[indexOf[rootPc]];
+            else if (indexOf[(rootPc + 1) % 12] >= 0)
+                degree = juce::String::fromUTF8 ("\xe2\x99\xad") + numerals[indexOf[(rootPc + 1) % 12]];
+            else if (indexOf[(rootPc + 11) % 12] >= 0)
+                degree = juce::String::fromUTF8 ("\xe2\x99\xaf") + numerals[indexOf[(rootPc + 11) % 12]];
+        }
+
+        if (degree.isEmpty())
+        {
+            // Escalas no heptatónicas: grado respecto a la escala mayor de la tónica
+            static const char* chromatic[12] = { "I", "\xe2\x99\xadII", "II", "\xe2\x99\xadIII", "III", "IV",
+                                                 "\xe2\x99\xafIV", "V", "\xe2\x99\xadVI", "VI", "\xe2\x99\xadVII", "VII" };
+            degree = juce::String::fromUTF8 (chromatic[(rootPc - rootKey + 12) % 12]);
+        }
+
+        if (! id.valid)
+            return degree;
+
+        // Menor o disminuido -> minúsculas; el sufijo se traduce a notación de grados
+        juce::String suffix = id.suffix;
+        const bool minorThird = id.thirdInterval == 3;
+        if (minorThird)
+            degree = degree.toLowerCase().replace ("b", juce::String::fromUTF8 ("\xe2\x99\xad"));
+
+        if (suffix == "Maj")                     suffix = {};
+        else if (suffix == "dim")                suffix = juce::String::fromUTF8 ("\xc2\xb0");
+        else if (suffix == "dim7")               suffix = juce::String::fromUTF8 ("\xc2\xb0" "7");
+        else if (suffix.startsWith ("m7b5"))     suffix = juce::String::fromUTF8 ("\xc3\xb8" "7") + suffix.substring (4);
+        else if (suffix == "aug")                suffix = "+";
+        else if (minorThird && suffix.startsWith ("m") && ! suffix.startsWith ("mMaj"))
+            suffix = suffix.substring (1);
+        else if (minorThird && suffix.startsWith ("mMaj"))
+            suffix = juce::String::fromUTF8 ("\xce\x94") + suffix.substring (4);
+
+        suffix = suffix.replace ("Maj", juce::String::fromUTF8 ("\xce\x94"));
+        if (suffix.startsWith ("(") && suffix.endsWith (")"))
+            suffix = suffix.substring (1, suffix.length() - 1);
+
+        return degree + suffix;
+    }
+
+    static juce::String listPitchClasses (const std::vector<int>& chordNotes)
+    {
+        const int bass = *std::min_element (chordNotes.begin(), chordNotes.end());
+        const int bassPc = ((bass % 12) + 12) % 12;
+        uint16_t pcMask = 0;
+        for (int n : chordNotes)
+            pcMask = (uint16_t) (pcMask | (1u << (unsigned) (((n % 12) + 12) % 12)));
+
         juce::String fallback;
         for (int i = 0; i < 12; ++i)
             if ((pcMask >> ((bassPc + i) % 12)) & 1u)
-                fallback << (fallback.isEmpty() ? "" : "-") << getPitchClassName ((bassPc + i) % 12, flats);
+                fallback << (fallback.isEmpty() ? "" : "-") << getPitchClassName ((bassPc + i) % 12, false);
         return fallback;
     }
 

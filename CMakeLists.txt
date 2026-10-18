@@ -1,10 +1,15 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SmartKeys VERSION 1.1.0 LANGUAGES C CXX)
+project(SmartKeys VERSION 1.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Versión mínima de macOS")
+
+# Visual Studio: los textos de la interfaz (ñ, á, ●, ▶, ♭...) están en UTF-8
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
 
 # Universal binary (Apple Silicon + Intel) por defecto en macOS
 if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
@@ -47,7 +52,8 @@ endif()
 
 set(SMARTKEYS_SOURCES
     Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+    Source/PluginEditor.cpp
+    Source/ProgressionView.cpp)
 
 #-------------------------------------------------------------------------------
 # smartkeys_add_plugin(): crea una variante del plugin a partir del mismo código
