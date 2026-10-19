@@ -178,6 +178,7 @@ public:
     void mouseEnter (const juce::MouseEvent&) override  { repaint(); }
     void mouseExit (const juce::MouseEvent&) override   { repaint(); }
     void mouseUp (const juce::MouseEvent&) override;
+    bool hitTest (int x, int y) override;   // sólo el texto (está alineado a la derecha)
     void setState (State newState, const juce::String& deviceName);
 
     std::function<void()> onClick;   // encender / apagar el teclado
@@ -185,6 +186,7 @@ public:
 private:
     State state = State::Hidden;
     juce::String name;
+    float contentLeft = 0.0f;
 };
 
 //==============================================================================

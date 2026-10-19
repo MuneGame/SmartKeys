@@ -930,6 +930,11 @@ void ChordPortStatus::mouseUp (const juce::MouseEvent& e)
         onClick();
 }
 
+bool ChordPortStatus::hitTest (int x, int)
+{
+    return state != State::Hidden && (float) x >= contentLeft - 4.0f;
+}
+
 void ChordPortStatus::setState (State newState, const juce::String& deviceName)
 {
     if (newState == state && deviceName == name)
@@ -1024,6 +1029,7 @@ void ChordPortStatus::paint (juce::Graphics& g)
     g.setFont (small);
     g.setColour (Colours::label);
     g.drawText ("MIDI", juce::Rectangle<float> (x, r.getY(), tagW + 2.0f, r.getHeight()), juce::Justification::centredLeft, false);
+    contentLeft = x;
 }
 
 void ChordDisplay::paint (juce::Graphics& g)
