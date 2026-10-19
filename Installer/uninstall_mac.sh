@@ -9,7 +9,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 for s in scripts-vst3/preinstall scripts-au/preinstall scripts-app/preinstall; do
     sudo bash "$ROOT/Installer/macos/$s"
 done
-for id in com.jeanpaulaudio.smartkeys.vst3 com.jeanpaulaudio.smartkeys.au com.jeanpaulaudio.smartkeys.app; do
+for id in com.miwn.smartkeys.vst3 com.miwn.smartkeys.au com.miwn.smartkeys.app \
+          com.jeanpaulaudio.smartkeys.vst3 com.jeanpaulaudio.smartkeys.au com.jeanpaulaudio.smartkeys.app; do
     sudo pkgutil --forget "$id" >/dev/null 2>&1 || true
 done
 echo "SmartKeys se desinstaló por completo (registro: /tmp/smartkeys-install.log)."

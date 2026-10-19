@@ -2,7 +2,7 @@
   ==============================================================================
 
     PluginEditor.h
-    SmartKeys — Interfaz gráfica vectorial (850 x 606 px, redimensionable).
+    SmartKeys (MIWN) — Interfaz gráfica vectorial (850 x 606 px, redimensionable).
 
   ==============================================================================
 */
@@ -143,6 +143,29 @@ private:
 };
 
 //==============================================================================
+// Lectura de la voz en la tira MIC: "Mic: A3 -> Acorde: Am" (o un aviso breve
+// si macOS no deja usar el micrófono)
+class VoiceReadout : public juce::Component,
+                     public juce::SettableTooltipClient
+{
+public:
+    void paint (juce::Graphics&) override;
+
+    void showIdle();                                                    // "Mic: --"
+    void showVoice (const juce::String& note, const juce::String& kind, const juce::String& result);
+    void showMessage (const juce::String& message, bool isWarning);
+    void showNothing();                                                 // MIC VOICE apagado
+
+private:
+    enum class Kind { Nothing, Idle, Voice, Message };
+    bool set (Kind, const juce::String& a, const juce::String& b, const juce::String& c, bool warning);
+
+    Kind kind = Kind::Nothing;
+    juce::String note, label, result;
+    bool warning = false;
+};
+
+//==============================================================================
 // Pantalla LED del acorde / nota
 class ChordDisplay : public juce::Component
 {
@@ -191,7 +214,7 @@ private:
     void layoutContent();
     void timerCallback() override;
     void updateDisplay();
-    void updateMicStatus();
+    void updateVoiceReadout();
     void updateStrumLabel();
 
     //==========================================================================
@@ -203,16 +226,15 @@ private:
     smartkeys::ui::SmartKeysLookAndFeel lookAndFeel;
     Content content;
 
-    // Fila superior: modo, canal MIDI y volumen
+    // Fila superior: modo y volumen (la salida MIDI va siempre por el canal 1)
     smartkeys::ui::ChoiceButtons modeSwitch;
-    juce::ComboBox midiChannelBox;
     juce::Slider gainSlider;
 
-    // Tira MIC: controlador de voz (entrada del plugin), medidor, gate y estado
+    // Tira MIC: controlador de voz, medidor, gate y "Mic: A3 -> Acorde: Am"
     juce::TextButton micButton;
     smartkeys::ui::LevelMeter micMeter;
     juce::Slider gateSlider;
-    juce::Label micStatusLabel;
+    smartkeys::ui::VoiceReadout voiceReadout;
 
     // KEY · SCALE · ESCALA
     smartkeys::ui::KeySelector keySelector;
@@ -245,7 +267,6 @@ private:
     // Declarados DESPUÉS de todos los controles: se destruyen antes que ellos.
     std::unique_ptr<smartkeys::ui::PolledButtonAttachment> micAttach;
     std::unique_ptr<smartkeys::ui::PolledSliderAttachment> gainAttach, gateAttach, strumAttach;
-    std::unique_ptr<smartkeys::ui::PolledComboBoxAttachment> midiChannelAttach;
 
     juce::TooltipWindow tooltipWindow { this, 600 };
 

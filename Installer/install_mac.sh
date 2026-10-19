@@ -7,7 +7,7 @@
 #
 #  Pasos:
 #    1. Comprueba las herramientas (Command Line Tools de Apple y CMake).
-#    2. Borra SmartKeys / SmartKeys FX (.vst3, .component, .app) de /Library,
+#    2. Borra SmartKeys y la vieja SmartKeys FX (.vst3, .component, .app) de /Library,
 #       ~/Library de cada usuario y /Applications, la caché de Audio Units y la
 #       ficha de SmartKeys en la base de datos de FL Studio.
 #    3. Compila (Universal) y genera el .pkg.
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="1.4.0"
+VERSION="1.5.0"
 PKG="$ROOT/Installer/Output/SmartKeys-$VERSION-macOS.pkg"
 
 echo "==> [1/4] Comprobando herramientas"

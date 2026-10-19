@@ -4,6 +4,7 @@
 #  (se copian dentro de cada componente al generar el instalador)
 # ==============================================================================
 SMARTKEYS_LOG="/tmp/smartkeys-install.log"
+# "SmartKeys FX" ya no existe desde la 1.5 (un único plugin): se borra si quedó
 SMARTKEYS_NAMES=("SmartKeys" "SmartKeys FX")
 
 sk_log()    { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$SMARTKEYS_LOG"; }
@@ -48,4 +49,16 @@ sk_forget_in_fl_studio()
         [ -d "$db" ] || continue
         find "$db" -type f \( -name "SmartKeys.nfo" -o -name "SmartKeys FX.nfo" \) -print -delete >> "$SMARTKEYS_LOG" 2>&1 || true
     done < <(sk_user_homes)
+}
+
+# Recibos de los instaladores anteriores (fabricante "JeanPaul Audio", 1.0–1.4):
+# el plugin ahora es de MIWN (com.miwn.smartkeys)
+sk_forget_old_receipts()
+{
+    local id
+    for id in com.jeanpaulaudio.smartkeys.vst3 com.jeanpaulaudio.smartkeys.au com.jeanpaulaudio.smartkeys.app; do
+        if pkgutil --pkg-info "$id" >/dev/null 2>&1; then
+            pkgutil --forget "$id" >/dev/null 2>&1 && sk_log "recibo antiguo olvidado: $id"
+        fi
+    done
 }

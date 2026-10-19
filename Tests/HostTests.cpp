@@ -2,26 +2,29 @@
   ==============================================================================
 
     HostTests.cpp
-    SmartKeys — prueba de integración: carga los VST3 COMPILADOS como lo haría
+    SmartKeys — prueba de integración: carga el VST3 COMPILADO como lo haría
     un DAW y comprueba, bloque a bloque, lo que sale del plugin:
 
       1. Cada tecla sale por MIDI OUT como el ACORDE COMPLETO (lo que pinta el
-         Piano Roll del instrumento destino), en el canal MIDI elegido, y los
-         NoteOff llegan por el mismo canal aunque se cambie con la tecla pulsada.
+         Piano Roll del instrumento destino), siempre por el canal MIDI 1.
       2. Siempre a la vez: el piano interno suena (con su GAIN) y los acordes
-         completos salen por MIDI. Ya no existen OUTPUT MODE, A4 ni MICROTUNING,
-         y los proyectos guardados con la 1.3 se abren sin restos de lo quitado.
+         completos salen por MIDI. Ya no existen OUTPUT MODE, A4, MICROTUNING
+         ni MIDI CH, y los proyectos guardados con la 1.3 / 1.4 se abren sin
+         restos de lo quitado.
       3. STRUM: las notas del acorde entran escalonadas ASC/DESC, exactas a la
          muestra, y un NoteOff anticipado no deja notas colgadas.
       4. COMPLEX CHORDS: 5–7 notas por tecla y el mismo número de NoteOff.
       5. Voz por la entrada del DAW: una voz cantando La3 dispara el acorde La
          menor, se suelta al callar, y la voz cruda NUNCA sale.
-      6. Bloques de 0 a 512 muestras (FL Studio), cero asignaciones de memoria
-         en el processBlock real y concurrencia audio + estado.
-      7. SmartKeys FX: la voz de la pista (entrada principal) dispara acordes y
-         se reemplaza por el piano.
+      6. MIC VOICE sin sidechain: con la entrada del plugin en silencio digital
+         (FL Studio), el plugin lee él mismo el micrófono del sistema (en Linux,
+         el simulado de SystemMicInput; en macOS, CoreAudio de verdad), aunque
+         vaya a otra frecuencia de muestreo que el DAW. Si el DAW manda voz por
+         la entrada, manda la entrada.
+      7. Bloques de 0 a 512 muestras (FL Studio), cero asignaciones de memoria
+         en el processBlock real y concurrencia audio + estado + micrófono.
 
-    Uso:  SmartKeysHostTests <SmartKeys.vst3> [<SmartKeys FX.vst3>] [--stress <segundos>]
+    Uso:  SmartKeysHostTests <SmartKeys.vst3> [--stress <segundos>] [--system-mic-only]
 
   ==============================================================================
 */
@@ -414,6 +417,27 @@ public:
     // Deja que el piano termine de sonar
     void settle (int numBlocks = 250) { runBlocks (numBlocks); }
 
+    // Bloques a TIEMPO REAL (el micrófono del sistema entrega audio a su ritmo)
+    // dejando correr el hilo de mensajes: el Timer del plugin abre el micrófono.
+    BlockResult runRealtime (double seconds, double sineHz = 0.0, float amplitude = 0.0f)
+    {
+        BlockResult total;
+        const double blockMs = 1000.0 * blockSize / sampleRate;
+        double next = Time::getMillisecondCounterHiRes();
+        const double end = next + seconds * 1000.0;
+        while (Time::getMillisecondCounterHiRes() < end)
+        {
+            auto r = run ({}, sineHz, amplitude);
+            total.midi.insert (total.midi.end(), r.midi.begin(), r.midi.end());
+            total.outputRms = jmax (total.outputRms, r.outputRms);
+            next += blockMs;
+            const int wait = (int) (next - Time::getMillisecondCounterHiRes());
+            if (wait > 0)
+                MessageManager::getInstance()->runDispatchLoopUntil (wait);
+        }
+        return total;
+    }
+
 private:
     std::unique_ptr<AudioPluginInstance> plugin;
     AudioBuffer<float> buffer;
@@ -433,12 +457,11 @@ void testInstrument (const String& path)
     check (host.isInstrument(), "se registra como instrumento (Channel Rack / pista MIDI)");
     check (host.getNumInputs() >= 1, "tiene entrada de micrófono (sidechain)");
 
-    // Do mayor, SMART CHORDS, tríadas, canal 1
+    // Do mayor, SMART CHORDS, tríadas
     host.setChoice ("Key", 0);
     host.setChoice ("Scale", 0);
     host.setChoice ("Mode", 0);
     host.setChoice ("Chord Type", 0);
-    host.setChoice ("MIDI Out Channel", 0);
     host.setBool ("Mic Voice Controller", false);
     host.settle (4);
 
@@ -453,18 +476,18 @@ void testInstrument (const String& path)
         check (off.notesOff (1) == std::set<int> { 62, 65, 69 }, "al soltar la tecla salen los 3 NoteOff");
     }
 
-    std::cout << "\n-- 2. Canal MIDI de salida" << std::endl;
+    std::cout << "\n-- 2. Canal MIDI fijo: todo sale por el canal 1" << std::endl;
     {
-        host.setChoice ("MIDI Out Channel", 4);   // canal 5
-        auto r = host.run ({ MidiMessage::noteOn (1, 67, (uint8) 90) });   // G4 -> G mayor
-        std::cout << "     G4 -> " << describe (r.notesOn()) << " canales " << r.channelsUsed().size() << std::endl;
-        check (r.notesOn (5) == std::set<int> { 67, 71, 74 } && r.channelsUsed() == std::set<int> { 5 },
-               "con MIDI CH 5 el acorde G sale sólo por el canal 5");
-        host.setChoice ("MIDI Out Channel", 8);   // se cambia con la tecla pulsada
-        host.run();
-        auto off = host.run ({ MidiMessage::noteOff (1, 67) });
-        check (off.notesOff (5) == std::set<int> { 67, 71, 74 }, "los NoteOff salen por el canal 5 aunque se cambie a 9 con la tecla pulsada");
-        host.setChoice ("MIDI Out Channel", 0);
+        check (! host.hasParameter ("MIDI Out Channel"), "ya no existe el selector MIDI CH");
+        auto r = host.run ({ MidiMessage::noteOn (5, 67, (uint8) 90), MidiMessage::controllerEvent (5, 64, 127) });   // G4 por el canal 5
+        std::cout << "     G4 (entra por el canal 5) -> " << describe (r.notesOn()) << std::endl;
+        bool allOnOne = ! r.midi.empty();
+        for (auto& m : r.midi)
+            allOnOne = allOnOne && m.getChannel() == 1;
+        check (r.notesOn (1) == std::set<int> { 67, 71, 74 } && allOnOne,
+               "aunque la tecla llegue por otro canal, el acorde G y el pedal salen por el canal 1");
+        auto off = host.run ({ MidiMessage::noteOff (5, 67), MidiMessage::controllerEvent (5, 64, 0) });
+        check (off.notesOff (1) == std::set<int> { 67, 71, 74 }, "y sus NoteOff también");
         host.settle();
     }
 
@@ -473,9 +496,9 @@ void testInstrument (const String& path)
         check (! host.hasParameter ("Output Mode") && ! host.hasParameter ("Reference Pitch")
                  && ! host.hasParameter ("Scale Microtuning"),
                "OUTPUT MODE, A4 (Reference Pitch) y MICROTUNING ya no existen");
-        check (host.hasParameter ("Master Gain") && host.hasParameter ("MIDI Out Channel") && host.hasParameter ("Strum Speed")
+        check (host.hasParameter ("Master Gain") && host.hasParameter ("Strum Speed") && host.hasParameter ("Mic Voice Controller")
                  && host.hasParameter ("Strum Direction") && host.hasParameter ("Mic Gate"),
-               "GAIN, MIDI CH, STRUM SPEED, ASC/DESC y GATE siguen ahí");
+               "GAIN, MIC VOICE, GATE, STRUM SPEED y ASC/DESC siguen ahí");
 
         host.run();
         auto r2 = host.run ({ MidiMessage::noteOn (1, 69, (uint8) 100) });   // A4 -> Am
@@ -502,7 +525,7 @@ void testInstrument (const String& path)
         host.settle();
     }
 
-    std::cout << "\n-- 3b. Un proyecto guardado con la 1.3 se abre sin restos de lo quitado" << std::endl;
+    std::cout << "\n-- 3b. Un proyecto guardado con la 1.3 / 1.4 se abre sin restos de lo quitado" << std::endl;
     {
         auto old = host.getPluginStateXml();
         check (old != nullptr && old->hasTagName ("SmartKeysState"), "el estado del plugin se puede leer");
@@ -515,7 +538,8 @@ void testInstrument (const String& path)
             old->setAttribute ("virtualPort", 1);
             old->setAttribute ("captureSync", 1);
             old->setAttribute ("quantize", 3);
-            for (auto [id, value] : { std::pair<const char*, double> { "outputMode", 1.0 }, { "refPitch", 442.0 }, { "microTuning", 1.0 } })
+            for (auto [id, value] : { std::pair<const char*, double> { "outputMode", 1.0 }, { "refPitch", 442.0 },
+                                      { "microTuning", 1.0 }, { "midiOutCh", 4.0 } })
             {
                 auto* param = old->createNewChildElement ("PARAM");
                 param->setAttribute ("id", id);
@@ -536,13 +560,14 @@ void testInstrument (const String& path)
                 clean = clean && loaded != nullptr && ! loaded->hasAttribute (attr);
             if (loaded != nullptr)
                 for (auto* param : loaded->getChildWithTagNameIterator ("PARAM"))
-                    for (auto* gone : { "outputMode", "refPitch", "microTuning" })
+                    for (auto* gone : { "outputMode", "refPitch", "microTuning", "midiOutCh" })
                         clean = clean && param->getStringAttribute ("id") != gone;
-            check (clean, "se descartan OUTPUT MODE, A4, MICROTUNING, el puerto y la progresión");
+            check (clean, "se descartan OUTPUT MODE, A4, MICROTUNING, MIDI CH, el puerto y la progresión");
 
             auto r = host.run ({ MidiMessage::noteOn (1, 62, (uint8) 100) });   // D4 en Re mayor -> D mayor
             auto tail = host.runBlocks (4);
-            check (r.notesOn (1) == std::set<int> { 62, 66, 69 }, "la tónica guardada (Re) se respeta: D4 -> D mayor");
+            check (r.notesOn (1) == std::set<int> { 62, 66, 69 } && r.channelsUsed() == std::set<int> { 1 },
+                   "la tónica guardada (Re) se respeta: D4 -> D mayor, por el canal 1 aunque el proyecto tuviera CH 5");
             check (jmax (r.outputRms, tail.outputRms) > 1.0e-3f, "aunque el proyecto tenía MIDI OUT, el piano suena");
             host.run ({ MidiMessage::noteOff (1, 62) });
             host.setChoice ("Key", 0);
@@ -628,7 +653,7 @@ void testInstrument (const String& path)
         check (r.outputRms < 1.0e-4f, "con voz fuerte en la entrada y sin notas, la salida está en silencio (buffer.clear())");
     }
 
-    std::cout << "\n-- 6. Voz -> acorde por la entrada del DAW (vía A)" << std::endl;
+    std::cout << "\n-- 6. Voz -> acorde por la entrada del DAW (sidechain)" << std::endl;
     {
         host.setChoice ("Mic Gate", 0);     // umbral mínimo: no influye en la prueba
         host.setBool ("Mic Voice Controller", true);
@@ -836,6 +861,8 @@ void testConcurrency (const String& path, double seconds)
             host.setText ("Strum Speed", String ((int) (rng() % 200)));
             host.setChoice ("Strum Direction", (int) (rng() % 2));
             host.setText ("Master Gain", String (-(int) (rng() % 40)));
+            if (rng() % 9 == 0)
+                host.setBool ("Mic Voice Controller", rng() % 2 == 0);   // abre / cierra el micrófono del sistema
             if (Time::getMillisecondCounterHiRes() > endMs)
             {
                 stopTimer();
@@ -863,43 +890,86 @@ void testConcurrency (const String& path, double seconds)
 }
 
 //==============================================================================
-void testFx (const String& path)
+// MIC VOICE sin sidechain: la entrada del plugin llega en silencio digital
+// (Channel Rack de FL Studio) y el plugin lee él mismo el micrófono del sistema.
+void testSystemMic (const String& path)
 {
-    std::cout << "\n=== SmartKeys FX (efecto para la pista del micrófono) ===" << std::endl;
+    std::cout << "\n=== MIC VOICE sin sidechain: micrófono del sistema ===" << std::endl;
+
+   #if JUCE_LINUX
+    // Micrófono simulado: La3 (220 Hz) a 44.1 kHz, mientras el "DAW" va a 48 kHz
+    setenv ("SMARTKEYS_FAKE_MIC", "sine:220:44100:0.3", 1);
+   #endif
+
     Host host;
     if (! host.load (path)) { check (false, "cargar el plugin"); return; }
-
-    check (! host.isInstrument(), "se registra como efecto (se inserta en la pista del micrófono del Mixer)");
-    check (host.getNumInputs() >= 1, "recibe el audio de la pista como entrada principal");
 
     host.setChoice ("Key", 0);
     host.setChoice ("Scale", 0);
     host.setChoice ("Mode", 0);
-    host.setChoice ("MIDI Out Channel", 0);
+    host.setChoice ("Chord Type", 0);
     host.setChoice ("Mic Gate", 0);
-    host.setBool ("Mic Voice Controller", false);
-    host.settle (4);
-
-    auto silent = host.runBlocks (20, 220.0, 0.5f);
-    check (silent.outputRms < 1.0e-4f, "MIC VOICE apagado: la voz de la pista no pasa (sale silencio)");
-
     host.setBool ("Mic Voice Controller", true);
-    host.run();
-    auto sing = host.runBlocks (40, 220.0, 0.3f);
+
+    auto sing = host.runRealtime (2.0);   // entrada del plugin: silencio digital
     const auto on = sing.notesOn (1);
-    std::cout << "     voz La3 (220 Hz) -> " << describe (on) << "  RMS salida " << sing.outputRms << std::endl;
-    check (on.size() == 3 && pitchClasses (on) == std::set<int> { 9, 0, 4 }, "la voz de la pista dispara La menor por MIDI OUT");
-    check (sing.outputRms > 1.0e-3f, "y la pista suena con el piano de SmartKeys en lugar de la voz");
+    std::cout << "     entrada del plugin en silencio, micrófono del sistema con La3 -> " << describe (on) << std::endl;
+    check (on.size() == 3 && pitchClasses (on) == std::set<int> { 9, 0, 4 },
+           "MIC VOICE lee el micrófono del sistema sin ruteo: La3 -> La menor completo por MIDI");
+    check (sing.outputRms > 1.0e-3f, "y el piano interno lo toca");
+    check (sing.channelsUsed() == std::set<int> { 1 }, "por el canal 1");
 
-    auto quiet = host.runBlocks (30);
-    check (! on.empty() && quiet.notesOff (1) == on, "al callar se sueltan las notas");
+    // Si el DAW manda voz por la entrada del plugin, manda esa: Do4 -> Do mayor
+    auto daw = host.runRealtime (1.2, 261.63, 0.3);
+    const auto onDaw = daw.notesOn (1);
+    std::cout << "     el DAW manda Do4 por la entrada -> " << describe (onDaw) << std::endl;
+    check (pitchClasses (onDaw) == std::set<int> { 0, 4, 7 } && daw.notesOff (1) == on,
+           "con audio en la entrada del plugin, se usa esa voz (se suelta La menor, suena Do mayor)");
 
+    // La entrada vuelve al silencio: el micrófono del sistema vuelve solo
+    auto back = host.runRealtime (5.0);
+    const auto onBack = back.notesOn (1);
+    std::cout << "     la entrada vuelve al silencio -> " << describe (onBack) << std::endl;
+    check (pitchClasses (onBack) == std::set<int> { 9, 0, 4 }, "al callar la entrada, vuelve a sonar la voz del micrófono del sistema");
+
+    // MIC VOICE apagado: se sueltan las notas y nada más se dispara
     host.setBool ("Mic Voice Controller", false);
-    auto key = host.run ({ MidiMessage::noteOn (1, 60, (uint8) 100) });
-    check (key.notesOn (1) == std::set<int> { 60, 64, 67 }, "también acepta notas MIDI: C4 -> C mayor completo");
-    host.run ({ MidiMessage::noteOff (1, 60) });
+    auto offR = host.runRealtime (1.0);
+    check (offR.notesOff (1) == onBack && offR.countNoteOn() == 0, "MIC VOICE OFF: se sueltan las notas y la voz ya no dispara");
+
+   #if JUCE_LINUX
+    // Voz intermitente (1 s cantando, 1 s en silencio): dispara y suelta
+    setenv ("SMARTKEYS_FAKE_MIC", "sine:220:44100:0.3:2.0:0.5", 1);
+    host.setBool ("Mic Voice Controller", true);
+    auto phrase = host.runRealtime (4.5);
+    std::cout << "     voz intermitente: " << phrase.countNoteOn() << " NoteOn, " << phrase.countNoteOff() << " NoteOff" << std::endl;
+    check (phrase.countNoteOn() >= 6 && phrase.countNoteOff() >= 3, "cada frase dispara el acorde y cada silencio lo suelta");
+    host.setBool ("Mic Voice Controller", false);
+    host.runRealtime (0.5);
+    setenv ("SMARTKEYS_FAKE_MIC", "sine:220:44100:0.3", 1);
+   #endif
+
+   #if SK_COUNT_ALLOCATIONS
+    // El processBlock real con el micrófono del sistema activo: 0 asignaciones
+    // (frases de 0.5 s: dispara y suelta acordes mientras se cuenta)
+    setenv ("SMARTKEYS_FAKE_MIC", "sine:220:44100:0.3:1.0:0.5", 1);
+    host.setBool ("Mic Voice Controller", true);
+    host.runRealtime (1.5);
+    gProcessAllocations = 0;
+    auto counted = host.runRealtime (2.5);
+    const long allocs = gProcessAllocations.load();
+    std::cout << "     2.5 s leyendo el micrófono del sistema: " << counted.countNoteOn() << " NoteOn, "
+              << allocs << " asignaciones en el hilo de audio" << std::endl;
+    check (allocs == 0 && counted.countNoteOn() >= 3, "leer el micrófono del sistema no asigna memoria en processBlock");
+    host.setBool ("Mic Voice Controller", false);
+    host.runRealtime (0.5);
+   #endif
 
     host.unload();
+
+   #if JUCE_LINUX
+    unsetenv ("SMARTKEYS_FAKE_MIC");
+   #endif
 }
 } // namespace
 
@@ -910,28 +980,41 @@ int main (int argc, char* argv[])
 
     if (argc < 2)
     {
-        std::cout << "Uso: SmartKeysHostTests <SmartKeys.vst3> [<SmartKeys FX.vst3>]" << std::endl;
+        std::cout << "Uso: SmartKeysHostTests <SmartKeys.vst3> [--stress <segundos>] [--system-mic-only]" << std::endl;
         return 2;
     }
 
     // Rutas absolutas (juce::File no admite rutas relativas)
     const auto cwd = File::getCurrentWorkingDirectory();
     double stressSeconds = 4.0;
+    bool systemMicOnly = false;
     StringArray paths;
     for (int i = 1; i < argc; ++i)
     {
         const auto arg = String::fromUTF8 (argv[i]);
         if (arg == "--stress" && i + 1 < argc)
             stressSeconds = String::fromUTF8 (argv[++i]).getDoubleValue();
+        else if (arg == "--system-mic-only")
+            systemMicOnly = true;
         else
             paths.add (cwd.getChildFile (arg).getFullPathName());
     }
 
-    testInstrument (paths[0]);
-    if (paths.size() > 1)
-        testFx (paths[1]);
-    if (stressSeconds > 0.0)
+    if (! systemMicOnly)
+        testInstrument (paths[0]);
+
+    testSystemMic (paths[0]);
+
+    if (! systemMicOnly && stressSeconds > 0.0)
+    {
+       #if JUCE_LINUX
+        setenv ("SMARTKEYS_FAKE_MIC", "sine:220:44100:0.3", 1);   // el micrófono también se abre y cierra
+       #endif
         testConcurrency (paths[0], stressSeconds);
+       #if JUCE_LINUX
+        unsetenv ("SMARTKEYS_FAKE_MIC");
+       #endif
+    }
 
     std::cout << "\n" << numChecks << " comprobaciones, " << numFailures << " fallos" << std::endl;
     return numFailures == 0 ? 0 : 1;

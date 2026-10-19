@@ -7,21 +7,20 @@
 ;    3) "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Installer\Installer_Windows.iss
 ;       (o simplemente ejecutar Installer\build_windows.bat)
 ;
-;  Resultado: Installer\Output\SmartKeys-1.4.0-Windows-Setup.exe
+;  Resultado: Installer\Output\SmartKeys-1.5.0-Windows-Setup.exe
 ;  - VST3       -> C:\Program Files\Common Files\VST3\SmartKeys.vst3         ({commoncf64}\VST3)
-;                  C:\Program Files\Common Files\VST3\SmartKeys FX.vst3      (efecto para la pista del micrófono)
 ;  - Standalone -> C:\Program Files\SmartKeys\SmartKeys.exe                  (opcional)
 ;
 ;  Antes de copiar nada, [InstallDelete] borra cualquier versión anterior de
-;  SmartKeys (carpeta global y carpeta VST3 del usuario) y su ficha en la base
-;  de datos de plugins de FL Studio, para que el DAW cargue siempre el binario nuevo.
+;  SmartKeys y la vieja SmartKeys FX de la 1.1–1.4 (carpeta global y carpeta
+;  VST3 del usuario) y sus fichas en la base de datos de plugins de FL Studio,
+;  para que el DAW cargue siempre el binario nuevo.
 ; ==============================================================================
 
 #define AppName      "SmartKeys"
-#define AppVersion   "1.4.0"
-#define AppPublisher "JeanPaul Audio"
+#define AppVersion   "1.5.0"
+#define AppPublisher "MIWN"
 #define BuildDir     "..\build\SmartKeys_artefacts\Release"
-#define BuildDirFx   "..\build\SmartKeysFX_artefacts\Release"
 #define FlDatabase   "{userdocs}\Image-Line\FL Studio\Presets\Plugin database\Installed"
 
 [Setup]
@@ -55,11 +54,11 @@ Name: "full";   Description: "Instalación completa (VST3 + Standalone)"
 Name: "custom"; Description: "Personalizada"; Flags: iscustom
 
 [Components]
-Name: "vst3";       Description: "Plugins VST3: SmartKeys (instrumento) + SmartKeys FX (efecto para el micrófono)"; Types: full custom; Flags: fixed
+Name: "vst3";       Description: "Plugin VST3: SmartKeys (instrumento)"; Types: full custom; Flags: fixed
 Name: "standalone"; Description: "Aplicación Standalone (usar sin DAW)";                                               Types: full
 
 [InstallDelete]
-; 1) Versiones anteriores en la carpeta VST3 global
+; 1) Versiones anteriores en la carpeta VST3 global (y SmartKeys FX, que ya no existe)
 Type: filesandordirs; Name: "{commoncf64}\VST3\SmartKeys.vst3"
 Type: filesandordirs; Name: "{commoncf64}\VST3\SmartKeys FX.vst3"
 ; 2) Copias de desarrollo en la carpeta VST3 del usuario (las que deja cmake -DSMARTKEYS_COPY_AFTER_BUILD=ON)
@@ -76,8 +75,6 @@ Type: files; Name: "{#FlDatabase}\Effects\VST3\SmartKeys FX.nfo"
 [Files]
 ; Bundles VST3 completos (carpeta .vst3 con Contents\x86_64-win\*.vst3)
 Source: "{#BuildDir}\VST3\SmartKeys.vst3\*"; DestDir: "{commoncf64}\VST3\SmartKeys.vst3"; \
-    Components: vst3; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#BuildDirFx}\VST3\SmartKeys FX.vst3\*"; DestDir: "{commoncf64}\VST3\SmartKeys FX.vst3"; \
     Components: vst3; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Standalone
@@ -100,4 +97,4 @@ Filename: "{app}\{#AppName}.exe"; Description: "Abrir SmartKeys Standalone"; \
     Components: standalone; Flags: nowait postinstall skipifsilent unchecked
 
 [Messages]
-spanish.FinishedLabel=SmartKeys {#AppVersion} se instaló correctamente (la versión anterior se borró antes de instalar).%n%nLos VST3 están en C:\Program Files\Common Files\VST3. Vuelve a escanear plugins en tu DAW (FL Studio: Options > Manage plugins > Find installed plugins; Ableton: Preferences > Plug-Ins > Rescan).
+spanish.FinishedLabel=SmartKeys {#AppVersion} de MIWN se instaló correctamente (la versión anterior y SmartKeys FX se borraron antes de instalar).%n%nLos VST3 están en C:\Program Files\Common Files\VST3. Vuelve a escanear plugins en tu DAW (FL Studio: Options > Manage plugins > Find installed plugins; Ableton: Preferences > Plug-Ins > Rescan).

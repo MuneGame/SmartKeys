@@ -14,6 +14,10 @@
 #include "FlKeysPianoSynth.h"
 #include "MidiOutputRouter.h"
 #include "StrumScheduler.h"
+#include "MicRingBuffer.h"
+#include "SystemMicInput.h"
+#include <thread>
+#include <chrono>
 
 #if defined (__GNUC__) && ! defined (__clang__)
  #pragma GCC diagnostic ignored "-Wmismatched-new-delete"
@@ -955,6 +959,250 @@ static void testStrumScheduler()
     CHECK (p.getNumPending() == 0, "ALL NOTES OFF vacía la cola del STRUM");
 }
 //==============================================================================
+// Las pruebas del búfer escriben números enteros: la comparación es exacta
+static bool sameSample (float a, float b) { return std::abs (a - b) < 0.25f; }
+
+static void testMicRingBuffer()
+{
+    std::printf ("[17] Búfer circular del micrófono (lock-free, memoria fija)\n");
+
+    // 1) Canal 1 de un bloque estéreo intercalado
+    {
+        MicRingBuffer<1024> ring;
+        std::vector<float> stereo (600);
+        for (int i = 0; i < 300; ++i)
+        {
+            stereo[(size_t) (2 * i)] = (float) i;
+            stereo[(size_t) (2 * i + 1)] = -1000.0f - (float) i;
+        }
+        std::vector<float> out (1024);
+        CHECK (ring.write (stereo.data(), 300, 2) == 300, "escribe 300 tramas estéreo");
+        const int n = ring.read (out.data(), 1024, 0);
+        CHECK (n == 300 && sameSample (out[0], 0.0f) && sameSample (out[150], 150.0f) && sameSample (out[299], 299.0f),
+               "lee sólo el canal 1 (las muestras del canal 2 no aparecen)");
+    }
+
+    // 2) Miles de vueltas con tamaños irregulares: nada se pierde ni se repite
+    //    (como mucho 3 x 600 pendientes: nunca se llena)
+    {
+        MicRingBuffer<4096> ring;
+        std::vector<float> in (700), out (1024);
+        float writeValue = 0.0f, expected = 0.0f;
+        bool ok = true;
+        AllocationGuard guard;
+        for (int round = 0; round < 20000; ++round)
+        {
+            const int k = 1 + (round * 37) % 600;
+            for (int i = 0; i < k; ++i)
+                in[(size_t) i] = writeValue++;
+            ring.write (in.data(), k, 1);
+            const int got = ring.read (out.data(), 1 + (round * 53) % 1024, 0);
+            for (int i = 0; i < got; ++i)
+                ok = ok && sameSample (out[(size_t) i], expected++);
+            if (round % 3 == 0)
+            {
+                const int rest = ring.read (out.data(), 1024, 0);
+                for (int i = 0; i < rest; ++i)
+                    ok = ok && sameSample (out[(size_t) i], expected++);
+            }
+        }
+        CHECK (ok, "20000 escrituras y lecturas de tamaños irregulares: secuencia exacta");
+        CHECK (guard.count() == 0, "escribir y leer nunca asigna memoria");
+    }
+
+    // 3) Desbordamiento (el DAW dejó de pedir audio): se tira lo viejo, sigue lo nuevo
+    {
+        MicRingBuffer<1024> ring;
+        std::vector<float> big (1500), out (1024);
+        for (int i = 0; i < 1500; ++i) big[(size_t) i] = (float) i;
+        CHECK (ring.write (big.data(), 1500, 1) == 1024, "sólo caben 1024 muestras");
+        CHECK (ring.read (out.data(), 1024, 0) == 0, "tras desbordarse, el lector descarta el audio viejo");
+        for (int i = 0; i < 100; ++i) big[(size_t) i] = 5000.0f + (float) i;
+        ring.write (big.data(), 100, 1);
+        const int n = ring.read (out.data(), 1024, 0);
+        CHECK (n == 100 && sameSample (out[0], 5000.0f) && sameSample (out[99], 5099.0f), "y sigue con el audio nuevo, sin saltos");
+    }
+
+    // 4) Latencia acotada: con mucho pendiente sólo se lee lo más reciente
+    {
+        MicRingBuffer<1024> ring;
+        std::vector<float> in (900), out (1024);
+        for (int i = 0; i < 900; ++i) in[(size_t) i] = (float) i;
+        ring.write (in.data(), 900, 1);
+        const int n = ring.read (out.data(), 1024, 256);
+        CHECK (n == 256 && sameSample (out[0], 644.0f) && sameSample (out[255], 899.0f), "900 pendientes con límite 256: las 256 más recientes");
+        CHECK (ring.getNumReady() == 0, "y no queda nada atrasado");
+    }
+
+    // 5) Dos hilos de verdad: productor a ráfagas (como CoreAudio) y consumidor a otro ritmo
+    {
+        MicRingBuffer<16384> ring;
+        std::atomic<bool> stop { false };
+        std::atomic<long> produced { 0 };
+        std::thread producer ([&]
+        {
+            std::vector<float> chunk (2 * 512);
+            float value = 0.0f;
+            int round = 0;
+            while (! stop.load())
+            {
+                const int frames = 64 + (round++ * 97) % 449;
+                for (int i = 0; i < frames; ++i)
+                {
+                    chunk[(size_t) (2 * i)] = value++;
+                    chunk[(size_t) (2 * i + 1)] = -1.0f;
+                }
+                produced += ring.write (chunk.data(), frames, 2);
+                std::this_thread::sleep_for (std::chrono::microseconds (300));
+            }
+        });
+
+        std::vector<float> out (16384);
+        float expected = 0.0f;
+        long consumed = 0;
+        bool ok = true;
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds (1500);
+        while (std::chrono::steady_clock::now() < end)
+        {
+            const int n = ring.read (out.data(), 16384, 0);
+            for (int i = 0; i < n; ++i)
+                ok = ok && sameSample (out[(size_t) i], expected++);
+            consumed += n;
+            std::this_thread::sleep_for (std::chrono::milliseconds (2));
+        }
+        stop = true;
+        producer.join();
+        consumed += ring.read (out.data(), 16384, 0);
+        std::printf ("    2 hilos durante 1.5 s: %ld muestras producidas, %ld leídas\n", produced.load(), consumed);
+        CHECK (ok && consumed > 10000, "productor y consumidor simultáneos: secuencia exacta, sin candados");
+    }
+}
+
+//==============================================================================
+// Micrófono del sistema: el control (permiso, dispositivo, reaperturas) con el
+// backend SIMULADO de Linux, que entrega audio a tiempo real desde su hilo.
+#if JUCE_LINUX
+static void setEnv (const char* name, const char* value)
+{
+    if (value == nullptr) unsetenv (name);
+    else                  setenv (name, value, 1);
+}
+#endif
+
+static void testSystemMicController()
+{
+   #if JUCE_LINUX
+    std::printf ("[18] Micrófono del sistema: apertura, permisos y vigilancia (simulado)\n");
+
+    setEnv ("SMARTKEYS_FAKE_MIC_PERMISSION", nullptr);
+    setEnv ("SMARTKEYS_FAKE_MIC", nullptr);
+    {
+        SystemMicInput mic;
+        mic.update (true);
+        CHECK (mic.getState() == MicDeviceState::Unsupported && ! mic.isRunning(),
+               "sin lectura directa disponible: no se abre nada");
+    }
+
+    setEnv ("SMARTKEYS_FAKE_MIC", "sine:220:44100:0.3");
+    SystemMicInput mic;
+
+    mic.update (false);
+    CHECK (mic.getState() == MicDeviceState::Off && ! mic.isRunning(), "MIC VOICE apagado: el micrófono queda cerrado");
+
+    mic.update (true);
+    CHECK (mic.getState() == MicDeviceState::Running && mic.isRunning() && mic.getGeneration() == 1,
+           "MIC VOICE encendido: se abre la entrada");
+    CHECK (std::abs (mic.getSampleRate() - 44100.0) < 0.5, "a la frecuencia del propio dispositivo (44.1 kHz), sin cambiarla");
+
+    // Leer como processBlock: el detector a la frecuencia del micrófono
+    {
+        VoicePitchTracker tracker;
+        ScaleChordEngine engine;
+        tracker.prepare (mic.getSampleRate());
+        tracker.setGateThresholdDb (-60.0f);
+        std::vector<float> scratch ((size_t) SystemMicInput::kRingCapacity);
+        int total = 0, firstNote = -1;
+        for (int i = 0; i < 70; ++i)   // ~0.7 s
+        {
+            std::this_thread::sleep_for (std::chrono::milliseconds (10));
+            const int n = mic.pull (scratch.data(), (int) scratch.size(), 16000);
+            total += n;
+            const float* ch[1] = { scratch.data() };
+            const int ev = tracker.process (ch, 1, n, engine);
+            for (int e = 0; e < ev; ++e)
+                if (tracker.getEvent (e).isNoteOn && firstNote < 0)
+                    firstNote = tracker.getEvent (e).note;
+        }
+        std::printf ("    0.7 s de micrófono simulado: %d muestras, nota %d\n", total, firstNote);
+        CHECK (total > 20000 && total < 40000, "llegan las muestras a tiempo real (~44 100 por segundo)");
+        CHECK (firstNote == 57, "La3 (220 Hz, canal 1) se detecta; el tono de 330 Hz del canal 2 se ignora");
+    }
+
+    mic.update (false);
+    CHECK (mic.getState() == MicDeviceState::Off && ! mic.isRunning(), "al apagar MIC VOICE se cierra");
+
+    // Cambio de entrada en macOS (otra interfaz / otra frecuencia): se reabre sola
+    mic.update (true);
+    const auto generationBefore = mic.getGeneration();
+    setEnv ("SMARTKEYS_FAKE_MIC", "sine:220:48000:0.3");
+    mic.update (true);
+    CHECK (mic.getGeneration() == generationBefore + 1 && std::abs (mic.getSampleRate() - 48000.0) < 0.5,
+           "si cambia la entrada activa, se reabre con su frecuencia (48 kHz)");
+
+    // El dispositivo deja de entregar audio: se reabre tras ~2 s
+    setEnv ("SMARTKEYS_FAKE_MIC", "stall:48000");
+    mic.update (true);
+    const auto stalledGeneration = mic.getGeneration();
+    for (int i = 0; i <= SystemMicInput::kStallTicks; ++i)
+        mic.update (true);
+    CHECK (mic.getGeneration() > stalledGeneration, "una entrada que deja de entregar audio se vuelve a abrir");
+
+    // No se puede abrir: aviso y reintento espaciado (sin bucles rápidos)
+    setEnv ("SMARTKEYS_FAKE_MIC", "fail");
+    mic.update (true);
+    CHECK (mic.getState() == MicDeviceState::Error && ! mic.isRunning(), "si no se puede abrir: estado de error, nada abierto");
+
+    setEnv ("SMARTKEYS_FAKE_MIC", "bluetooth");
+    mic.update (true);
+    CHECK (mic.getState() == MicDeviceState::BluetoothOnly && ! mic.isRunning(),
+           "una entrada Bluetooth (AirPods) no se abre");
+
+    setEnv ("SMARTKEYS_FAKE_MIC", "none");
+    mic.update (true);
+    CHECK (mic.getState() == MicDeviceState::NoDevice, "sin ninguna entrada de audio: aviso");
+
+    // Permisos de macOS
+    setEnv ("SMARTKEYS_FAKE_MIC", "sine:220:48000:0.3");
+    setEnv ("SMARTKEYS_FAKE_MIC_PERMISSION", "denied");
+    mic.update (true);
+    CHECK (mic.getState() == MicDeviceState::PermissionDenied && ! mic.isRunning(),
+           "permiso denegado: no se abre y se avisa");
+
+    setEnv ("SMARTKEYS_FAKE_MIC_PERMISSION", "nohost");
+    mic.update (true);
+    CHECK (mic.getState() == MicDeviceState::HostNotAllowed && ! mic.isRunning(),
+           "programa sin NSMicrophoneUsageDescription: el micrófono no se toca");
+
+    {
+        setEnv ("SMARTKEYS_FAKE_MIC_PERMISSION", "pending");
+        SystemMicInput fresh;
+        fresh.update (true);
+        CHECK (fresh.getState() == MicDeviceState::WaitingPermission && ! fresh.isRunning(),
+               "primera vez: se muestra el aviso de macOS y se espera");
+        std::this_thread::sleep_for (std::chrono::milliseconds (1150));
+        fresh.update (true);
+        CHECK (fresh.getState() == MicDeviceState::Running && fresh.isRunning(),
+               "al permitirlo, el micrófono se abre solo");
+    }
+
+    setEnv ("SMARTKEYS_FAKE_MIC_PERMISSION", nullptr);
+    mic.shutdown();
+    CHECK (! mic.isRunning() && mic.getState() == MicDeviceState::Off, "shutdown() lo cierra todo");
+    setEnv ("SMARTKEYS_FAKE_MIC", nullptr);
+   #endif
+}
+
+//==============================================================================
 static void testRealtimeAllocations()
 {
     std::printf ("[10] Camino de audio sin asignaciones de memoria\n");
@@ -1046,6 +1294,8 @@ int main()
     testComplexPolyphonyAndLevel();
     testStrumScheduler();
     testRealtimeAllocations();
+    testMicRingBuffer();
+    testSystemMicController();
 
     std::printf ("\n%d comprobaciones, %d fallos\n", gChecks, gFailures);
     return gFailures == 0 ? 0 : 1;
