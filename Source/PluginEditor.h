@@ -166,6 +166,28 @@ private:
 };
 
 //==============================================================================
+// Estado del teclado MIDI virtual "SmartKeys Chords" (esquina superior derecha)
+class ChordPortStatus : public juce::Component,
+                        public juce::SettableTooltipClient
+{
+public:
+    enum class State { Hidden, Off, Waiting, Active, Unavailable, Looping };
+
+    ChordPortStatus();
+    void paint (juce::Graphics&) override;
+    void mouseEnter (const juce::MouseEvent&) override  { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override   { repaint(); }
+    void mouseUp (const juce::MouseEvent&) override;
+    void setState (State newState, const juce::String& deviceName);
+
+    std::function<void()> onClick;   // encender / apagar el teclado
+
+private:
+    State state = State::Hidden;
+    juce::String name;
+};
+
+//==============================================================================
 // Pantalla LED del acorde / nota
 class ChordDisplay : public juce::Component
 {
@@ -229,6 +251,7 @@ private:
     // Fila superior: modo y volumen (la salida MIDI va siempre por el canal 1)
     smartkeys::ui::ChoiceButtons modeSwitch;
     juce::Slider gainSlider;
+    smartkeys::ui::ChordPortStatus portStatus;        // "MIDI ● SmartKeys Chords"
 
     // Tira MIC: controlador de voz, medidor, gate y "Mic: A3 -> Acorde: Am"
     juce::TextButton micButton;

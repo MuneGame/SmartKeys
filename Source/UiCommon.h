@@ -37,6 +37,10 @@ juce::Font makeFont (float height, bool bold = true);
 // Rectángulo redondeado con brillo rosa (selección activa)
 void drawGlowBox (juce::Graphics& g, juce::Rectangle<float> r, float corner, juce::Colour fill, bool glow);
 
+// Logotipo oficial de MIWN (vectorial, juce::Path): una onda armónica que traza la
+// "M" sobre las barras de nivel de una estación de trabajo. Se ajusta a 'area' (cuadrada).
+void drawMiwnLogo (juce::Graphics& g, juce::Rectangle<float> area);
+
 // Propiedad de componente para fijar el tamaño de letra de un botón concreto
 inline const juce::Identifier fontSizeProperty { "skFontSize" };
 
