@@ -1,56 +1,47 @@
 # SmartKeys — Piano inteligente, generador de acordes y controlador vocal (VST3 / AU / Standalone)
 
+**De MIWN.** Un único plugin de instrumento (JUCE 8, C++17) para FL Studio, Ableton Live y cualquier DAW con VST3 o Audio Unit, y también como app Standalone.
+
 ![SmartKeys](docs/screenshot.png)
 
-SmartKeys (JUCE 8, C++17) se instala en dos versiones que salen del mismo código:
-
-| Plugin | Tipo | Dónde se carga | Para qué |
-|---|---|---|---|
-| **SmartKeys** | Instrumento (VST3 · AU · app Standalone) | Channel Rack de FL Studio, pista MIDI de Ableton | Tocar acordes con el teclado, el Piano Roll o la voz |
-| **SmartKeys FX** | Efecto (VST3 · AU) | La pista del **micrófono** en el Mixer de FL Studio (o una pista de audio) | Convertir la voz de esa pista en acordes sin ningún ruteo |
-
-Las dos hacen lo mismo:
-
-- **Cuantizan** cualquier nota (teclado MIDI, teclado de la PC, Piano Roll o tu voz) a la escala elegida: es imposible tocar una nota fuera de escala.
+- **Cuantiza** cualquier nota (teclado MIDI, teclado de la PC, Piano Roll o tu voz) a la escala elegida: es imposible tocar una nota fuera de escala.
 - **SMART CHORDS**: cada tecla dispara el acorde diatónico completo de ese grado (tríada, tríada + octava o cuatriada con 7ª). En Fa Mayor: Do → C Maj, Re → Dm, Mi → E dim.
 - **COMPLEX CHORDS**: cada tecla dispara un acorde de 5 a 7 notas a dos manos (R&B / Neo-Soul), con tres variaciones y velocidades balanceadas por voz.
-- **Piano + MIDI siempre a la vez**: el piano interno suena (su volumen se ajusta con `GAIN`) y cada tecla sale además como el **acorde completo** por la salida MIDI (canal 1–16) hacia cualquier otro plugin.
+- **Piano + MIDI siempre a la vez**: el piano interno suena (su volumen se ajusta con `GAIN`) y cada tecla sale además como el **acorde completo** por la salida MIDI (canal 1) hacia cualquier otro plugin.
 - **STRUM SPEED**: las notas del acorde entran escalonadas, de grave a aguda (`ASC ▲`) o al revés (`DESC ▼`), con una perilla de 0 a 200 ms.
-- **Voz → acordes en tiempo real**: SmartKeys FX en la pista del micrófono (o la entrada sidechain del instrumento) convierte tu voz en acordes. La voz cruda nunca sale por el plugin.
+- **Voz → notas y acordes en tiempo real (`MIC VOICE`)**: tarareas y SmartKeys corrige tu voz a la escala, dispara la nota o el acorde del modo elegido, lo toca con su piano, lo ilumina en el teclado y lo manda por MIDI. En macOS lee **directamente el micrófono**, sin sidechain ni ruteos. La voz cruda nunca sale por el plugin.
 - **43 escalas**: básicas, 21 occidentales, 7 maqam árabes y 12 ragas indias (Hindustani y Carnatic).
 
 ---
 
-## Novedades de la versión 1.4.0
+## Novedades de la versión 1.5.0
 
-**Se corrigió el cierre de FL Studio.** FL se cerraba al **cerrar la ventana de SmartKeys** (`EAccessViolation` en `~SmartKeysAudioProcessorEditor` → `Slider::removeListener`). La perilla STRUM SPEED se destruía antes que su enlace con el parámetro, y el enlace la tocaba ya destruida. Escribir en memoria liberada así es lo que en la 1.2 dañaba el montón de FL (`nanov2_guard_corruption_detected`). El fallo existía desde la 1.2, cuando llegó el STRUM. Más detalles en [Por qué se cerraba FL Studio](#por-qué-se-cerraba-fl-studio-12--13).
+**`MIC VOICE` funciona en el plugin normal, sin sidechain.** En el Channel Rack de FL Studio un instrumento no recibe el micrófono a menos que se haga un ruteo de sidechain. Ahora, si la entrada del plugin llega en silencio, SmartKeys abre él mismo la **entrada de audio activa de macOS** (canal 1) y escucha tu voz en cuanto pulsas `MIC VOICE: ON`. Si el DAW sí le manda audio por su entrada (sidechain), usa ese. Ver [Controlador vocal](#controlador-vocal-mic-voice).
 
-**Versión más ligera y simple.** Se quitaron siete cosas, de la interfaz y del motor:
+**Marca MIWN.** Debajo del título dice `FROM MIWN`, y el plugin está registrado con el fabricante **MIWN** (`COMPANY_NAME "MIWN"`, `Copyright (c) 2026 MIWN`, `com.miwn.smartkeys`): FL Studio y Ableton lo listan bajo MIWN. Los identificadores VST3 y AU no cambian, así que los proyectos guardados con versiones anteriores siguen encontrando el plugin.
+
+**Más simple:**
 
 | Quitado | Ahora |
 |---|---|
-| `OUTPUT MODE` (`PIANO + MIDI` / `MIDI OUT`) | Siempre suena el piano y siempre sale el MIDI. Para bajar el piano, `GAIN` |
-| `A4` · `440` · `442` | Afinación fija en A4 = 440 Hz |
-| `MICROTUNING` | El piano suena en 12-TET, como el MIDI |
-| `ALL NOTES OFF` | Sigue funcionando el *All Notes Off* (CC 120/123) que manda el DAW al detenerse |
-| `MIDI PORT` (puerto virtual *Chord Controller*) | Para tocar otro plugin, la salida MIDI del wrapper (*Output port*) |
-| Pestaña `PROGRESIÓN`, captura y paleta | Sólo la vista `KEY · SCALE`, sin pestañas |
-| `DRAG CHORDS TO PIANO ROLL` y los `.mid` | El STRUM ocupa ese espacio |
+| Selector `MIDI CH 1–16` | Los acordes salen siempre por el **canal MIDI 1** |
+| Texto `Sin señal: usa el sidechain o SmartKeys FX` | En su lugar, la nota y el acorde que dispara tu voz en vivo: `Mic: A3 -> Acorde: Am` |
+| **SmartKeys FX** (versión de efecto) | Un único plugin de instrumento. Los instaladores borran la SmartKeys FX vieja |
 
-Los proyectos guardados con versiones anteriores se abren sin problema: lo que ya no existe se descarta al cargarlos.
+Los proyectos guardados con versiones anteriores se abren sin problema: lo que ya no existe se descarta al cargarlos (un proyecto con `MIDI CH 5` sale ahora por el canal 1).
 
-La 1.3.0 quitó el micrófono `DEVICE`, dejó el `processBlock` sin asignaciones de memoria y trajo el STRUM de 0 a 200 ms. La 1.2.0, la salida MIDI siempre activa y la ventana redimensionable. La 1.1.0, la limpieza automática de versiones anteriores al instalar, SmartKeys FX y el selector de canal MIDI.
+La 1.4.0 corrigió el cierre de FL Studio al cerrar la ventana de SmartKeys ([por qué se cerraba](#por-qué-se-cerraba-fl-studio-12--13)) y quitó `OUTPUT MODE`, `A4`, `MICROTUNING`, `ALL NOTES OFF`, `MIDI PORT`, la pestaña `PROGRESIÓN` y `DRAG CHORDS`. La 1.3.0 dejó el `processBlock` sin asignaciones de memoria y trajo el STRUM de 0 a 200 ms. La 1.2.0, la salida MIDI siempre activa y la ventana redimensionable. La 1.1.0, la limpieza automática de versiones anteriores al instalar.
 
 ---
 
 ## Descargar los instaladores (sin compilar nada)
 
-GitHub compila y prueba SmartKeys en cada cambio y publica los instaladores en la página **Releases** de este repositorio (**SmartKeys 1.4.0**):
+GitHub compila y prueba SmartKeys en cada cambio y publica los instaladores en la página **Releases** de este repositorio (**SmartKeys 1.5.0**):
 
-- **Mac:** `SmartKeys-1.4.0-macOS.pkg`. Funciona en Mac con chip Apple e Intel. Instala SmartKeys (VST3, AU y app) y SmartKeys FX (VST3 y AU).
-- **Windows:** `SmartKeys-1.4.0-Windows-Setup.exe`. Instala SmartKeys (VST3 y app) y SmartKeys FX (VST3).
+- **Mac:** `SmartKeys-1.5.0-macOS.pkg`. Funciona en Mac con chip Apple e Intel. Instala SmartKeys (VST3, AU y app).
+- **Windows:** `SmartKeys-1.5.0-Windows-Setup.exe`. Instala SmartKeys (VST3 y app).
 
-**Los dos instaladores eliminan automáticamente la versión anterior** antes de copiar la nueva. No hace falta borrar nada a mano. El registro de lo que se borró en Mac queda en `/tmp/smartkeys-install.log`.
+**Los dos instaladores eliminan automáticamente la versión anterior** (y la vieja SmartKeys FX) antes de copiar la nueva. No hace falta borrar nada a mano. El registro de lo que se borró en Mac queda en `/tmp/smartkeys-install.log`.
 
 En Mac, el `.pkg` no está firmado con un certificado de Apple. La primera vez, macOS dirá que no puede verificar al desarrollador. Para abrirlo, ve a **Ajustes del Sistema → Privacidad y seguridad → "Abrir igualmente"** y vuelve a abrir el `.pkg`. Después, en FL Studio: **Options → Manage plugins → Find installed plugins**.
 
@@ -65,8 +56,8 @@ bash Installer/install_mac.sh
 ```
 
 1. Comprueba las Command Line Tools de Apple y CMake (si falta CMake, lo instala con Homebrew o solo para tu usuario).
-2. Borra SmartKeys y SmartKeys FX (`.vst3`, `.component`, `.app`) de `/Library`, de `~/Library` de cada usuario y de `/Applications`. También borra la caché de Audio Units y la ficha de FL Studio.
-3. Compila en `Release` el binario Universal y genera `Installer/Output/SmartKeys-1.4.0-macOS.pkg`.
+2. Borra SmartKeys y la vieja SmartKeys FX (`.vst3`, `.component`, `.app`) de `/Library`, de `~/Library` de cada usuario y de `/Applications`. También borra la caché de Audio Units y la ficha de FL Studio.
+3. Compila en `Release` el binario Universal y genera `Installer/Output/SmartKeys-1.5.0-macOS.pkg`.
 4. Instala el `.pkg` y reinicia `AudioComponentRegistrar` para que FL Studio y Ableton vean el binario nuevo.
 
 Te pide la contraseña de administrador en los pasos 2 y 4. Para desinstalar todo: `bash Installer/uninstall_mac.sh`.
@@ -77,7 +68,7 @@ Te pide la contraseña de administrador en los pasos 2 y 4. Para desinstalar tod
 Installer\build_windows.bat
 ```
 
-Compila, genera `SmartKeys-1.4.0-Windows-Setup.exe` y lo ejecuta. El instalador borra antes la versión anterior. Requisitos: Visual Studio 2022 con "Desarrollo para escritorio con C++", CMake 3.22+, Git e [Inno Setup 6.3+](https://jrsoftware.org/isdl.php). Añade `noinstall` para solo generar el `.exe`.
+Compila, genera `SmartKeys-1.5.0-Windows-Setup.exe` y lo ejecuta. El instalador borra antes la versión anterior. Requisitos: Visual Studio 2022 con "Desarrollo para escritorio con C++", CMake 3.22+, Git e [Inno Setup 6.3+](https://jrsoftware.org/isdl.php). Añade `noinstall` para solo generar el `.exe`.
 
 ### Para desarrolladores: copiar al compilar
 
@@ -107,7 +98,7 @@ SmartKeys **siempre** hace las dos cosas a la vez:
 - Suena su piano interno. `GAIN` ajusta su volumen (−60 a +6 dB).
 - Cada tecla sale por la salida MIDI del plugin como el **acorde completo** (3, 4 o 5–7 notas), con su STRUM, para tocar cualquier otro plugin.
 
-`MIDI CH 1–16` elige el canal MIDI de salida. Si cambias el canal con una tecla pulsada, sus NoteOff salen por el canal original, así que no quedan notas colgadas. El **puerto** MIDI lo asigna el DAW:
+Los acordes salen siempre por el **canal MIDI 1**. El **puerto** MIDI lo asigna el DAW:
 
 - **FL Studio:** en SmartKeys, abre el engranaje ⚙ (*Fruity Wrapper*) → MIDI → **Output port** = 1. En el plugin destino (Serum, Kontakt…), **Input port** = 1. Si sólo quieres oír el otro plugin, baja el `GAIN` de SmartKeys al mínimo.
 - **Ableton Live:** crea otra pista MIDI con *MIDI From* = `SmartKeys` y pon en ella el instrumento destino.
@@ -121,20 +112,21 @@ La perilla **STRUM SPEED** (debajo del display) va de `OFF` a 200 ms:
 - Si sueltas la tecla antes de que entren todas, las que faltaban se cancelan y las que sonaban se apagan juntas: nunca quedan notas colgadas.
 - Funciona en el piano interno, en la salida MIDI y con la voz, y el `LIVE KEYBOARD` enciende las teclas una a una. Doble clic en la perilla: `OFF`.
 
-### Controlador vocal: la voz entra por el plugin
+### Controlador vocal (MIC VOICE)
 
-Activa **`MIC VOICE: ON`** y ajusta **GATE** (por defecto −48 dB). El medidor se ilumina cuando cantas por encima del umbral, y la etiqueta muestra en vivo lo que detecta: `Mic: A3 -> Am`.
+1. Carga **SmartKeys** como instrumento normal (Channel Rack de FL Studio, pista MIDI de Ableton). No hace falta ningún ruteo.
+2. Pulsa **`MIC VOICE: ON`** y tararea. El medidor LED se mueve con tu voz y, a la derecha de `GATE`, aparece lo que estás disparando: `Mic: A3 -> Acorde: Am` (en SINGLE NOTES: `Mic: A3 -> Nota: A3`).
+3. Tu voz se corrige a `KEY` y `SCALE` (como un Auto-Tune) y dispara la nota o el acorde del modo (`SINGLE NOTES`, `SMART CHORDS` o `COMPLEX CHORDS`): suena con el piano de SmartKeys, se ilumina en el `LIVE KEYBOARD` y sale por MIDI.
+4. `GATE` (por defecto −48 dB) es el umbral: por debajo, la voz no dispara nada. Si el micrófono capta ruido, súbelo; si tarareas bajito, bájalo.
 
-SmartKeys escucha la voz **sólo por su propio bus de entrada de audio**: nunca abre dispositivos de audio por su cuenta dentro del DAW.
+**De dónde escucha (macOS):**
+- **La entrada de audio activa de macOS**, canal 1: la que eliges en **Ajustes del Sistema → Sonido → Entrada** (el micrófono de la Mac o tu interfaz). Pasa el ratón sobre `Mic:` para ver cuál está usando.
+- Si el DAW le manda audio por la entrada del plugin (sidechain), usa esa en su lugar, y vuelve al micrófono de macOS cuando esa entrada se queda en silencio.
+- **Permiso:** la primera vez, macOS pregunta si **FL Studio** (el DAW, no SmartKeys) puede usar el micrófono: pulsa *Permitir*. Si antes lo negaste, la etiqueta lo dice; actívalo en **Ajustes del Sistema → Privacidad y seguridad → Micrófono → FL Studio** y vuelve a abrir FL Studio.
+- **Auriculares Bluetooth (AirPods):** su micrófono no se abre, porque macOS los cambiaría a modo llamada y el sonido de FL Studio empeoraría. Si la entrada de macOS son unos AirPods, SmartKeys usa el micrófono de la Mac.
+- **Standalone:** la app usa la entrada elegida en *Options → Audio/MIDI Settings*; si esa entrada no trae audio, también lee el micrófono de macOS.
 
-**A. SmartKeys FX en la pista del micrófono (FL Studio, recomendado)**
-1. En el Mixer, selecciona la pista donde entra tu micrófono (*Input* = tu interfaz) y carga **SmartKeys FX** en un slot de efectos.
-2. Activa `MIC VOICE: ON`. Lo que cantas en esa pista se convierte en acordes: la pista suena con el piano de SmartKeys en lugar de tu voz, y los acordes salen por su salida MIDI.
-3. En Mac, el permiso del micrófono es de FL Studio: **Ajustes del Sistema → Privacidad y seguridad → Micrófono**.
-
-**B. Sidechain (instrumento SmartKeys)**
-- **Ableton Live 11/12:** en el dispositivo SmartKeys abre el panel **Sidechain**, actívalo y elige la pista del micrófono en *Audio From*.
-- **Standalone:** usa la entrada elegida en *Options → Audio/MIDI Settings*.
+**Windows:** la voz entra por la entrada sidechain del plugin (en FL Studio, la pista del micrófono enviada como sidechain al canal de SmartKeys; en Ableton, el panel *Sidechain* del dispositivo).
 
 ---
 
@@ -143,10 +135,9 @@ SmartKeys escucha la voz **sólo por su propio bus de entrada de audio**: nunca 
 | Control | Función |
 |---|---|
 | `SMART CHORDS / SINGLE NOTES / COMPLEX CHORDS` | Acorde diatónico (3–4 notas), nota individual cuantizada, o acorde a dos manos (5–7 notas) |
-| `MIDI CH 1…16` | Canal MIDI de salida de los acordes completos |
 | `GAIN` | Volumen del piano interno (−60 a +6 dB); la salida MIDI no cambia |
-| `MIC VOICE` | Activa la voz (llega por la entrada del plugin: SmartKeys FX o sidechain) |
-| Medidor · `GATE` · etiqueta `Mic:` | Nivel de entrada, umbral del gate y nota/acorde detectados en vivo |
+| `MIC VOICE` | Activa la voz: el micrófono de macOS (o la entrada sidechain si el DAW la manda) |
+| Medidor · `GATE` · `Mic: A3 -> Acorde: Am` | Nivel de la voz, umbral del gate y la nota y el acorde que dispara en vivo |
 | `KEY` · `SCALE` · barra `ESCALA` | Tónica, escala (`Más escalas`: Occidentales / Árabes / Indias) y notas activas una a una |
 | `TRIAD / +8VA / 7TH` | Grados k, k+2, k+4 · + octava · + séptima (en SMART CHORDS) |
 | `LUSH 7/9 / NEO-SOUL / CINEMATIC` | Variación de COMPLEX CHORDS (aparece en ese modo) |
@@ -189,7 +180,7 @@ Las notas siempre pertenecen a la escala activa (verificado en 198 144 voicings)
 
 **Polifonía:** 32 voces, que dan para 4 acordes de 7 notas sostenidos.
 
-**MIDI:** el buffer de salida se reemplaza (`swapWith`) por el acorde completo. `ActiveNoteRegistry` guarda las notas de cada tecla para soltarlas todas con el NoteOff, aunque cambies de modo, de escala o de canal con la tecla pulsada.
+**MIDI:** el buffer de salida se reemplaza (`swapWith`) por el acorde completo. `ActiveNoteRegistry` guarda las notas de cada tecla para soltarlas todas con el NoteOff, aunque cambies de modo o de escala con la tecla pulsada.
 
 ---
 
@@ -213,10 +204,23 @@ Ese acceso a memoria liberada pasaba cada vez que se cerraba la ventana de Smart
 
 Además, `setSize()` es la última línea del constructor del editor, y el destructor suelta cualquier nota que el ratón o el teclado de la PC dejaran pulsada.
 
+### Micrófono del sistema sin sidechain (`SystemMicInput`)
+
+El instrumento de FL Studio no recibe el micrófono por su entrada sin un ruteo de sidechain, así que SmartKeys lo lee él mismo, con estas reglas:
+
+- **Sólo entrada.** Un `IOProc` de CoreAudio sobre la entrada activa de macOS, con **0 canales de salida** (el uso de flujos del IOProc deja la salida apagada) y sólo el primer flujo de entrada (canal 1). CoreAudio admite varios clientes por dispositivo: FL Studio sigue con su audio como si nada.
+- **Nunca cambia el dispositivo.** No toca la frecuencia de muestreo ni el tamaño de búfer: lee el micrófono tal como está. Si el micrófono va a 48 kHz y FL a 44.1 kHz, el detector de voz trabaja a 48 kHz (no se remuestrea nada).
+- **Sin candados entre hilos.** El hilo de CoreAudio sólo copia el canal 1 a un búfer circular fijo (`std::array<float, 16384> micRingBuffer` + `std::atomic` `writeIndex` / `readIndex`, un productor y un consumidor). El `processBlock` lo vacía en cada bloque en un arreglo fijo: ni `std::vector`, ni `malloc`, ni `realloc`. Si el DAW deja de pedir audio un rato, se descarta lo viejo (la latencia no se acumula). 16 384 muestras (341 ms a 48 kHz) caben aunque FL use un búfer grande.
+- **Elección de la fuente en cada bloque.** Si por la entrada del plugin llega cualquier muestra por encima de −120 dBFS, la voz es esa (sidechain). Tras 0,5 s de silencio digital, el micrófono del sistema. El micrófono se abre sólo cuando hace falta (`MIC VOICE: ON` y el DAW no manda voz) y se cierra al apagar `MIC VOICE`. En una exportación (render offline) se ignora.
+- **Permiso.** Se pide con el aviso oficial de macOS (`AVCaptureDevice`); macOS lo concede a la aplicación anfitriona (FL Studio). Si el anfitrión no declara `NSMicrophoneUsageDescription` en su `Info.plist`, el micrófono no se toca, porque macOS cerraría el programa. El plugin también lo declara en su `Info.plist`.
+- **Bluetooth.** Una entrada Bluetooth no se abre (cambiaría los auriculares a modo llamada y el audio de salida del DAW); se usa el micrófono de la Mac si existe.
+- **Vigilancia.** Un temporizador del procesador (4 veces por segundo, hilo de mensajes) reabre el micrófono si cambias la entrada en Ajustes, si se desconecta la interfaz o si deja de entregar audio, y lo cierra antes de destruir el plugin.
+- **Windows:** sin lectura directa; la voz entra por la entrada sidechain del plugin.
+
 ### Orden estricto del `processBlock`
 1. Si el host pide un bloque de 0 muestras (FL Studio lo hace para entregar parámetros), sale sin tocar nada: no existe ninguna posición válida para un evento MIDI.
-2. Lee el micrófono (sólo el bus de entrada del plugin) y ejecuta el detector de voz.
-3. Publica el nivel y la nota detectada para el medidor y la etiqueta `Mic:`.
+2. Elige la voz: la entrada del plugin si el DAW manda audio por ella, si no el micrófono del sistema (búfer circular). Ejecuta el detector de voz a la frecuencia de esa fuente.
+3. Publica el nivel y la nota detectada para el medidor y la lectura `Mic: A3 -> Acorde: Am`.
 4. `buffer.clear()`: la voz cruda nunca sale.
 5. Expande cada nota de entrada (MIDI, Piano Roll, teclado en pantalla y voz) al acorde completo, en orden de muestra. El MIDI se lee como bytes crudos: nunca se construye un `juce::MidiMessage`, que con un SysEx pediría memoria.
 6. STRUM: reparte las notas de cada acorde en el tiempo con una cola por muestra. Cada evento queda en `0 ≤ posición < numSamples`.
@@ -227,26 +231,21 @@ El plugin no lee el transporte del DAW (`getPlayHead()`): ya no lo necesita.
 
 ### Tiempo real
 `processBlock` no asigna memoria, no bloquea y no llama al hilo de mensajes:
-- Arrays de tamaño fijo: las notas de cada tecla (`ChordSlot`), la cola del STRUM y el FIFO lock-free (`AbstractFifo`) del teclado en pantalla. Ningún `std::vector` en el camino de audio.
+- Arrays de tamaño fijo: las notas de cada tecla (`ChordSlot`), la cola del STRUM, el FIFO lock-free (`AbstractFifo`) del teclado en pantalla y el búfer circular del micrófono. Ningún `std::vector` en el camino de audio.
 - `MidiBuffer` con capacidad reservada.
 - Atómicos para la interfaz: el acorde, las notas encendidas, el nivel del micrófono. La ventana los lee con un temporizador; nada en el audio toca componentes ni el `MessageManager`.
 - Los controles leen los parámetros por sondeo (30 veces por segundo) en lugar de escucharlos. Con los `ParameterAttachment` de JUCE, la automatización del host avisaba a la interfaz desde el hilo de audio.
 
 Las pruebas lo comprueban de dos formas:
 - Cuentan cada `new` durante miles de bloques de cada pieza (detector, router, STRUM, motor y sintetizador con robo de voces).
-- Reemplazan `malloc` en un host de prueba y llaman al `processBlock` del VST3 compilado 3000 veces: bloques de 32 a 512 muestras, notas, STRUM, voz, *All Notes Off* y cambios de modo y escala.
+- Reemplazan `malloc` en un host de prueba y llaman al `processBlock` del VST3 compilado 3000 veces: bloques de 32 a 512 muestras, notas, STRUM, voz, *All Notes Off* y cambios de modo y escala. Y otra vez durante 2,5 s leyendo el micrófono del sistema.
 
 En ambos casos el resultado es **0 asignaciones**.
 
-**Dos variantes.** El documento pedía `VST3_CATEGORIES "Instrument" "Fx" "Generator"`. JUCE ordena la categoría `Fx` en primer lugar, así que el instrumento se anunciaría como `Fx|Instrument|Generator` y FL Studio lo listaría como efecto, sin poder cargarlo en el Channel Rack. Por eso hay dos plugins:
-
-| Plugin | Categorías VST3 | Tipo AU | Entrada |
-|---|---|---|---|
-| `SmartKeys` | `Instrument\|Synth\|Generator` | `aumu` | sidechain |
-| `SmartKeys FX` | `Fx\|Generator` | `aumf` | principal |
+**Un solo plugin.** SmartKeys es un instrumento (`Instrument|Synth|Generator`, AU `aumu`) con una entrada de audio opcional (sidechain). No lleva la categoría `Fx`: JUCE la pondría en primer lugar y FL Studio lo listaría como efecto, sin poder cargarlo en el Channel Rack. La versión de efecto SmartKeys FX (1.1–1.4) ya no hace falta: el instrumento lee el micrófono por sí mismo.
 
 **Limpieza en los instaladores.**
-- **macOS:** cada componente del `.pkg` (VST3, AU, App) lleva un `preinstall` que borra solo su tipo de archivo, así ninguno puede borrar lo que otro acaba de instalar. AU también refresca la caché antes y después (`killall -9 AudioComponentRegistrar`). Solo se tocan `SmartKeys.*` y `SmartKeys FX.*`; el resto de plugins no se toca.
+- **macOS:** cada componente del `.pkg` (VST3, AU, App) lleva un `preinstall` que borra solo su tipo de archivo, así ninguno puede borrar lo que otro acaba de instalar. AU también refresca la caché antes y después (`killall -9 AudioComponentRegistrar`). Solo se tocan `SmartKeys.*` y `SmartKeys FX.*`; el resto de plugins no se toca. También se olvidan los recibos de los instaladores anteriores (`com.jeanpaulaudio.smartkeys.*`).
 - **Windows:** `[InstallDelete]` hace lo mismo.
 
 **Detector de voz.**
@@ -270,19 +269,23 @@ El piano y el MIDI suenan en 12-TET con A4 = 440 Hz.
 
 ```
 SmartKeys/
-├── CMakeLists.txt                 SmartKeys (instrumento) + SmartKeys FX (efecto), limpieza al copiar
+├── CMakeLists.txt                 SmartKeys (instrumento, MIWN), limpieza al copiar
 ├── Source/
 │   ├── ScaleChordEngine.h         Escalas, cuantización, acordes Smart y Complex, cifrado
 │   ├── VoicePitchTracker.h        Gate RMS + YIN + histéresis 35 cents + estabilidad 3 frames
 │   ├── StrumScheduler.h           STRUM: cola de NoteOn por muestra, ASC/DESC, cancelación al soltar
 │   ├── FlKeysPianoSynth.h         Piano aditivo de 32 voces (robo de voces sin memoria dinámica)
 │   ├── MidiOutputRouter.h         Expansión a acordes y ActiveNoteRegistry con ranuras de tamaño fijo
-│   ├── PluginProcessor.h/.cpp     Parámetros, buses, processBlock lock-free
+│   ├── MicRingBuffer.h            Búfer circular lock-free del micrófono (std::array + 2 atómicos)
+│   ├── SystemMicInput.h/.cpp      Micrófono del sistema: CoreAudio sólo entrada, permisos, vigilancia
+│   ├── MicPermission_mac.mm       Permiso de micrófono de macOS (AVFoundation)
+│   ├── PluginProcessor.h/.cpp     Parámetros, buses, elección de la voz, processBlock lock-free
 │   ├── PluginEditor.h/.cpp        Interfaz 850×606 vectorial y redimensionable
 │   └── UiCommon.h                 Colores, tipografía, LookAndFeel y enlaces por sondeo
 ├── Tests/
-│   ├── EngineTests.cpp            Comprobaciones del núcleo DSP
-│   └── HostTests.cpp              Carga los VST3 compilados como un DAW y comprueba su salida
+│   ├── EngineTests.cpp            Comprobaciones del núcleo DSP, del búfer y del control del micrófono
+│   ├── HostTests.cpp              Carga el VST3 compilado como un DAW y comprueba su salida
+│   └── MicProbe.cpp               Sonda del micrófono del sistema para una Mac real (CI con BlackHole)
 └── Installer/
     ├── install_mac.sh             Borra la versión vieja + compila + instala (macOS)
     ├── uninstall_mac.sh           Desinstalación completa (macOS)
@@ -296,25 +299,25 @@ SmartKeys/
 
 ## Verificación realizada
 
-- **pluginval nivel 10** (el máximo) sobre los dos VST3, con pruebas de editor: **SUCCESS**. Incluye el validador oficial de Steinberg, estado, automatización, seguridad de hilos, fuzzing y buses.
-- **pluginval nivel 10 sobre el VST3 de SmartKeys compilado con AddressSanitizer + UBSan.** Es la prueba que reproducía el cierre de FL Studio: abre y cierra el editor una y otra vez. Con la 1.3 fallaba en la primera prueba de editor; con la 1.4 da **SUCCESS** y 0 errores de memoria. SmartKeys FX usa el mismo editor.
-- **517 comprobaciones del núcleo:**
-  - Escalas, acordes, voicings complejos y router MIDI.
-  - Detector de voz.
-  - STRUM exacto a la muestra (ASC/DESC, NoteOff anticipado, *All Notes Off*).
-  - Robo de voces del piano sin memoria dinámica, y 0 asignaciones en todo el camino de audio.
-- **Prueba de integración** (`HostTests.cpp`, 39 comprobaciones). Carga los VST3 compilados como un DAW y comprueba:
-  - Que cada tecla sale como acorde completo por MIDI, en el canal elegido, mientras suena el piano interno.
-  - Que `GAIN` baja el piano sin tocar el MIDI.
-  - Que ya no existen `OUTPUT MODE`, `A4` ni `MICROTUNING`, y que un proyecto de la 1.3 se abre sin restos de ellos ni de la progresión o el puerto.
-  - El STRUM a 100 ms: +5520 y +12480 muestras a 48 kHz, en ASC y en DESC.
-  - La voz → acordes y SmartKeys FX.
-  - **4000 bloques de 0 a 512 muestras** (como los manda FL Studio): ningún evento MIDI fuera de su bloque y nada de MIDI en los bloques de 0 muestras.
-  - **0 asignaciones** en 3000 llamadas al `processBlock` real, medidas reemplazando `malloc`.
-  - **Concurrencia:** un hilo de audio llama sin parar al `processBlock` mientras el hilo de mensajes guarda y carga el estado y cambia parámetros, como hace FL Studio.
-- **AddressSanitizer + UBSan** sobre la app y el VST3 del instrumento:
-  - 1460 acciones al azar en la interfaz durante 5 minutos, con el audio corriendo: modos, escalas, notas de la barra ESCALA, teclado en pantalla y de la PC, perilla STRUM, ASC/DESC, canal MIDI, GAIN, GATE, MIC VOICE y redimensionar.
-  - La prueba de integración del instrumento, con 20 s de concurrencia.
-  - Resultado: **0 errores de memoria**.
-- **Limpieza de versiones anteriores** simulada con instalaciones falsas: borra SmartKeys y SmartKeys FX de todas las rutas y deja intactos los demás plugins.
-- **En GitHub Actions**, en cada compilación se instala una "versión anterior" falsa en un Mac Intel y en un PC de pruebas, se ejecuta el instalador nuevo y se comprueba que la borró. Después se validan los plugins instalados con `auval` (Apple) y `pluginval` nivel 10, ahora **con las pruebas de editor** (abrir y cerrar la ventana del plugin; hasta la 1.3 se omitían).
+- **MIC VOICE sin sidechain en una Mac de verdad** (GitHub Actions, Mac Intel con macOS 15). Se instala [BlackHole](https://github.com/ExistentialAudio/BlackHole) (un cable de audio virtual) como entrada y salida de macOS y se reproduce un La3 de 220 Hz:
+  - **Sonda** (`Tests/MicProbe.cpp`, con el mismo código del plugin): abre y cierra la entrada 6 veces seguidas y después la lee 4 s. Recibe el 99 % de las muestras a 48 kHz y detecta **220,009 Hz (La3)**. La frecuencia de muestreo (48 kHz) y el búfer (512) del dispositivo son **los mismos antes y después**. En silencio llega −150 dBFS y no se detecta nada.
+  - **El VST3 compilado**, cargado como en un DAW con su entrada en silencio digital: `MIC VOICE: ON` lee el micrófono de macOS y saca **La menor** por MIDI (canal 1) y por el piano. Si la entrada del plugin trae voz (Do4), usa esa; cuando vuelve el silencio, otra vez el micrófono de macOS. Al apagar `MIC VOICE` suelta las notas.
+- **pluginval nivel 10** (el máximo) con las pruebas de editor, en Mac Intel, en Windows y aquí: **SUCCESS**. Incluye el validador oficial de Steinberg, estado, automatización, seguridad de hilos, fuzzing y buses.
+- **pluginval nivel 10 sobre el VST3 compilado con AddressSanitizer + UBSan** (abre y cierra el editor una y otra vez; es la prueba que reproducía el cierre de FL Studio de la 1.2–1.3): **SUCCESS**, 0 errores de memoria.
+- **544 comprobaciones del núcleo:**
+  - Escalas, acordes, voicings complejos, router MIDI, detector de voz y STRUM exacto a la muestra.
+  - **Búfer circular del micrófono:** canal 1 de un bloque estéreo, 20 000 escrituras y lecturas irregulares, desbordamiento, latencia acotada y **dos hilos de verdad** a la vez (1,1 millones de muestras sin perder ni repetir una). Escribir y leer nunca asigna memoria.
+  - **Control del micrófono** (simulado): se abre a la frecuencia del dispositivo, se reabre si cambia la entrada o deja de entregar audio, avisa si falla, no abre Bluetooth, respeta el permiso (pendiente → abre al permitirlo; denegado; programa sin `NSMicrophoneUsageDescription`).
+  - 0 asignaciones en todo el camino de audio.
+- **Prueba de integración** (`HostTests.cpp`, 41 comprobaciones). Carga el VST3 compilado como un DAW y comprueba:
+  - Cada tecla sale como acorde completo por MIDI, **siempre por el canal 1** (aunque entre por otro), mientras suena el piano interno; `GAIN` baja el piano sin tocar el MIDI.
+  - Ya no existen `MIDI CH`, `OUTPUT MODE`, `A4` ni `MICROTUNING`; un proyecto de la 1.3 / 1.4 con `MIDI CH 5` se abre sin restos y sale por el canal 1.
+  - El STRUM a 100 ms: +5520 y +12480 muestras a 48 kHz, en ASC y en DESC. COMPLEX CHORDS de 5 a 7 notas.
+  - La voz por la entrada del DAW (sidechain) y **MIC VOICE sin sidechain** con un micrófono simulado a 44,1 kHz mientras el DAW va a 48 kHz: La3 → La menor, cambio a la entrada del DAW y vuelta, frases que disparan y sueltan el acorde.
+  - **4000 bloques de 0 a 512 muestras** (como los manda FL Studio): ningún evento MIDI fuera de su bloque.
+  - **0 asignaciones** en 3000 llamadas al `processBlock` real y en 2,5 s leyendo el micrófono del sistema, medidas reemplazando `malloc`.
+  - **Concurrencia:** un hilo de audio llama sin parar al `processBlock` mientras el hilo de mensajes guarda y carga el estado, cambia parámetros y enciende y apaga `MIC VOICE` (el micrófono se abre y se cierra).
+- **AddressSanitizer + UBSan** y **ThreadSanitizer:**
+  - La prueba de integración completa, con el hilo del micrófono simulado, el de audio y el de mensajes a la vez y 20 s de concurrencia: **0 errores de memoria y 0 carreras de datos**.
+  - 1401 acciones al azar en la interfaz durante 5 minutos con el audio corriendo y el micrófono simulado: modos, escalas, barra ESCALA, teclado en pantalla y de la PC, STRUM, ASC/DESC, GAIN, GATE, `MIC VOICE` encendido y apagado y redimensionar: **0 errores**.
+- **Limpieza de versiones anteriores:** en cada compilación de GitHub se instala una versión vieja falsa (también **SmartKeys FX**, en `/Library` y `~/Library`, y en `Common Files\VST3`) en un Mac Intel y en un PC; el instalador nuevo la borra, deja intactos los demás plugins y no vuelve a instalar SmartKeys FX. Se comprueba que el plugin queda registrado como **MIWN** (`com.miwn.smartkeys`, `MIWN: SmartKeys`, `CompanyName = MIWN`) y con `NSMicrophoneUsageDescription`, y `auval` confirma que SmartKeys FX ya no existe.

@@ -2,7 +2,7 @@
   ==============================================================================
 
     PluginProcessor.cpp
-    SmartKeys — Piano inteligente, generador de acordes y controlador vocal.
+    SmartKeys (MIWN) — Piano inteligente, generador de acordes y controlador vocal.
 
   ==============================================================================
 */
@@ -19,7 +19,8 @@ juce::StringArray SmartKeysAudioProcessor::getKeyNames()
 }
 
 // Los ParameterID (y sus versiones) se conservan: la automatización y los
-// proyectos guardados con versiones anteriores siguen funcionando.
+// proyectos guardados con versiones anteriores siguen funcionando. (1.5: ya
+// no existe "MIDI Out Channel": la salida MIDI va siempre por el canal 1.)
 juce::AudioProcessorValueTreeState::ParameterLayout SmartKeysAudioProcessor::createParameterLayout()
 {
     using namespace juce;
@@ -53,12 +54,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout SmartKeysAudioProcessor::cre
         AudioParameterFloatAttributes().withLabel ("dB")
             .withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " dB"; })));
 
-    StringArray channels;
-    for (int ch = 1; ch <= 16; ++ch)
-        channels.add (String (ch));
-    params.push_back (std::make_unique<AudioParameterChoice> (
-        ParameterID { ParamIDs::midiOutCh, 3 }, "MIDI Out Channel", channels, 0));
-
     params.push_back (std::make_unique<AudioParameterFloat> (
         ParameterID { ParamIDs::masterGain, 1 }, "Master Gain",
         NormalisableRange<float> (-60.0f, 6.0f, 0.1f), -3.0f,
@@ -88,7 +83,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SmartKeysAudioProcessor::cre
     return { params.begin(), params.end() };
 }
 
-// Bus de entrada de micrófono (mono o estéreo) + salida estéreo del piano
+// Entrada de micrófono (mono o estéreo; sidechain opcional) + salida estéreo del piano
 juce::AudioProcessor::BusesProperties SmartKeysAudioProcessor::createBuses()
 {
     return BusesProperties()
@@ -108,7 +103,6 @@ SmartKeysAudioProcessor::SmartKeysAudioProcessor()
     pComplexVar  = apvts.getRawParameterValue (ParamIDs::complexVar);
     pMicOn       = apvts.getRawParameterValue (ParamIDs::micOn);
     pMicGate     = apvts.getRawParameterValue (ParamIDs::micGate);
-    pMidiOutCh   = apvts.getRawParameterValue (ParamIDs::midiOutCh);
     pMasterGain  = apvts.getRawParameterValue (ParamIDs::masterGain);
     pStrumMs     = apvts.getRawParameterValue (ParamIDs::strumMs);
     pStrumDir    = apvts.getRawParameterValue (ParamIDs::strumDir);
@@ -129,12 +123,35 @@ SmartKeysAudioProcessor::SmartKeysAudioProcessor()
 
     routedMidi.ensureSize (kMidiReserveBytes);
     expandedChordMidi.ensureSize (kMidiReserveBytes);
+
+    // Vigilancia del micrófono del sistema (hilo de mensajes, 4 veces por segundo)
+    startTimer (250);
 }
 
 SmartKeysAudioProcessor::~SmartKeysAudioProcessor()
 {
+    // 1) Ningún temporizador más; 2) el micrófono del sistema se cierra (el
+    //    IOProc de CoreAudio termina antes de destruir su búfer circular)
+    stopTimer();
+    systemMic.shutdown();
+
     apvts.removeParameterListener (ParamIDs::rootKey, this);
     apvts.removeParameterListener (ParamIDs::scale, this);
+}
+
+//==============================================================================
+// Hilo de mensajes: abre el micrófono del sistema sólo cuando hace falta
+// (MIC VOICE en ON y el DAW no manda voz por la entrada del plugin) y lo cierra
+// en cuanto deja de hacer falta. Nunca toca el audio de salida del DAW.
+void SmartKeysAudioProcessor::timerCallback()
+{
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    if (pluginInputActive.load (std::memory_order_relaxed))
+        lastPluginInputActiveMs = now;
+
+    const bool micOn = pMicOn->load() > 0.5f;
+    const bool dawSendsVoice = now - lastPluginInputActiveMs < kInputHoldMs;
+    systemMic.update (micOn && ! dawSendsVoice);
 }
 
 //==============================================================================
@@ -190,6 +207,9 @@ void SmartKeysAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 
     appliedRoot = appliedScale = appliedMode = appliedExt = appliedVar = -1;
     micWasOn = false;
+    trackerSource = -1;
+    trackerRate = currentSampleRate;
+    inputSilentSamples = 1 << 30;
 
     updateEngineIfNeeded();
 }
@@ -207,14 +227,12 @@ bool SmartKeysAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
     if (out != juce::AudioChannelSet::stereo() && out != juce::AudioChannelSet::mono())
         return false;
 
-    // Entrada de micrófono: mono o estéreo. En el instrumento es un sidechain y
-    // puede desactivarse; en SmartKeys FX es la entrada principal de la pista.
+    // Entrada de micrófono: mono o estéreo, o desactivada (es un sidechain;
+    // sin ella SmartKeys lee el micrófono del sistema)
     if (layouts.inputBuses.size() > 0)
     {
         const auto in = layouts.getChannelSet (true, 0);
-        if (in.isDisabled())
-            return ! isFxVariant;
-        if (in != juce::AudioChannelSet::mono() && in != juce::AudioChannelSet::stereo())
+        if (! in.isDisabled() && in != juce::AudioChannelSet::mono() && in != juce::AudioChannelSet::stereo())
             return false;
     }
 
@@ -247,7 +265,7 @@ void SmartKeysAudioProcessor::updateEngineIfNeeded()
     appliedMode = mode;   appliedExt = ext;     appliedVar = var;
 }
 
-void SmartKeysAudioProcessor::drainScreenNotes (juce::MidiBuffer& out, int outChannel)
+void SmartKeysAudioProcessor::drainScreenNotes (juce::MidiBuffer& out)
 {
     const int ready = screenFifo.getNumReady();
     if (ready <= 0)
@@ -260,7 +278,7 @@ void SmartKeysAudioProcessor::drainScreenNotes (juce::MidiBuffer& out, int outCh
         {
             const auto& e = screenEvents[(size_t) (start + i)];
             if (e.on)
-                router.handleNoteOn (MidiOutputRouter::Source::Screen, e.note, outChannel, (juce::uint8) e.velocity,
+                router.handleNoteOn (MidiOutputRouter::Source::Screen, e.note, kMidiChannel, (juce::uint8) e.velocity,
                                      0, engine, out);
             else
                 router.handleNoteOff (MidiOutputRouter::Source::Screen, e.note, 0, out);
@@ -297,9 +315,11 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     expandedChordMidi.ensureSize (kMidiReserveBytes);
 
     //==========================================================================
-    // PASO 1 — LEER EL MICRÓFONO Y DETECTAR LA VOZ (antes de tocar el buffer).
-    //          La voz llega SÓLO por el bus de entrada del plugin (sidechain en
-    //          el instrumento, entrada principal en SmartKeys FX).
+    // PASO 1 — ELEGIR DE DÓNDE LLEGA LA VOZ (antes de tocar el buffer)
+    //   a) La entrada del plugin, si el DAW manda audio por ella (sidechain).
+    //   b) Si llega en silencio digital (Channel Rack de FL Studio sin ruteo):
+    //      el micrófono del sistema, que escribe su propio hilo de CoreAudio en
+    //      un búfer circular lock-free.
     //==========================================================================
     const bool micOn = pMicOn->load() > 0.5f;
 
@@ -309,28 +329,87 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         voiceTracker.forceRelease (0);   // al encender, la siguiente nota estable dispara su acorde
     micWasOn = micOn;
 
-    VoicePitchTracker* tracker = nullptr;
-    int numVoiceEvents = 0;
+    // a) Entrada del plugin: punteros a los canales del bus (sin copiar nada)
+    const float* const* inputChannels = nullptr;
+    int numInputChannels = 0;
+    float inputPeak = 0.0f;
 
     if (getBusCount (true) > 0)
     {
         if (auto* bus = getBus (true, 0); bus != nullptr && bus->isEnabled())
         {
-            auto micBus = getBusBuffer (buffer, true, 0);
-            if (micBus.getNumChannels() > 0)
+            const int first = getChannelIndexInProcessBlockBuffer (true, 0, 0);
+            numInputChannels = juce::jmin (bus->getNumberOfChannels(), buffer.getNumChannels() - first);
+            if (numInputChannels > 0)
             {
-                numVoiceEvents = voiceTracker.process (micBus.getArrayOfReadPointers(),
-                                                       micBus.getNumChannels(), numSamples, engine);
-                tracker = &voiceTracker;
+                inputChannels = buffer.getArrayOfReadPointers() + first;
+                for (int ch = 0; ch < numInputChannels; ++ch)
+                    inputPeak = juce::jmax (inputPeak, buffer.getMagnitude (first + ch, 0, numSamples));
+            }
+            else
+            {
+                numInputChannels = 0;
             }
         }
     }
 
+    inputSilentSamples = inputPeak > kInputSignalFloor ? 0 : juce::jmin (inputSilentSamples + numSamples, 1 << 30);
+    const bool inputActive = inputChannels != nullptr
+                             && inputSilentSamples < (int) (currentSampleRate * kInputSilenceSeconds);
+    pluginInputActive.store (inputActive, std::memory_order_relaxed);
+
+    // b) Micrófono del sistema (no en una exportación: el disco va más rápido que el micrófono)
+    const bool systemMicReady = ! isNonRealtime() && systemMic.isRunning();
+
+    int source = VoiceSource::None;
+    if (inputActive)                    source = VoiceSource::PluginInput;
+    else if (systemMicReady)            source = VoiceSource::SystemMic;
+    else if (inputChannels != nullptr)  source = VoiceSource::PluginInput;   // conectada pero en silencio
+
+    // El detector trabaja a la frecuencia de la fuente: al cambiar de fuente,
+    // de frecuencia o de dispositivo se suelta la nota de voz y se reinicia
+    // (prepare() no asigna memoria).
+    const double sourceRate = source == VoiceSource::SystemMic ? systemMic.getSampleRate() : currentSampleRate;
+    const uint32_t micGeneration = systemMic.getGeneration();
+    if (source != trackerSource || std::abs (sourceRate - trackerRate) > 0.5
+          || (source == VoiceSource::SystemMic && micGeneration != trackerGeneration))
+    {
+        if (router.isVoiceSlotActive())
+            router.handleNoteOff (MidiOutputRouter::Source::Voice, 0, 0, routedMidi);
+        voiceTracker.prepare (sourceRate > 1000.0 ? sourceRate : currentSampleRate);
+        if (source == VoiceSource::SystemMic)
+            systemMic.discardAll();   // sólo audio nuevo y continuo
+        trackerSource = source;
+        trackerRate = sourceRate;
+        trackerGeneration = micGeneration;
+    }
+
+    int numVoiceEvents = 0;
+    int voiceSamples = numSamples;   // muestras analizadas (en la frecuencia de la fuente)
+
+    if (source == VoiceSource::PluginInput)
+    {
+        numVoiceEvents = voiceTracker.process (inputChannels, numInputChannels, numSamples, engine);
+    }
+    else if (source == VoiceSource::SystemMic)
+    {
+        // Todo lo que llegó desde el bloque anterior; si el DAW se detuvo un
+        // rato, sólo lo más reciente (latencia acotada).
+        const double expected = (double) numSamples * sourceRate / currentSampleRate;
+        const int maxBacklog = juce::jlimit (1024, smartkeys::SystemMicInput::kRingCapacity - 1, (int) expected + 8192);
+        voiceSamples = systemMic.pull (systemMicScratch.data(), (int) systemMicScratch.size(), maxBacklog);
+        const float* channels[1] = { systemMicScratch.data() };
+        numVoiceEvents = voiceSamples > 0 ? voiceTracker.process (channels, 1, voiceSamples, engine) : 0;
+    }
+
+    if (source != VoiceSource::SystemMic)
+        systemMic.discardAll();   // nunca se acumula audio viejo del micrófono
+
     //==========================================================================
     // PASO 2 — MEDIDOR + NOTA DETECTADA EN VIVO (atómicos que lee la interfaz)
     //==========================================================================
-    micSourceAvailable.store (tracker != nullptr);
-    micLevelDb.store (tracker != nullptr ? tracker->inputLevelDb.load() : -100.0f);
+    voiceSource.store (source);
+    micLevelDb.store (source != VoiceSource::None ? voiceTracker.inputLevelDb.load() : -100.0f);
 
     //==========================================================================
     // PASO 3 — SILENCIAR LA VOZ CRUDA (ya analizada) ANTES DE RENDERIZAR EL PIANO
@@ -341,15 +420,17 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     // PASO 4 — EXPANDIR CADA NOTA DE ENTRADA AL ACORDE COMPLETO
     //          (MIDI / Piano Roll, teclado en pantalla / PC y voz, en orden de muestra)
     //==========================================================================
-    const int outChannel = 1 + juce::jlimit (0, 15, juce::roundToInt (pMidiOutCh->load()));
+    drainScreenNotes (routedMidi);
 
-    drainScreenNotes (routedMidi, outChannel);
-
-    const int routedVoiceEvents = (micOn && tracker != nullptr) ? numVoiceEvents : 0;
+    const int routedVoiceEvents = micOn ? numVoiceEvents : 0;
     const int lastSample = numSamples - 1;
     auto voicePosition = [&] (int index)
     {
-        return juce::jlimit (0, lastSample, tracker->getEvent (index).sampleOffset);
+        // Los eventos del micrófono del sistema se reparten a lo largo del bloque
+        const int offset = voiceTracker.getEvent (index).sampleOffset;
+        const int pos = voiceSamples == numSamples ? offset
+                                                   : (int) ((juce::int64) offset * numSamples / juce::jmax (1, voiceSamples));
+        return juce::jlimit (0, lastSample, pos);
     };
 
     auto midiIt = midiMessages.cbegin();
@@ -379,7 +460,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
             if (type == 0x90 && size >= 3 && velocity > 0)
             {
-                router.handleNoteOn (MidiOutputRouter::Source::Midi, note, outChannel,
+                router.handleNoteOn (MidiOutputRouter::Source::Midi, note, kMidiChannel,
                                      (juce::uint8) velocity, pos, engine, routedMidi);
             }
             else if ((type == 0x80 || type == 0x90) && size >= 3)
@@ -388,11 +469,11 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             }
             else if (status >= 0x80 && status < 0xF0 && size <= 3)
             {
-                // CC, sustain, pitch bend, aftertouch... al canal MIDI elegido
+                // CC, sustain, pitch bend, aftertouch... al canal 1
                 if (type == 0xB0 && (note == 120 || note == 123))
                     router.releaseAll (pos, routedMidi);   // All Sound Off / All Notes Off del DAW
 
-                juce::uint8 remapped[3] = { (juce::uint8) (type | (outChannel - 1)),
+                juce::uint8 remapped[3] = { (juce::uint8) (type | (kMidiChannel - 1)),
                                             (juce::uint8) (size >= 2 ? data[1] : 0),
                                             (juce::uint8) (size >= 3 ? data[2] : 0) };
                 routedMidi.addEvent (remapped, size, pos);
@@ -404,11 +485,11 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         }
         else
         {
-            const auto& e = tracker->getEvent (voiceIdx);
+            const auto& e = voiceTracker.getEvent (voiceIdx);
             const int pos = voicePosition (voiceIdx);
 
             if (e.isNoteOn)
-                router.handleNoteOn (MidiOutputRouter::Source::Voice, e.note, outChannel, (juce::uint8) e.velocity,
+                router.handleNoteOn (MidiOutputRouter::Source::Voice, e.note, kMidiChannel, (juce::uint8) e.velocity,
                                      pos, engine, routedMidi);
             else
                 router.handleNoteOff (MidiOutputRouter::Source::Voice, e.note, pos, routedMidi);
@@ -440,7 +521,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     //==========================================================================
     // PASO 7 — SALIDA MIDI SIEMPRE ACTIVA: el buffer de salida se REEMPLAZA por
-    //          los acordes completos (con su STRUM) en el canal elegido
+    //          los acordes completos (con su STRUM) en el canal 1
     //==========================================================================
     midiMessages.swapWith (expandedChordMidi);
 
@@ -461,7 +542,7 @@ juce::AudioProcessorEditor* SmartKeysAudioProcessor::createEditor()
 void SmartKeysAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
-    state.setProperty ("stateVersion", 4, nullptr);
+    state.setProperty ("stateVersion", 5, nullptr);
     state.setProperty ("customMask", (int) customMask.load(), nullptr);
     state.setProperty ("editorScale", (double) editorScale.load(), nullptr);
 
@@ -481,8 +562,8 @@ void SmartKeysAudioProcessor::setStateInformation (const void* data, int sizeInB
     auto tree = juce::ValueTree::fromXml (*xml);
 
     // Parámetros y ajustes que ya no existen (afinación A4, microafinación,
-    // OUTPUT MODE, puerto MIDI, captura de progresiones, micrófono DEVICE):
-    // se descartan para que no vuelvan a guardarse con el proyecto
+    // OUTPUT MODE, puerto MIDI, captura de progresiones, micrófono DEVICE de la
+    // 1.1, canal MIDI de la 1.4): se descartan para que no vuelvan a guardarse
     for (int i = tree.getNumChildren(); --i >= 0;)
     {
         const auto child = tree.getChild (i);

@@ -1,16 +1,20 @@
 # ==============================================================================
-#  SmartKeys — compila, prueba y empaqueta los instaladores en la nube (GitHub Actions)
+#  SmartKeys (MIWN) — compila, prueba y empaqueta los instaladores en la nube
+#  (GitHub Actions)
 #
 #  macOS  : SmartKeys-<versión>-macOS.pkg          (Universal: Apple Silicon + Intel;
-#                                                    SmartKeys VST3 + AU + Standalone,
-#                                                    SmartKeys FX VST3 + AU)
-#  Windows: SmartKeys-<versión>-Windows-Setup.exe  (SmartKeys VST3 + Standalone,
-#                                                    SmartKeys FX VST3)
+#                                                    SmartKeys VST3 + AU + Standalone)
+#  Windows: SmartKeys-<versión>-Windows-Setup.exe  (SmartKeys VST3 + Standalone)
 #
-#  En cada máquina de pruebas se simula una versión ANTERIOR instalada y se
-#  comprueba que el instalador nuevo la borra antes de instalar. Después se
-#  validan los plugins instalados (auval de Apple + pluginval nivel 10, con las
-#  pruebas de editor: abrir y cerrar la ventana del plugin).
+#  En cada máquina de pruebas se simula una versión ANTERIOR instalada (también
+#  la vieja SmartKeys FX) y se comprueba que el instalador nuevo la borra antes
+#  de instalar. Después se validan los plugins instalados (auval de Apple +
+#  pluginval nivel 10, con las pruebas de editor: abrir y cerrar la ventana).
+#
+#  Micrófono del sistema (macOS): en otra Mac Intel se instala BlackHole (un
+#  cable de audio virtual), se reproduce un La3 de 220 Hz y se comprueba con el
+#  código real de CoreAudio que MIC VOICE lo lee SIN sidechain y sin cambiar la
+#  frecuencia ni el búfer del dispositivo.
 #
 #  Se ejecuta en cada push a main o manualmente desde la pestaña "Actions".
 #  Los instaladores se publican en la Release v<versión> y en la rama "installers".
@@ -26,7 +30,7 @@ permissions:
   contents: write
 
 env:
-  SK_VERSION: "1.4.0"
+  SK_VERSION: "1.5.0"
 
 jobs:
   macos:
@@ -67,10 +71,11 @@ jobs:
           done
           test -x "$RUNNER_TEMP/pkgx/au.pkg/Scripts/postinstall"
 
-      - name: Simular una versión ANTERIOR instalada (global y en ~/Library)
+      - name: Simular una versión ANTERIOR instalada (global y en ~/Library, con SmartKeys FX)
         run: |
           for d in "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3" "/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3" \
-                   "/Library/Audio/Plug-Ins/Components/SmartKeys.component" "/Applications/SmartKeys.app"; do
+                   "/Library/Audio/Plug-Ins/Components/SmartKeys.component" "/Library/Audio/Plug-Ins/Components/SmartKeys FX.component" \
+                   "/Applications/SmartKeys.app"; do
             sudo mkdir -p "$d/Contents" && sudo touch "$d/Contents/OLD_VERSION"
           done
           for d in "$HOME/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3" "$HOME/Library/Audio/Plug-Ins/Components/SmartKeys FX.component"; do
@@ -90,24 +95,29 @@ jobs:
           fi
           test ! -e "$HOME/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3"
           test ! -e "$HOME/Library/Audio/Plug-Ins/Components/SmartKeys FX.component"
+          # Un único plugin: la vieja SmartKeys FX no vuelve a instalarse
+          test ! -e "/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3"
+          test ! -e "/Library/Audio/Plug-Ins/Components/SmartKeys FX.component"
           FLDB="$HOME/Documents/Image-Line/FL Studio/Presets/Plugin database/Installed/Generators/VST3"
           # ~/Documents está protegido por TCC: si macOS no deja al instalador entrar, sólo se avisa
           if [ -e "$FLDB/SmartKeys.nfo" ]; then echo "AVISO: macOS no permitió borrar la ficha de FL Studio (TCC)"; else echo "Ficha de FL Studio borrada"; fi
           test -e "$FLDB/OtroPlugin.nfo"
           test -d "/Library/Audio/Plug-Ins/VST3/OtroPlugin.vst3"
           for b in "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3/Contents/MacOS/SmartKeys" \
-                   "/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3/Contents/MacOS/SmartKeys FX" \
                    "/Library/Audio/Plug-Ins/Components/SmartKeys.component/Contents/MacOS/SmartKeys" \
-                   "/Library/Audio/Plug-Ins/Components/SmartKeys FX.component/Contents/MacOS/SmartKeys FX" \
                    "/Applications/SmartKeys.app/Contents/MacOS/SmartKeys"; do
             lipo -info "$b"
             lipo "$b" -verify_arch arm64 x86_64
           done
-          for b in "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3" "/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3" \
-                   "/Library/Audio/Plug-Ins/Components/SmartKeys.component" "/Library/Audio/Plug-Ins/Components/SmartKeys FX.component" \
+          for b in "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3" "/Library/Audio/Plug-Ins/Components/SmartKeys.component" \
                    "/Applications/SmartKeys.app"; do
             codesign --verify --deep --strict --verbose=2 "$b"
+            # Fabricante MIWN y permiso de micrófono declarado
+            plutil -extract CFBundleIdentifier raw "$b/Contents/Info.plist" | grep -x "com.miwn.smartkeys"
+            plutil -extract NSMicrophoneUsageDescription raw "$b/Contents/Info.plist"
           done
+          plutil -extract NSHumanReadableCopyright raw "/Library/Audio/Plug-Ins/Components/SmartKeys.component/Contents/Info.plist" | grep MIWN
+          plutil -p "/Library/Audio/Plug-Ins/Components/SmartKeys.component/Contents/Info.plist" | grep -i "MIWN: SmartKeys"
 
       - name: Validar los Audio Units (auval de Apple)
         run: |
@@ -115,17 +125,16 @@ jobs:
           sleep 3
           auval -a | grep -i -e smartkeys -e Jpau || true
           auval -v aumu Smk1 Jpau
-          auval -v aumf Smkf Jpau
+          # SmartKeys FX ya no existe
+          if auval -a | grep -q Smkf; then echo "ERROR: sigue registrado SmartKeys FX"; exit 1; fi
 
       - name: Validar los VST3 (pluginval, nivel 10)
         run: |
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip
           unzip -q pluginval.zip
-          for p in "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3" "/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3"; do
-            # Con las pruebas de editor: abrir y cerrar la ventana del plugin (el cierre de la 1.2–1.3)
-            ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process \
-              --timeout-ms 300000 --validate "$p"
-          done
+          # Con las pruebas de editor: abrir y cerrar la ventana del plugin (el cierre de la 1.2–1.3)
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process \
+            --timeout-ms 300000 --validate "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3"
 
       - name: Mostrar el registro de compilación (si algo falló)
         if: failure()
@@ -155,10 +164,10 @@ jobs:
       - name: Instalar Inno Setup
         run: choco install innosetup -y --no-progress
 
-      - name: Compilar (SmartKeys VST3 + Standalone, SmartKeys FX VST3)
+      - name: Compilar (SmartKeys VST3 + Standalone)
         run: |
           cmake --version
-          cmake -B build -A x64 -DSMARTKEYS_BUILD_FX=ON -DSMARTKEYS_COPY_AFTER_BUILD=OFF
+          cmake -B build -A x64 -DSMARTKEYS_COPY_AFTER_BUILD=OFF
           cmake --build build --config Release --parallel
 
       - name: Generar el instalador .exe
@@ -186,24 +195,99 @@ jobs:
           $left = Get-ChildItem -Recurse -Filter OLD_VERSION -Path "$vst3", "${env:LOCALAPPDATA}\Programs\Common\VST3" -ErrorAction SilentlyContinue
           if ($left) { $left | ForEach-Object { $_.FullName }; Write-Error "Quedaron archivos de la versión anterior"; exit 1 }
           foreach ($f in @("$vst3\SmartKeys.vst3\Contents\x86_64-win\SmartKeys.vst3",
-                           "$vst3\SmartKeys FX.vst3\Contents\x86_64-win\SmartKeys FX.vst3",
                            "${env:ProgramFiles}\SmartKeys\SmartKeys.exe")) {
             if (-not (Test-Path $f)) { Write-Error "Falta $f"; exit 1 }
             Get-Item $f | Select-Object FullName, Length
           }
+          # Un único plugin: SmartKeys FX se borró y no vuelve
+          if (Test-Path "$vst3\SmartKeys FX.vst3") { Write-Error "Sigue instalado SmartKeys FX"; exit 1 }
+          # Fabricante MIWN en el ejecutable
+          $info = (Get-Item "$vst3\SmartKeys.vst3\Contents\x86_64-win\SmartKeys.vst3").VersionInfo
+          $info | Format-List CompanyName, LegalCopyright, FileVersion
+          if ($info.CompanyName -ne "MIWN") { Write-Error "El fabricante no es MIWN"; exit 1 }
 
       - name: Validar los VST3 instalados (pluginval, nivel 10)
         run: |
           Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pv
-          foreach ($p in @("${env:CommonProgramFiles}\VST3\SmartKeys.vst3", "${env:CommonProgramFiles}\VST3\SmartKeys FX.vst3")) {
-            .\pv\pluginval.exe --strictness-level 10 --validate-in-process --timeout-ms 300000 --validate "$p"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          .\pv\pluginval.exe --strictness-level 10 --validate-in-process --timeout-ms 300000 --validate "${env:CommonProgramFiles}\VST3\SmartKeys.vst3"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  macos-mic:
+    name: macOS — MIC VOICE sin sidechain (CoreAudio real)
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cable de audio virtual (BlackHole) como entrada y salida de macOS
+        run: |
+          brew install ninja switchaudio-osx || true
+          brew install --cask blackhole-2ch
+          sudo killall -9 coreaudiod || sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod || true
+          for i in $(seq 1 30); do SwitchAudioSource -a | grep -q "BlackHole 2ch" && break; sleep 1; done
+          SwitchAudioSource -a
+          SwitchAudioSource -t input  -s "BlackHole 2ch"
+          SwitchAudioSource -t output -s "BlackHole 2ch"
+          echo "entrada: $(SwitchAudioSource -c -t input)   salida: $(SwitchAudioSource -c -t output)"
+
+      - name: Compilar el VST3, la sonda del micrófono y las pruebas (Intel)
+        run: |
+          cmake -S . -B build-mic -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+                -DSMARTKEYS_BUILD_MIC_PROBE=ON -DSMARTKEYS_BUILD_HOST_TESTS=ON -DSMARTKEYS_BUILD_TESTS=ON
+          cmake --build build-mic --target SmartKeys_VST3 SmartKeysMicProbe SmartKeysHostTests SmartKeysTests
+
+      - name: Pruebas del núcleo
+        run: ./build-mic/SmartKeysTests_artefacts/Release/SmartKeysTests | tail -n 5
+
+      - name: Sonda — con el micrófono en silencio (nada cambia en el dispositivo)
+        env:
+          SMARTKEYS_ASSUME_MIC_PERMISSION: "1"
+        run: |
+          ./build-mic/SmartKeysMicProbe_artefacts/Release/SmartKeysMicProbe 3 | tee probe-silence.txt
+          echo "::notice title=Sonda en silencio::$(tr '\n' ' ' < probe-silence.txt)"
+
+      - name: Sonda — cantando La3 (220 Hz) por la entrada de macOS
+        env:
+          SMARTKEYS_ASSUME_MIC_PERMISSION: "1"
+        run: |
+          python3 - <<'PY'
+          import math, struct, wave
+          rate = 48000
+          with wave.open("la3.wav", "wb") as w:
+              w.setnchannels(2); w.setsampwidth(2); w.setframerate(rate)
+              frames = bytearray()
+              for i in range(rate * 90):
+                  v = int(0.3 * 32767 * math.sin(2 * math.pi * 220.0 * i / rate))
+                  frames += struct.pack("<hh", v, v)
+              w.writeframes(bytes(frames))
+          PY
+          afplay la3.wav & echo $! > afplay.pid
+          sleep 2
+          set +e
+          ./build-mic/SmartKeysMicProbe_artefacts/Release/SmartKeysMicProbe 4 --expect-hz 220 --require-audio | tee probe-a3.txt
+          code=${PIPESTATUS[0]}
+          echo "::notice title=Sonda con La3::$(tr '\n' ' ' < probe-a3.txt)"
+          exit $code
+
+      - name: SmartKeys (VST3) — MIC VOICE sin sidechain lee el micrófono del sistema
+        env:
+          SMARTKEYS_ASSUME_MIC_PERMISSION: "1"
+        run: |
+          kill -0 $(cat afplay.pid) 2>/dev/null || { afplay la3.wav & echo $! > afplay.pid; sleep 2; }
+          set +e
+          ./build-mic/SmartKeysHostTests_artefacts/Release/SmartKeysHostTests \
+            build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 --system-mic-only | tee host-mic.txt
+          code=${PIPESTATUS[0]}
+          echo "::notice title=MIC VOICE en el VST3::$(grep -E 'ok|FALLO|comprobaciones|->' host-mic.txt | tr '\n' ' ')"
+          kill $(cat afplay.pid) 2>/dev/null || true
+          exit $code
 
   publish:
     name: Publicar instaladores
-    needs: [ macos, windows ]
+    needs: [ macos, windows, macos-mic ]
+    # Sólo se publica desde main (las ramas de prueba compilan y prueban, nada más)
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -219,10 +303,11 @@ jobs:
         run: |
           ls -la dist
           TAG="v$SK_VERSION"
-          NOTES="Instaladores de SmartKeys $SK_VERSION compilados y probados automáticamente (commit ${GITHUB_SHA::7}).
-          - macOS: SmartKeys-$SK_VERSION-macOS.pkg (Apple Silicon + Intel; SmartKeys VST3/AU/Standalone + SmartKeys FX VST3/AU)
-          - Windows: SmartKeys-$SK_VERSION-Windows-Setup.exe (SmartKeys VST3/Standalone + SmartKeys FX VST3)
-          Ambos instaladores borran automáticamente cualquier versión anterior antes de instalar."
+          NOTES="Instaladores de SmartKeys $SK_VERSION (MIWN) compilados y probados automáticamente (commit ${GITHUB_SHA::7}).
+          - macOS: SmartKeys-$SK_VERSION-macOS.pkg (Apple Silicon + Intel; VST3, AU y Standalone)
+          - Windows: SmartKeys-$SK_VERSION-Windows-Setup.exe (VST3 y Standalone)
+          Un único plugin de instrumento: MIC VOICE lee el micrófono de macOS sin sidechain.
+          Ambos instaladores borran automáticamente cualquier versión anterior (y la vieja SmartKeys FX) antes de instalar."
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --notes "$NOTES" --repo "$GITHUB_REPOSITORY"

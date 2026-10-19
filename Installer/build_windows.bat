@@ -2,7 +2,7 @@
 REM ============================================================================
 REM  SmartKeys - compila los plugins, genera el instalador .exe (Windows x64)
 REM  y lo ejecuta. El instalador BORRA ANTES cualquier version anterior de
-REM  SmartKeys / SmartKeys FX y su ficha en la base de datos de FL Studio.
+REM  SmartKeys (y la vieja SmartKeys FX) y su ficha en la base de datos de FL Studio.
 REM
 REM  Requisitos: Visual Studio 2022 o posterior (C++), CMake 3.22+, Git, Inno Setup 6.3+
 REM  Uso: doble clic o "Installer\build_windows.bat" desde la carpeta del proyecto
@@ -10,15 +10,15 @@ REM       (anade "noinstall" para generar el .exe sin instalarlo)
 REM ============================================================================
 setlocal
 cd /d "%~dp0\.."
-set "VERSION=1.4.0"
+set "VERSION=1.5.0"
 set "SETUP=Installer\Output\SmartKeys-%VERSION%-Windows-Setup.exe"
 
 echo.
 echo [1/4] Configurando CMake...
-cmake -B build -A x64 -DSMARTKEYS_BUILD_FX=ON -DSMARTKEYS_COPY_AFTER_BUILD=OFF || goto :error
+cmake -B build -A x64 -DSMARTKEYS_COPY_AFTER_BUILD=OFF || goto :error
 
 echo.
-echo [2/4] Compilando Release (SmartKeys VST3 + Standalone, SmartKeys FX VST3)...
+echo [2/4] Compilando Release (SmartKeys VST3 + Standalone)...
 cmake --build build --config Release --parallel || goto :error
 
 echo.

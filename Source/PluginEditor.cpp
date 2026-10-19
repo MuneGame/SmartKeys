@@ -2,7 +2,7 @@
   ==============================================================================
 
     PluginEditor.cpp
-    SmartKeys — Interfaz gráfica vectorial (850 x 606 px, redimensionable).
+    SmartKeys (MIWN) — Interfaz gráfica vectorial (850 x 606 px, redimensionable).
 
   ==============================================================================
 */
@@ -895,6 +895,86 @@ void ChordDisplay::paint (juce::Graphics& g)
     }
 }
 
+//==============================================================================
+// VoiceReadout: "Mic: A3 -> Acorde: Am"
+//==============================================================================
+static float textWidth (const juce::Font& font, const juce::String& text)
+{
+   #if JUCE_MAJOR_VERSION >= 8
+    return juce::GlyphArrangement::getStringWidth (font, text);
+   #else
+    return font.getStringWidthFloat (text);
+   #endif
+}
+
+bool VoiceReadout::set (Kind k, const juce::String& a, const juce::String& b, const juce::String& c, bool warn)
+{
+    if (k == kind && a == note && b == label && c == result && warn == warning)
+        return false;
+
+    kind = k;
+    note = a;
+    label = b;
+    result = c;
+    warning = warn;
+    repaint();
+    return true;
+}
+
+void VoiceReadout::showNothing()                       { set (Kind::Nothing, {}, {}, {}, false); }
+void VoiceReadout::showIdle()                          { set (Kind::Idle, {}, {}, {}, false); }
+void VoiceReadout::showMessage (const juce::String& m, bool isWarning) { set (Kind::Message, m, {}, {}, isWarning); }
+void VoiceReadout::showVoice (const juce::String& n, const juce::String& k, const juce::String& r)
+{
+    set (Kind::Voice, n, k, r, false);
+}
+
+void VoiceReadout::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+
+    if (kind == Kind::Nothing)
+        return;
+
+    if (kind == Kind::Message)
+    {
+        g.setColour (warning ? Colours::warning : Colours::label);
+        g.setFont (makeFont (11.5f, true));
+        g.drawFittedText (note, r.toNearestInt(), juce::Justification::centredLeft, 1, 0.7f);
+        return;
+    }
+
+    // Mic: <nota>  ->  Acorde: <acorde>
+    const auto small = makeFont (11.5f, true);
+    const auto big = makeFont (17.0f, true);
+    float x = r.getX();
+
+    auto draw = [&] (const juce::String& text, const juce::Font& font, juce::Colour colour, float gapAfter)
+    {
+        const float w = textWidth (font, text);
+        g.setFont (font);
+        g.setColour (colour);
+        g.drawText (text, juce::Rectangle<float> (x, r.getY(), w + 2.0f, r.getHeight()), juce::Justification::centredLeft, false);
+        x += w + gapAfter;
+    };
+
+    draw ("Mic:", small, Colours::label, 6.0f);
+
+    if (kind == Kind::Idle || note.isEmpty())
+    {
+        draw ("--", big, Colours::disabled, 0.0f);
+        return;
+    }
+
+    draw (note, big, Colours::text, 10.0f);
+
+    if (result.isNotEmpty())
+    {
+        draw ("->", small, Colours::label, 10.0f);
+        draw (label + ":", small, Colours::label, 6.0f);
+        draw (result, big, Colours::accent, 0.0f);
+    }
+}
 
 } // namespace smartkeys::ui
 
@@ -932,18 +1012,12 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     content.painter = [this] (juce::Graphics& g) { paintContent (g); };
 
     //--------------------------------------------------------------------------
-    // Fila superior: modos + canal MIDI + GAIN
+    // Fila superior: modos + GAIN (la salida MIDI va siempre por el canal 1)
     modeSwitch.setButtonFontSize (12.5f);
     modeSwitch.setTooltips ({ u8 ("1 tecla = acorde diatónico (tríada / +8va / 7ª)"),
                               u8 ("1 tecla = 1 nota corregida a la escala"),
                               u8 ("1 tecla = acorde de 5 a 7 notas a dos manos (R&B / Neo-Soul)") });
     content.addAndMakeVisible (modeSwitch);
-
-    for (int ch = 1; ch <= 16; ++ch)
-        midiChannelBox.addItem ("CH " + juce::String (ch), ch);
-    midiChannelBox.setTooltip (u8 ("Canal MIDI de salida (1-16). Los acordes completos salen siempre por la salida MIDI "
-                                   "del plugin; el puerto se elige en el DAW (en FL Studio: engranaje > MIDI > Output port)."));
-    content.addAndMakeVisible (midiChannelBox);
 
     for (auto* s : { &gainSlider, &gateSlider })
     {
@@ -952,12 +1026,13 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
         s->setColour (juce::Slider::textBoxTextColourId, Colours::text);
         content.addAndMakeVisible (s);
     }
-    gainSlider.setTooltip (u8 ("Volumen del piano interno de SmartKeys (la salida MIDI no cambia)"));
+    gainSlider.setTooltip (u8 ("Volumen del piano interno de SmartKeys. Los acordes salen siempre por la salida MIDI "
+                               "del plugin, en el canal 1 (en FL Studio: engranaje > MIDI > Output port)."));
     gateSlider.setTooltip (u8 ("Umbral del micrófono: por debajo, la voz no dispara notas"));
 
     //--------------------------------------------------------------------------
-    // Tira MIC: controlador de voz en tiempo real (siempre por el bus de entrada
-    // del plugin: nunca se abren dispositivos de audio propios dentro del DAW)
+    // Tira MIC: controlador de voz en tiempo real. La voz llega por la entrada
+    // del plugin si el DAW la manda; si no, SmartKeys lee el micrófono de macOS.
     micButton.setClickingTogglesState (true);
     micButton.getProperties().set (fontSizeProperty, 12.0f);
     micButton.onStateChange = [this]
@@ -966,22 +1041,20 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
         if (micButton.getButtonText() != text)
             micButton.setButtonText (text);
     };
-    const bool standaloneApp = audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
-    micButton.setTooltip (u8 ("Tu voz dispara notas o acordes (según el modo) en tiempo real.\n")
-                          + (SmartKeysAudioProcessor::isFxVariant
-                                 ? u8 ("SmartKeys FX escucha la pista del Mixer donde está insertado (tu micrófono).")
-                                 : standaloneApp ? u8 ("La app usa la entrada elegida en Options > Audio/MIDI Settings.")
-                                                 : u8 ("El instrumento escucha la voz por su entrada sidechain. En FL Studio "
-                                                       "lo más fácil es poner SmartKeys FX en la pista del micrófono del Mixer.")));
+   #if JUCE_MAC
+    micButton.setTooltip (u8 ("Canta o tararea: tu voz, corregida a KEY y SCALE, dispara la nota o el acorde del modo "
+                              "elegido en tiempo real (suena el piano y sale por MIDI).\n"
+                              "SmartKeys lee la entrada de audio activa de macOS (Ajustes del Sistema > Sonido > Entrada); "
+                              "si el DAW le manda audio por su entrada (sidechain), usa ese."));
+   #else
+    micButton.setTooltip (u8 ("Canta o tararea: tu voz, corregida a KEY y SCALE, dispara la nota o el acorde del modo "
+                              "elegido en tiempo real (suena el piano y sale por MIDI).\n"
+                              "En Windows la voz entra por la entrada sidechain del plugin."));
+   #endif
     content.addAndMakeVisible (micButton);
 
     content.addAndMakeVisible (micMeter);
-
-    micStatusLabel.setFont (makeFont (11.5f, true));
-    micStatusLabel.setJustificationType (juce::Justification::centredLeft);
-    micStatusLabel.setMinimumHorizontalScale (0.7f);
-    micStatusLabel.setColour (juce::Label::textColourId, Colours::label);
-    content.addAndMakeVisible (micStatusLabel);
+    content.addAndMakeVisible (voiceReadout);
 
     //--------------------------------------------------------------------------
     // KEY · SCALE · ESCALA
@@ -1033,7 +1106,6 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     gateAttach  = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::micGate), gateSlider);
     strumAttach = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::strumMs), strumKnob);
     strumKnob.setDoubleClickReturnValue (true, 0.0);
-    midiChannelAttach = std::make_unique<PolledComboBoxAttachment> (*apvts.getParameter (ParamIDs::midiOutCh), midiChannelBox);
     micAttach = std::make_unique<PolledButtonAttachment> (*apvts.getParameter (ParamIDs::micOn), micButton);
     micButton.onStateChange();
 
@@ -1073,7 +1145,6 @@ SmartKeysAudioProcessorEditor::~SmartKeysAudioProcessorEditor()
     // 2) Los enlaces se destruyen antes que los controles que usan (además ya
     //    van declarados después de ellos y guardan cada control con SafePointer)
     micAttach.reset();
-    midiChannelAttach.reset();
     strumAttach.reset();
     gateAttach.reset();
     gainAttach.reset();
@@ -1103,32 +1174,33 @@ void SmartKeysAudioProcessorEditor::paintContent (juce::Graphics& g)
     g.setColour (Colours::border);
     g.fillRect (64, 0, kWidth - 64, 1);
 
-    // Título
+    // Título + punto de acento + "FROM MIWN"
     g.setColour (Colours::text);
     g.setFont (makeFont (22.0f, true));
     g.drawText ("SMARTKEYS", 18, 12, 140, 26, juce::Justification::centredLeft, false);
-    if (SmartKeysAudioProcessor::isFxVariant)
+    g.setColour (Colours::accent);
+    g.fillEllipse (150.0f, 22.0f, 7.0f, 7.0f);
+
     {
-        drawGlowBox (g, { 150.0f, 16.0f, 28.0f, 17.0f }, 4.0f, Colours::accent, false);
-        g.setColour (Colours::white);
-        g.setFont (makeFont (11.0f, true));
-        g.drawText ("FX", 150, 16, 28, 17, juce::Justification::centred, false);
+        // Mayúsculas con un espaciado sutil: "FROM" en gris, la marca en grafito
+        const auto from = makeFont (10.0f, true).withExtraKerningFactor (0.2f);
+        const auto brand = makeFont (10.5f, true).withExtraKerningFactor (0.2f);
+        const float fromWidth = textWidth (from, "FROM");
+        g.setFont (from);
+        g.setColour (Colours::label);
+        g.drawText ("FROM", juce::Rectangle<float> (19.0f, 36.0f, fromWidth + 4.0f, 13.0f), juce::Justification::centredLeft, false);
+        g.setFont (brand);
+        g.setColour (Colours::charcoal);
+        g.drawText ("MIWN", juce::Rectangle<float> (19.0f + fromWidth + 6.0f, 36.0f, 80.0f, 13.0f),
+                    juce::Justification::centredLeft, false);
     }
-    else
-    {
-        g.setColour (Colours::accent);
-        g.fillEllipse (150.0f, 22.0f, 7.0f, 7.0f);
-    }
-    g.setColour (Colours::label);
-    g.setFont (makeFont (10.0f, true));
-    g.drawText (u8 ("PIANO  ·  CHORDS  ·  VOICE"), 18, 36, 170, 12, juce::Justification::centredLeft, false);
 
     // Rótulos de la fila superior
+    g.setColour (Colours::label);
     g.setFont (makeFont (8.5f, true));
     g.drawText ("M O D E", 194, 2, 120, 10, juce::Justification::centredLeft, false);
     g.setFont (makeFont (11.0f, true));
-    g.drawText ("MIDI", 574, 12, 34, 34, juce::Justification::centredLeft, false);
-    g.drawText ("GAIN", 690, 12, 36, 34, juce::Justification::centredLeft, false);
+    g.drawText ("GAIN", 654, 12, 36, 34, juce::Justification::centredLeft, false);
 
     // Tarjetas
     auto card = [&] (juce::Rectangle<float> r)
@@ -1173,16 +1245,15 @@ void SmartKeysAudioProcessorEditor::resized()
 
 void SmartKeysAudioProcessorEditor::layoutContent()
 {
-    // Fila superior: título | SMART CHORDS · SINGLE NOTES · COMPLEX CHORDS | MIDI CH | GAIN
-    modeSwitch.setBounds (190, 12, 378, 34);
-    midiChannelBox.setBounds (606, 17, 76, 24);
-    gainSlider.setBounds (724, 15, 110, 28);
+    // Fila superior: título | SMART CHORDS · SINGLE NOTES · COMPLEX CHORDS | GAIN
+    modeSwitch.setBounds (190, 12, 444, 34);
+    gainSlider.setBounds (692, 15, 142, 28);
 
-    // Tira MIC: MIC VOICE | medidor | GATE | estado
+    // Tira MIC: MIC VOICE | medidor | GATE | Mic: A3 -> Acorde: Am
     micButton.setBounds (22, 64, 150, 28);
     micMeter.setBounds (184, 70, 150, 16);
     gateSlider.setBounds (378, 66, 140, 24);
-    micStatusLabel.setBounds (528, 64, 300, 28);
+    voiceReadout.setBounds (534, 62, 292, 32);
 
     // KEY · SCALE · ESCALA
     keySelector.setBounds (30, (int) kKeyCardY + 28, 382, 132);
@@ -1239,7 +1310,7 @@ void SmartKeysAudioProcessorEditor::timerCallback()
     micMeter.setState (audioProcessor.getMicLevelDb(), apvts.getRawParameterValue (ParamIDs::micGate)->load(),
                        tracker.gateOpen.load(), audioProcessor.isMicSourceAvailable());
 
-    updateMicStatus();
+    updateVoiceReadout();
     updateStrumLabel();
     updateDisplay();
 }
@@ -1257,57 +1328,121 @@ void SmartKeysAudioProcessorEditor::updateStrumLabel()
     }
 }
 
-void SmartKeysAudioProcessorEditor::updateMicStatus()
+void SmartKeysAudioProcessorEditor::updateVoiceReadout()
 {
+    using smartkeys::MicDeviceState;
+
     const bool micOn = apvts.getRawParameterValue (ParamIDs::micOn)->load() > 0.5f;
-    const auto& tracker = audioProcessor.getVoiceTracker();
-    const bool standalone = audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
+    const int source = audioProcessor.getVoiceSource();
+    const auto micState = audioProcessor.getSystemMicState();
+    const bool inputSilent = audioProcessor.getMicLevelDb() <= -100.0f + 0.01f;
 
-    juce::String text;
-    auto colour = Colours::label;
-
-    if (! audioProcessor.isMicSourceAvailable() || audioProcessor.getMicLevelDb() < -90.0f)
+    auto setTip = [this] (const juce::String& tip)
     {
-        text = SmartKeysAudioProcessor::isFxVariant ? u8 ("Sin señal: revisa la entrada de la pista")
-             : standalone ? u8 ("Sin señal: elige el micro en Options")
-                          : u8 ("Sin señal: usa el sidechain o SmartKeys FX");
+        if (voiceReadout.getTooltip() != tip)
+            voiceReadout.setTooltip (tip);
+    };
+
+    if (! micOn)
+    {
+        setTip ({});
+        voiceReadout.showNothing();
+        return;
     }
-    else if (! tracker.gateOpen.load())
+
+    // Avisos sólo si hace falta el micrófono del sistema y no se puede usar
+    if (source != VoiceSource::SystemMic && inputSilent)
     {
-        text = u8 ("Mic: por debajo del GATE");
+        const juce::String host (juce::PluginHostType().getHostDescription());
+        const auto hostName = host == "Unknown" ? u8 ("el programa") : host;
+
+        auto warn = [&] (const juce::String& message, const juce::String& tip, bool isWarning)
+        {
+            setTip (tip);
+            voiceReadout.showMessage (message, isWarning);
+        };
+
+        switch (micState)
+        {
+            case MicDeviceState::WaitingPermission:
+                warn (u8 ("Permite el micrófono en el aviso de macOS"),
+                      u8 ("macOS pregunta si ") + hostName + u8 (" puede usar el micrófono: pulsa Permitir."), false);
+                return;
+            case MicDeviceState::PermissionDenied:
+                warn (u8 ("Activa ") + hostName + u8 (" en Privacidad > Micrófono"),
+                      u8 ("macOS no deja que ") + hostName + u8 (" use el micrófono. Abre Ajustes del Sistema > "
+                      "Privacidad y seguridad > Micrófono, activa ") + hostName + u8 (" y vuelve a abrirlo."), true);
+                return;
+            case MicDeviceState::HostNotAllowed:
+                warn (u8 ("Este programa no permite usar el micrófono"),
+                      u8 ("La aplicación que carga SmartKeys no declara el uso del micrófono, así que macOS no se lo "
+                          "permitiría. Usa la entrada sidechain del plugin."), true);
+                return;
+            case MicDeviceState::NoDevice:
+                warn (u8 ("No hay ninguna entrada de audio en macOS"),
+                      u8 ("Conecta un micrófono o elige uno en Ajustes del Sistema > Sonido > Entrada."), true);
+                return;
+            case MicDeviceState::BluetoothOnly:
+                warn (u8 ("Micro Bluetooth: elige otra entrada en Sonido"),
+                      u8 ("Abrir el micrófono de unos auriculares Bluetooth (AirPods) les cambia el sonido a modo "
+                          "llamada. Elige el micrófono de la Mac o tu interfaz en Ajustes del Sistema > Sonido > Entrada."), true);
+                return;
+            case MicDeviceState::Error:
+                warn (u8 ("No se pudo abrir el micrófono (reintentando)"),
+                      u8 ("La entrada de audio de macOS no se pudo abrir; SmartKeys lo vuelve a intentar cada pocos segundos."), true);
+                return;
+            case MicDeviceState::Unsupported:
+               #if JUCE_WINDOWS
+                warn (u8 ("Mic: sin señal · envía la voz por el sidechain"),
+                      u8 ("En Windows la voz entra por la entrada sidechain del plugin."), false);
+                return;
+               #else
+                break;
+               #endif
+            case MicDeviceState::Off:
+            case MicDeviceState::Running:
+                break;
+        }
+    }
+
+    // Ayuda al pasar el ratón: de dónde sale la voz
+    if (source == VoiceSource::SystemMic)
+    {
+        auto tip = u8 ("Micrófono: ") + audioProcessor.getSystemMicDeviceName() + "  ("
+                   + juce::String (audioProcessor.getSystemMicSampleRate() / 1000.0, 1) + " kHz, canal 1)";
+        if (audioProcessor.isSystemMicReplacingBluetooth())
+            tip << u8 ("\nLa entrada de macOS es Bluetooth: se usa el micrófono de la Mac para no cambiar el sonido de los auriculares.");
+        setTip (tip);
     }
     else
     {
-        const float detected = tracker.detectedMidiNote.load();
-        if (detected < 0.0f)
+        setTip (source == VoiceSource::PluginInput && ! inputSilent
+                    ? u8 ("La voz llega por la entrada del plugin (la manda el DAW).") : juce::String());
+    }
+
+    // "Mic: A3 -> Acorde: Am": la nota corregida que dispara y lo que suena
+    const auto& tracker = audioProcessor.getVoiceTracker();
+    const int mode = juce::jlimit (0, 2, (int) apvts.getRawParameterValue (ParamIDs::mode)->load());
+
+    if (audioProcessor.isVoiceChordSounding())
+    {
+        const auto ev = smartkeys::MidiOutputRouter::decodeLastEvent (audioProcessor.getLastVoiceEventPacked());
+        if (ev.valid && ! ev.notes.empty())
         {
-            text = u8 ("Mic: escuchando...");
-        }
-        else
-        {
-            const auto noteName = displayEngine.getNoteName ((int) std::lround (detected));
-            if (! micOn)
-            {
-                text = "Mic: " + noteName + u8 ("  ·  activa MIC VOICE");
-            }
-            else if (audioProcessor.isVoiceChordSounding())
-            {
-                const auto ev = smartkeys::MidiOutputRouter::decodeLastEvent (audioProcessor.getLastVoiceEventPacked());
-                text = "Mic: " + noteName + " -> " + displayEngine.getChordName (ev.notes);
-                colour = Colours::accent;
-            }
+            const auto noteName = displayEngine.getNoteName (ev.triggerNote);
+            if (ev.mode == 1 || ev.notes.size() == 1)
+                voiceReadout.showVoice (noteName, "Nota", displayEngine.getNoteName (ev.notes.front()));
             else
-            {
-                text = "Mic: " + noteName;
-                colour = Colours::accent;
-            }
+                voiceReadout.showVoice (noteName, "Acorde", displayEngine.getChordName (ev.notes));
+            return;
         }
     }
 
-    if (micStatusLabel.getText() != text)
-        micStatusLabel.setText (text, juce::dontSendNotification);
-    if (micStatusLabel.findColour (juce::Label::textColourId) != colour)
-        micStatusLabel.setColour (juce::Label::textColourId, colour);
+    const float detected = tracker.gateOpen.load() ? tracker.detectedMidiNote.load() : -1.0f;
+    if (detected >= 0.0f)
+        voiceReadout.showVoice (displayEngine.getNoteName ((int) std::lround (detected)), mode == 1 ? "Nota" : "Acorde", {});
+    else
+        voiceReadout.showIdle();
 }
 
 void SmartKeysAudioProcessorEditor::updateDisplay()

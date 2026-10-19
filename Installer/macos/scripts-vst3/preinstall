@@ -7,4 +7,5 @@ if [ -f "$SK_DIR/cleanup_common.sh" ]; then source "$SK_DIR/cleanup_common.sh"; 
 sk_log "== preinstall VST3 =="
 sk_remove_bundles "VST3" ".vst3"
 sk_forget_in_fl_studio
+sk_forget_old_receipts
 exit 0

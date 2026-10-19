@@ -4,9 +4,10 @@
 #  .pkg para macOS con pkgbuild + productbuild.
 #
 #  Instala automáticamente (borrando ANTES cualquier versión anterior en
-#  /Library y en ~/Library de cada usuario, con scripts preinstall):
-#    VST3 -> /Library/Audio/Plug-Ins/VST3/SmartKeys.vst3 y "SmartKeys FX.vst3"
-#    AU   -> /Library/Audio/Plug-Ins/Components/SmartKeys.component y "SmartKeys FX.component"
+#  /Library y en ~/Library de cada usuario, incluida la vieja "SmartKeys FX"
+#  de la 1.1–1.4, con scripts preinstall):
+#    VST3 -> /Library/Audio/Plug-Ins/VST3/SmartKeys.vst3
+#    AU   -> /Library/Audio/Plug-Ins/Components/SmartKeys.component
 #    App  -> /Applications/SmartKeys.app                        (opcional)
 #  y refresca la caché de Audio Units (killall AudioComponentRegistrar).
 #
@@ -21,8 +22,8 @@
 # ==============================================================================
 set -euo pipefail
 
-VERSION="1.4.0"
-ID_BASE="com.jeanpaulaudio.smartkeys"
+VERSION="1.5.0"
+ID_BASE="com.miwn.smartkeys"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
@@ -30,22 +31,19 @@ WORK="$ROOT/Installer/.pkgwork"
 OUT="$ROOT/Installer/Output"
 SCRIPTS_SRC="$ROOT/Installer/macos"
 
-echo "==> [1/5] Compilando Release (arm64 + x86_64): SmartKeys + SmartKeys FX"
+echo "==> [1/5] Compilando Release (arm64 + x86_64): SmartKeys (VST3 + AU + Standalone)"
 # Ninja si está instalado; si no, Makefiles (sólo requiere las Command Line Tools)
 GENERATOR="Unix Makefiles"
 if command -v ninja >/dev/null 2>&1; then GENERATOR="Ninja"; fi
 cmake -S "$ROOT" -B "$BUILD" -G "$GENERATOR" -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DSMARTKEYS_BUILD_FX=ON -DSMARTKEYS_COPY_AFTER_BUILD=OFF
+      -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DSMARTKEYS_COPY_AFTER_BUILD=OFF
 cmake --build "$BUILD" --config Release --parallel
 
 ART="$BUILD/SmartKeys_artefacts/Release"
-ART_FX="$BUILD/SmartKeysFX_artefacts/Release"
 VST3="$ART/VST3/SmartKeys.vst3"
 AU="$ART/AU/SmartKeys.component"
 APP="$ART/Standalone/SmartKeys.app"
-VST3_FX="$ART_FX/VST3/SmartKeys FX.vst3"
-AU_FX="$ART_FX/AU/SmartKeys FX.component"
-for b in "$VST3" "$AU" "$APP" "$VST3_FX" "$AU_FX"; do
+for b in "$VST3" "$AU" "$APP"; do
     [[ -d "$b" ]] || { echo "No se encontró $b"; exit 1; }
 done
 
@@ -67,13 +65,13 @@ cat > "$ENTITLEMENTS" <<'EOS'
 </plist>
 EOS
 
-for b in "$VST3" "$AU" "$VST3_FX" "$AU_FX"; do
+for b in "$VST3" "$AU"; do
     codesign --force --deep --options runtime "$TIMESTAMP" --sign "$SIGN_ID" "$b"
 done
 codesign --force --deep --options runtime "$TIMESTAMP" --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$APP"
 rm -f "$ENTITLEMENTS"
 
-for b in "$VST3" "$AU" "$APP" "$VST3_FX" "$AU_FX"; do
+for b in "$VST3" "$AU" "$APP"; do
     codesign --verify --deep --strict "$b"
 done
 
@@ -82,11 +80,9 @@ rm -rf "$WORK" && mkdir -p "$WORK"/{vst3,au,app,pkgs} "$OUT"
 mkdir -p "$WORK/vst3/Library/Audio/Plug-Ins/VST3" \
          "$WORK/au/Library/Audio/Plug-Ins/Components" \
          "$WORK/app/Applications"
-ditto "$VST3"    "$WORK/vst3/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3"
-ditto "$VST3_FX" "$WORK/vst3/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3"
-ditto "$AU"      "$WORK/au/Library/Audio/Plug-Ins/Components/SmartKeys.component"
-ditto "$AU_FX"   "$WORK/au/Library/Audio/Plug-Ins/Components/SmartKeys FX.component"
-ditto "$APP"     "$WORK/app/Applications/SmartKeys.app"
+ditto "$VST3" "$WORK/vst3/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3"
+ditto "$AU"   "$WORK/au/Library/Audio/Plug-Ins/Components/SmartKeys.component"
+ditto "$APP"  "$WORK/app/Applications/SmartKeys.app"
 
 # Cada componente lleva su preinstall (borra SOLO su tipo de archivo) + funciones comunes
 for c in vst3 au app; do
@@ -119,7 +115,7 @@ build_component app  "$WORK/app"  "$ID_BASE.app"  "$WORK/scripts-app"
 cat > "$WORK/distribution.xml" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>SmartKeys $VERSION</title>
+    <title>SmartKeys $VERSION (MIWN)</title>
     <options customize="allow" require-scripts="true" hostArchitectures="arm64,x86_64"/>
     <domains enable_localSystem="true"/>
     <choices-outline>
@@ -127,10 +123,10 @@ cat > "$WORK/distribution.xml" <<EOF
         <line choice="au"/>
         <line choice="app"/>
     </choices-outline>
-    <choice id="vst3" title="VST3: SmartKeys + SmartKeys FX" description="/Library/Audio/Plug-Ins/VST3 (borra antes la versión anterior)">
+    <choice id="vst3" title="VST3: SmartKeys" description="/Library/Audio/Plug-Ins/VST3 (borra antes la versión anterior y SmartKeys FX)">
         <pkg-ref id="$ID_BASE.vst3"/>
     </choice>
-    <choice id="au" title="Audio Unit: SmartKeys + SmartKeys FX" description="/Library/Audio/Plug-Ins/Components (borra antes la versión anterior y la caché AU)">
+    <choice id="au" title="Audio Unit: SmartKeys" description="/Library/Audio/Plug-Ins/Components (borra antes la versión anterior, SmartKeys FX y la caché AU)">
         <pkg-ref id="$ID_BASE.au"/>
     </choice>
     <choice id="app" title="App SmartKeys (Standalone)" description="/Applications">
