@@ -294,7 +294,7 @@ jobs:
           ./build-mic/SmartKeysHostTests_artefacts/Release/SmartKeysHostTests \
             build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 --port-only | tee host-port.txt
           code=${PIPESTATUS[0]}
-          echo "::notice title=SmartKeys Chords (CoreMIDI)::$(grep -E 'ok|FALLO|comprobaciones|->|teclado:|ecos' host-port.txt | tr '\n' ' ')"
+          echo "::notice title=SmartKeys Chords (CoreMIDI)::$(grep -E 'ok|FALLO|comprobaciones|->|teclado:|trozos|ecos|disponible' host-port.txt | tr '\n' ' ')"
           exit $code
 
   publish:

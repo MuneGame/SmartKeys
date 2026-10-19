@@ -1098,8 +1098,11 @@ private:
         if (m.getRawDataSize() != 3)
             return;
         const auto* d = m.getRawData();
+        // La hora del paquete CoreMIDI = cuándo lo envió el teclado (sin el retraso
+        // de entrega del servidor MIDI, que en una máquina virtual varía mucho)
+        const double sentMs = m.getTimeStamp() > 0.0 ? m.getTimeStamp() * 1000.0 : Time::getMillisecondCounterHiRes();
         const ScopedLock sl (lock);
-        received.push_back ({ Time::getMillisecondCounterHiRes(), d[0], d[1], d[2] });
+        received.push_back ({ sentMs, d[0], d[1], d[2] });
     }
 
     std::unique_ptr<MidiInput> input;

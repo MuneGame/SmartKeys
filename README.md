@@ -20,6 +20,8 @@
 
 **Logotipo de MIWN.** Arriba a la izquierda, junto a `SMARTKEYS / FROM MIWN`: una placa rosa (`#EC1368`) con una onda armónica blanca que traza la "M" sobre las barras de nivel de un estudio. Es vectorial (`juce::Path`), así que se ve nítido con cualquier tamaño de ventana.
 
+![Logotipo de MIWN (ventana al doble de tamaño)](docs/miwn_logo.png)
+
 **`MIDI ● SmartKeys Chords`**, arriba a la derecha: el punto rosa indica que el teclado está activo. Pasa el ratón por encima para ver los pasos de FL Studio; un clic lo apaga o lo enciende (se guarda con el proyecto). En FL Studio y en la app viene encendido; en otros DAW empieza apagado, porque Logic o Ableton meterían cualquier teclado nuevo en la grabación de la pista. Si FL devuelve el teclado al propio SmartKeys, dice `· eco`: SmartKeys ignora ese eco y no se forma ningún bucle.
 
 La 1.5.0 trajo `MIC VOICE` sin sidechain (SmartKeys lee él mismo el micrófono de macOS), la marca MIWN, un único plugin (sin SmartKeys FX) y la salida MIDI fija en el canal 1. La 1.4.0 corrigió el cierre de FL Studio al cerrar la ventana de SmartKeys ([por qué se cerraba](#por-qué-se-cerraba-fl-studio-12--13)). La 1.3.0 dejó el `processBlock` sin asignaciones de memoria y trajo el STRUM de 0 a 200 ms; la 1.2.0, la salida MIDI siempre activa y la ventana redimensionable; la 1.1.0, la limpieza automática de versiones anteriores al instalar.

@@ -85,8 +85,11 @@ void ChordMidiPort::open()
     output = juce::MidiOutput::createNewDevice (getDeviceName());
    #endif
 
+    // Hilo de tiempo real (como el de un reloj MIDI): se despierta a su hora aunque
+    // el sistema agrupe temporizadores. Si el sistema no lo permite, prioridad alta.
     if (isAvailable() && ! isThreadRunning())
-        startThread (juce::Thread::Priority::high);
+        if (! startRealtimeThread (juce::Thread::RealtimeOptions{}.withPeriodMs (1.0).withMaximumProcessingTimeMs (0.5)))
+            startThread (juce::Thread::Priority::high);
 }
 
 bool ChordMidiPort::retryOpen()
