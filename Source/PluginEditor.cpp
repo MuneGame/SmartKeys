@@ -2,7 +2,7 @@
   ==============================================================================
 
     PluginEditor.cpp
-    SmartKeys — Interfaz gráfica vectorial (850 x 686 px, redimensionable).
+    SmartKeys — Interfaz gráfica vectorial (850 x 606 px, redimensionable).
 
   ==============================================================================
 */
@@ -833,6 +833,13 @@ void PianoVisualizer::mouseUp (const juce::MouseEvent&)
     mouseNote = -1;
 }
 
+void PianoVisualizer::releaseMouseNote()
+{
+    if (mouseNote >= 0)
+        processor.pushScreenNote (mouseNote, 0, false);
+    mouseNote = -1;
+}
+
 //==============================================================================
 // ChordDisplay
 //==============================================================================
@@ -888,123 +895,6 @@ void ChordDisplay::paint (juce::Graphics& g)
     }
 }
 
-//==============================================================================
-// DragChordsButton
-//==============================================================================
-DragChordsButton::DragChordsButton (SmartKeysAudioProcessor& p, std::function<juce::String()> baseNameProvider)
-    : processor (p), makeBaseName (std::move (baseNameProvider))
-{
-    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
-}
-
-void DragChordsButton::setCount (int numChords, bool isFull, bool isCapturing)
-{
-    bool needsRepaint = (numChords != count || isFull != full || isCapturing != capturing);
-    capturing = isCapturing;
-
-    if (flashText.isNotEmpty() && juce::Time::getMillisecondCounter() >= flashUntilMs)
-    {
-        flashText.clear();
-        needsRepaint = true;
-    }
-
-    count = numChords;
-    full = isFull;
-    if (needsRepaint)
-        repaint();
-}
-
-void DragChordsButton::paint (juce::Graphics& g)
-{
-    auto r = getLocalBounds().toFloat().reduced (3.0f);
-    const bool enabled = count > 0;
-
-    if (enabled)
-    {
-        const auto fill = pressed ? Colours::accent.darker (0.15f) : (hover ? Colours::accent.brighter (0.08f) : Colours::accent);
-        drawGlowBox (g, r, 4.0f, fill, hover);
-    }
-    else
-    {
-        g.setColour (Colours::softPanel);
-        g.fillRoundedRectangle (r, 4.0f);
-        g.setColour (Colours::border);
-        g.drawRoundedRectangle (r, 4.0f, 1.0f);
-    }
-
-    // Icono: tres barras (las notas de un acorde)
-    auto content = r.reduced (8.0f, 0.0f);
-    auto icon = content.removeFromLeft (16.0f).withSizeKeepingCentre (14.0f, 13.0f);
-    g.setColour (enabled ? Colours::white : Colours::disabled);
-    for (int i = 0; i < 3; ++i)
-        g.fillRoundedRectangle (icon.getX() + (float) (i % 2) * 3.0f, icon.getY() + (float) i * 4.5f,
-                                icon.getWidth() - 3.0f, 3.0f, 1.0f);
-
-    juce::String text;
-    if (flashText.isNotEmpty() && juce::Time::getMillisecondCounter() < flashUntilMs)
-        text = flashText;
-    else if (capturing)
-        text = u8 ("● GRABANDO ACORDES (") + juce::String (count) + ")";
-    else if (count == 0)
-        text = "DRAG CHORDS TO PIANO ROLL";
-    else
-        text = "DRAG CHORDS TO PIANO ROLL (" + juce::String (count) + (full ? "+)" : ")");
-
-    g.setFont (makeFont (11.5f, true));
-    g.drawFittedText (text, content.toNearestInt().withTrimmedLeft (4), juce::Justification::centred, 1, 0.65f);
-}
-
-void DragChordsButton::mouseEnter (const juce::MouseEvent&) { hover = true;  repaint(); }
-void DragChordsButton::mouseExit (const juce::MouseEvent&)  { hover = false; repaint(); }
-
-void DragChordsButton::mouseDown (const juce::MouseEvent&)
-{
-    pressed = true;
-    dragStarted = false;
-    repaint();
-}
-
-void DragChordsButton::mouseDrag (const juce::MouseEvent& e)
-{
-    if (dragStarted || count == 0 || e.getDistanceFromDragStart() < 6)
-        return;
-
-    dragStarted = true;
-    pressed = false;
-    repaint();
-
-    const auto file = exportNow();
-    if (file.existsAsFile())
-        juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this);
-}
-
-void DragChordsButton::mouseUp (const juce::MouseEvent& e)
-{
-    const bool wasClick = pressed && ! dragStarted && getLocalBounds().contains (e.getPosition());
-    pressed = false;
-
-    if (wasClick && count > 0)
-    {
-        const auto file = exportNow();
-        if (file.existsAsFile())
-        {
-            file.revealToUser();
-            flashText = "GUARDADO: " + file.getFileName();
-        }
-        else
-        {
-            flashText = "NO SE PUDO GUARDAR EL .MID";
-        }
-        flashUntilMs = juce::Time::getMillisecondCounter() + 2500;
-    }
-    repaint();
-}
-
-juce::File DragChordsButton::exportNow()
-{
-    return processor.exportProgression (makeBaseName != nullptr ? makeBaseName() : juce::String ("SmartKeys Chords"));
-}
-
 
 } // namespace smartkeys::ui
 
@@ -1013,251 +903,94 @@ juce::File DragChordsButton::exportNow()
 //==============================================================================
 using namespace smartkeys::ui;
 
+namespace
+{
+    // Coordenadas del contenido (850 x 606): tarjetas y filas
+    constexpr float kMicCardY   = 56.0f,  kMicCardH   = 44.0f;
+    constexpr float kKeyCardY   = 108.0f, kKeyCardH   = 170.0f;
+    constexpr float kScaleBarY  = 286.0f, kScaleBarH  = 84.0f;
+    constexpr float kKeyboardY  = 378.0f, kKeyboardH  = 218.0f;
+}
+
 SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProcessor& p)
     : AudioProcessorEditor (&p),
       audioProcessor (p),
       apvts (p.getValueTreeState()),
       modeSwitch (*apvts.getParameter (ParamIDs::mode), { "SMART CHORDS", "SINGLE NOTES", "COMPLEX CHORDS" }),
-      outputSwitch (*apvts.getParameter (ParamIDs::outputMode), { "PIANO + MIDI", "MIDI OUT" }),
       keySelector (*apvts.getParameter (ParamIDs::rootKey)),
       scaleSelector (*apvts.getParameter (ParamIDs::scale)),
       scaleBar (p, *apvts.getParameter (ParamIDs::scale)),
-      lane (p),
-      palette (p, lane),
       piano (p),
       chordTypeSwitch (*apvts.getParameter (ParamIDs::chordExt), { "TRIAD", "+8VA", "7TH" }),
       variationSwitch (*apvts.getParameter (ParamIDs::complexVar), { "LUSH 7/9", "NEO-SOUL", "CINEMATIC" }),
-      strumDirSwitch (*apvts.getParameter (ParamIDs::strumDir), { u8 ("ASC ▲"), u8 ("DESC ▼") }),
-      dragButton (p, [this] { return makeExportBaseName(); })
+      strumDirSwitch (*apvts.getParameter (ParamIDs::strumDir), { u8 ("ASC ▲"), u8 ("DESC ▼") })
 {
+    // Todos los controles ya existen (son miembros directos): aquí sólo se
+    // configuran y se añaden. setSize() va al final del constructor.
     setLookAndFeel (&lookAndFeel);
     addAndMakeVisible (content);
     content.painter = [this] (juce::Graphics& g) { paintContent (g); };
 
-    auto setupToggle = [this] (juce::TextButton& b, const juce::String& prefix, bool showState, float fontSize)
-    {
-        b.setClickingTogglesState (true);
-        b.getProperties().set (fontSizeProperty, fontSize);
-        b.onStateChange = [&b, prefix, showState]
-        {
-            const auto text = showState ? prefix + (b.getToggleState() ? "ON" : "OFF") : prefix;
-            if (b.getButtonText() != text)
-                b.setButtonText (text);
-        };
-        content.addAndMakeVisible (b);
-    };
-
     //--------------------------------------------------------------------------
-    // Fila 1: modo + OUTPUT MODE (la salida MIDI de los acordes está siempre activa)
+    // Fila superior: modos + canal MIDI + GAIN
     modeSwitch.setButtonFontSize (12.5f);
     modeSwitch.setTooltips ({ u8 ("1 tecla = acorde diatónico (tríada / +8va / 7ª)"),
                               u8 ("1 tecla = 1 nota corregida a la escala"),
                               u8 ("1 tecla = acorde de 5 a 7 notas a dos manos (R&B / Neo-Soul)") });
     content.addAndMakeVisible (modeSwitch);
 
-    outputSwitch.setButtonFontSize (11.5f);
-    outputSwitch.setTooltips ({ u8 ("PIANO + MIDI: suena el piano de SmartKeys y los acordes completos salen por MIDI hacia otros plugins"),
-                                u8 ("MIDI OUT: sólo salen los acordes por MIDI (el piano interno se silencia) para tocar otro plugin") });
-    content.addAndMakeVisible (outputSwitch);
+    for (int ch = 1; ch <= 16; ++ch)
+        midiChannelBox.addItem ("CH " + juce::String (ch), ch);
+    midiChannelBox.setTooltip (u8 ("Canal MIDI de salida (1-16). Los acordes completos salen siempre por la salida MIDI "
+                                   "del plugin; el puerto se elige en el DAW (en FL Studio: engranaje > MIDI > Output port)."));
+    content.addAndMakeVisible (midiChannelBox);
 
-    //--------------------------------------------------------------------------
-    // Fila 2: afinación, canal MIDI, microafinación, pánico, ganancia
-    for (auto* s : { &gainSlider, &gateSlider, &tuningSlider })
+    for (auto* s : { &gainSlider, &gateSlider })
     {
         s->setSliderStyle (juce::Slider::LinearBar);
         s->setTextBoxStyle (juce::Slider::TextBoxLeft, false, 0, 0);
         s->setColour (juce::Slider::textBoxTextColourId, Colours::text);
         content.addAndMakeVisible (s);
     }
-    gainAttach   = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::masterGain), gainSlider);
-    gateAttach   = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::micGate), gateSlider);
-    tuningAttach = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::refPitch), tuningSlider);
-
-    tune440.onClick = [this] { setRefPitch (440.0f); };
-    tune442.onClick = [this] { setRefPitch (442.0f); };
-    content.addAndMakeVisible (tune440);
-    content.addAndMakeVisible (tune442);
-
-    for (int ch = 1; ch <= 16; ++ch)
-        midiChannelBox.addItem ("CH " + juce::String (ch), ch);
-    midiChannelAttach = std::make_unique<PolledComboBoxAttachment> (*apvts.getParameter (ParamIDs::midiOutCh), midiChannelBox);
-    midiChannelBox.setTooltip (u8 ("Canal MIDI de salida (1-16) de los acordes hacia el plugin externo. "
-                                   "El puerto MIDI se elige en el DAW (en FL Studio: engranaje del plugin > MIDI > Output port)."));
-    content.addAndMakeVisible (midiChannelBox);
-
-    setupToggle (microButton, "MICROTUNING", false, 11.0f);
-    microButton.setTooltip (u8 ("Afina el piano interno con los cents reales de la escala (cuartos de tono, entonación justa)"));
-    microAttach = std::make_unique<PolledButtonAttachment> (*apvts.getParameter (ParamIDs::microTuning), microButton);
-    microButton.onStateChange();
-
-    panicButton.getProperties().set (fontSizeProperty, 11.5f);
-    panicButton.onClick = [this] { audioProcessor.requestPanic(); };
-    content.addAndMakeVisible (panicButton);
+    gainSlider.setTooltip (u8 ("Volumen del piano interno de SmartKeys (la salida MIDI no cambia)"));
+    gateSlider.setTooltip (u8 ("Umbral del micrófono: por debajo, la voz no dispara notas"));
 
     //--------------------------------------------------------------------------
-    // Tira MIC: controlador de voz en tiempo real
-    setupToggle (micButton, "MIC VOICE: ", true, 12.0f);
-    micButton.setTooltip (u8 ("Tu voz dispara notas o acordes (según el modo) en tiempo real"));
-    micAttach = std::make_unique<PolledButtonAttachment> (*apvts.getParameter (ParamIDs::micOn), micButton);
-    micButton.onStateChange();
-
-    // De dónde llega la voz (siempre el bus de entrada del plugin: nunca se
-    // abren dispositivos de audio propios dentro del DAW)
-    const bool standaloneApp = audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
-    voiceInputLabel.setText (SmartKeysAudioProcessor::isFxVariant
-                                 ? u8 ("Voz: la pista del Mixer donde está SmartKeys FX")
-                                 : standaloneApp ? u8 ("Voz: entrada de audio de la app (Options)")
-                                                 : u8 ("Voz: entrada sidechain del plugin (o usa SmartKeys FX)"),
-                             juce::dontSendNotification);
-    voiceInputLabel.setFont (makeFont (11.5f, true));
-    voiceInputLabel.setJustificationType (juce::Justification::centredLeft);
-    voiceInputLabel.setMinimumHorizontalScale (0.7f);
-    voiceInputLabel.setColour (juce::Label::textColourId, Colours::label);
-    voiceInputLabel.setTooltip (SmartKeysAudioProcessor::isFxVariant
-                                    ? u8 ("SmartKeys FX escucha la pista del Mixer donde está insertado (tu micrófono).")
-                                    : u8 ("El instrumento escucha la voz por su entrada sidechain. En FL Studio lo más fácil es "
-                                          "poner SmartKeys FX en la pista del micrófono del Mixer."));
-    content.addAndMakeVisible (voiceInputLabel);
-
-    // Puerto MIDI virtual "SmartKeys Chord Controller"
-    setupToggle (portButton, "MIDI PORT: ", true, 11.5f);
-    portButton.setToggleState (audioProcessor.isVirtualPortEnabled(), juce::dontSendNotification);
-    portButton.onStateChange();
-    portButton.onClick = [this] { audioProcessor.setVirtualPortEnabled (portButton.getToggleState()); };
+    // Tira MIC: controlador de voz en tiempo real (siempre por el bus de entrada
+    // del plugin: nunca se abren dispositivos de audio propios dentro del DAW)
+    micButton.setClickingTogglesState (true);
+    micButton.getProperties().set (fontSizeProperty, 12.0f);
+    micButton.onStateChange = [this]
     {
-        const auto portName = juce::String (smartkeys::VirtualMidiPort::kPortName);
-        portButton.setTooltip (u8 ("Crea el puerto MIDI \"") + portName + u8 ("\": el DAW lo ve como un teclado MIDI que toca "
-                               "los acordes completos.\nFL Studio: Options > MIDI Settings > Input > ") + portName
-                               + u8 (" > Enable y ponle un Port libre (p. ej. 10).\nLuego clic derecho en el canal del instrumento "
-                                     "(FLEX, Serum...) > Receive notes from > ") + portName
-                               + u8 (".\nCon SmartKeys seleccionado, toca y graba: ese instrumento recibe y graba el acorde completo."));
-    }
-    content.addAndMakeVisible (portButton);
-
-    portStatusLabel.setFont (makeFont (11.0f, true));
-    portStatusLabel.setJustificationType (juce::Justification::centredLeft);
-    portStatusLabel.setMinimumHorizontalScale (0.65f);
-    portStatusLabel.setInterceptsMouseClicks (false, false);
-    content.addAndMakeVisible (portStatusLabel);
+        const auto text = juce::String ("MIC VOICE: ") + (micButton.getToggleState() ? "ON" : "OFF");
+        if (micButton.getButtonText() != text)
+            micButton.setButtonText (text);
+    };
+    const bool standaloneApp = audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
+    micButton.setTooltip (u8 ("Tu voz dispara notas o acordes (según el modo) en tiempo real.\n")
+                          + (SmartKeysAudioProcessor::isFxVariant
+                                 ? u8 ("SmartKeys FX escucha la pista del Mixer donde está insertado (tu micrófono).")
+                                 : standaloneApp ? u8 ("La app usa la entrada elegida en Options > Audio/MIDI Settings.")
+                                                 : u8 ("El instrumento escucha la voz por su entrada sidechain. En FL Studio "
+                                                       "lo más fácil es poner SmartKeys FX en la pista del micrófono del Mixer.")));
+    content.addAndMakeVisible (micButton);
 
     content.addAndMakeVisible (micMeter);
 
-    micStatusLabel.setFont (makeFont (12.5f, true));
+    micStatusLabel.setFont (makeFont (11.5f, true));
     micStatusLabel.setJustificationType (juce::Justification::centredLeft);
     micStatusLabel.setMinimumHorizontalScale (0.7f);
     micStatusLabel.setColour (juce::Label::textColourId, Colours::label);
     content.addAndMakeVisible (micStatusLabel);
 
     //--------------------------------------------------------------------------
-    // Pestañas: KEY · SCALE  |  PROGRESIÓN
-    tabKeys.setButtonText (u8 ("KEY · SCALE"));
-    tabProgression.setButtonText (u8 ("PROGRESIÓN"));
-    for (auto* t : { &tabKeys, &tabProgression })
-    {
-        t->setClickingTogglesState (true);
-        t->setRadioGroupId (101);
-        t->getProperties().set (fontSizeProperty, 12.0f);
-        content.addAndMakeVisible (t);
-    }
-    tabKeys.setTooltip (u8 ("Tónica, escala y notas activas"));
-    tabProgression.setTooltip (u8 ("Constructor de progresiones: carril por compases, paleta de acordes, grabación con el DAW y vista previa"));
-    tabKeys.onClick = [this] { if (tabKeys.getToggleState()) showTab (Tab::KeyScale); };
-    tabProgression.onClick = [this] { if (tabProgression.getToggleState()) showTab (Tab::Progression); };
-
-    // Pestaña KEY · SCALE
+    // KEY · SCALE · ESCALA
     content.addAndMakeVisible (keySelector);
     content.addAndMakeVisible (scaleSelector);
     content.addAndMakeVisible (scaleBar);
 
-    // Pestaña PROGRESIÓN
-    previewButton.getProperties().set (fontSizeProperty, 13.0f);
-    previewButton.setTooltip (u8 ("Escuchar la progresión en bucle (al tempo del proyecto)"));
-    previewButton.onClick = [this]
-    {
-        if (audioProcessor.isPreviewPlaying()) audioProcessor.stopPreview();
-        else                                   audioProcessor.startPreview();
-    };
-    content.addChildComponent (previewButton);
-
-    recButton.setButtonText (u8 ("● REC"));
-    recButton.setClickingTogglesState (true);
-    recButton.getProperties().set (fontSizeProperty, 11.5f);
-    recButton.setTooltip (u8 ("Grabar acordes ahora mismo aunque el DAW esté detenido (al tempo del proyecto). "
-                              "Con el DAW en marcha se graba en su compás exacto."));
-    recButton.onClick = [this] { audioProcessor.setRecArmed (recButton.getToggleState()); };
-    content.addChildComponent (recButton);
-
-    syncBox.addItem (u8 ("Captura: ▶ ●"), 1);
-    syncBox.addItem (u8 ("Captura: ●"), 2);
-    syncBox.addItem (u8 ("Captura: REC"), 3);
-    syncBox.setTooltip (u8 ("Cuándo se guardan los acordes en la progresión:\n"
-                            "▶ ●  al reproducir o grabar el DAW (convierte las notas del Piano Roll en acordes)\n"
-                            "●  sólo cuando el DAW graba\n"
-                            "REC  sólo con el botón ● REC del plugin\n"
-                            "Con el DAW detenido, probar teclas NO guarda nada."));
-    syncBox.onChange = [this] { audioProcessor.setCaptureSync (syncBox.getSelectedId() - 1); };
-    content.addChildComponent (syncBox);
-
-    takeBox.addItem (u8 ("Toma: nueva"), 1);
-    takeBox.addItem (u8 ("Toma: añadir"), 2);
-    takeBox.setTooltip (u8 ("Nueva: cada toma reemplaza la progresión al tocar el primer acorde (se puede deshacer).\n"
-                            "Añadir: conserva lo anterior; lo que vuelvas a tocar encima se sobrescribe."));
-    takeBox.onChange = [this] { audioProcessor.setTakeMode (takeBox.getSelectedId() - 1); };
-    content.addChildComponent (takeBox);
-
-    {
-        const auto lengths = smartkeys::NewChordLength::getNames();
-        for (int i = 0; i < lengths.size(); ++i)
-            lengthBox.addItem (lengths[i], i + 1);
-    }
-    lengthBox.setTooltip (u8 ("Duración de los acordes que añades desde la paleta"));
-    lengthBox.onChange = [this] { audioProcessor.setNewChordLengthIndex (lengthBox.getSelectedId() - 1); };
-    content.addChildComponent (lengthBox);
-
-    namesButton.setButtonText ("C  Dm");
-    romanButton.setButtonText ("I  ii");
-    for (auto* b : { &namesButton, &romanButton })
-    {
-        b->setClickingTogglesState (true);
-        b->setRadioGroupId (102);
-        b->getProperties().set (fontSizeProperty, 11.5f);
-        content.addChildComponent (b);
-    }
-    namesButton.setTooltip (u8 ("Ver los acordes con su cifrado (C, Dm, Em...)"));
-    romanButton.setTooltip (u8 ("Ver los acordes como grados romanos (I, ii, iii, IV, V, vi, vii°)"));
-    namesButton.onClick = [this] { if (namesButton.getToggleState()) audioProcessor.setShowRoman (false); };
-    romanButton.onClick = [this] { if (romanButton.getToggleState()) audioProcessor.setShowRoman (true); };
-
-    {
-        const auto grids = smartkeys::QuantizeGrid::getNames();
-        for (int i = 0; i < grids.size(); ++i)
-            quantizeBox.addItem (grids[i], i + 1);
-    }
-    quantizeBox.setTooltip (u8 ("QUANTIZE de la exportación (y rejilla para mover acordes en el carril). "
-                                "El desfase del STRUM se conserva."));
-    quantizeBox.onChange = [this] { audioProcessor.setQuantizeIndex (quantizeBox.getSelectedId() - 1); };
-    content.addChildComponent (quantizeBox);
-
-    undoButton.setButtonText (u8 ("↶"));
-    undoButton.getProperties().set (fontSizeProperty, 15.0f);
-    undoButton.setTooltip (u8 ("Deshacer el último cambio de la progresión (Cmd/Ctrl+Z)"));
-    undoButton.onClick = [this] { lane.undo(); };
-    content.addChildComponent (undoButton);
-
-    clearProgressionButton.getProperties().set (fontSizeProperty, 11.0f);
-    clearProgressionButton.setTooltip (u8 ("Borra toda la progresión (se puede deshacer)"));
-    clearProgressionButton.onClick = [this]
-    {
-        audioProcessor.withProgression ([] (smartkeys::ProgressionModel& m) { m.clear(); });
-        audioProcessor.progressionEdited();
-    };
-    content.addChildComponent (clearProgressionButton);
-
-    content.addChildComponent (lane);
-    content.addChildComponent (palette);
-
     //--------------------------------------------------------------------------
-    // Teclado + acorde + STRUM + exportación
+    // LIVE KEYBOARD + acorde + voicing + STRUM
     content.addAndMakeVisible (piano);
     content.addAndMakeVisible (chordDisplay);
 
@@ -1273,32 +1006,39 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
 
     strumKnob.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     strumKnob.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-    strumKnob.setTooltip (u8 ("STRUM SPEED / NOTE ENTRY: retardo progresivo entre las notas del acorde (0 a 200 ms). "
+    strumKnob.setTooltip (u8 ("STRUM SPEED: retardo progresivo entre las notas del acorde (0 a 200 ms). "
                               "0 = todas juntas. Doble clic: OFF."));
-    strumAttach = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::strumMs), strumKnob);
-    strumKnob.setDoubleClickReturnValue (true, 0.0);
     content.addAndMakeVisible (strumKnob);
 
-    strumValueLabel.setFont (makeFont (10.0f, true));
-    strumValueLabel.setBorderSize ({ 0, 2, 0, 0 });
-    strumValueLabel.setJustificationType (juce::Justification::centredLeft);
-    strumValueLabel.setColour (juce::Label::textColourId, Colours::text);
-    strumValueLabel.setInterceptsMouseClicks (false, false);
-    content.addAndMakeVisible (strumValueLabel);
+    strumTitleLabel.setText ("STRUM SPEED", juce::dontSendNotification);
+    strumTitleLabel.setFont (makeFont (10.5f, true));
+    strumTitleLabel.setColour (juce::Label::textColourId, Colours::label);
+    strumValueLabel.setFont (makeFont (17.0f, true));
+    for (auto* l : { &strumTitleLabel, &strumValueLabel })
+    {
+        l->setBorderSize ({ 0, 2, 0, 0 });
+        l->setJustificationType (juce::Justification::centredLeft);
+        l->setInterceptsMouseClicks (false, false);
+        content.addAndMakeVisible (l);
+    }
 
-    strumDirSwitch.setButtonFontSize (11.0f);
+    strumDirSwitch.setButtonFontSize (11.5f);
     strumDirSwitch.setTooltips ({ u8 ("ASC ▲: las notas entran de la más grave a la más aguda"),
                                   u8 ("DESC ▼: las notas entran de la más aguda a la más grave") });
     content.addAndMakeVisible (strumDirSwitch);
 
-    dragButton.setTooltip (u8 ("Arrastra este botón al Piano Roll de FL Studio / Ableton (o a cualquier plugin): "
-                               "suelta la progresión del carril con todas las notas de cada acorde en su compás exacto. "
-                               "Clic: guarda el .mid en Música/SmartKeys y lo muestra."));
-    content.addAndMakeVisible (dragButton);
+    //--------------------------------------------------------------------------
+    // Enlaces con los parámetros: los controles ya están configurados
+    gainAttach  = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::masterGain), gainSlider);
+    gateAttach  = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::micGate), gateSlider);
+    strumAttach = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::strumMs), strumKnob);
+    strumKnob.setDoubleClickReturnValue (true, 0.0);
+    midiChannelAttach = std::make_unique<PolledComboBoxAttachment> (*apvts.getParameter (ParamIDs::midiOutCh), midiChannelBox);
+    micAttach = std::make_unique<PolledButtonAttachment> (*apvts.getParameter (ParamIDs::micOn), micButton);
+    micButton.onStateChange();
 
     setWantsKeyboardFocus (true);
     computerKeyNotes.fill (-1);
-    audioProcessor.editorOpened();   // con la ventana abierta ya puede crearse el puerto MIDI virtual
 
    #if JucePlugin_Build_Standalone
     // En la app Standalone JUCE silencia la entrada por defecto "para evitar
@@ -1309,7 +1049,8 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
             holder->getMuteInputValue().setValue (false);
    #endif
 
-    showTab (Tab::KeyScale);
+    timerCallback();
+    startTimerHz (60);
 
     // Ventana redimensionable (mantiene la proporción); recuerda el tamaño del proyecto.
     // La escala guardada se lee ANTES de fijar los límites: setResizeLimits() ajusta
@@ -1319,56 +1060,31 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     setResizeLimits ((int) (kWidth * 0.7f), (int) (kHeight * 0.7f), kWidth * 2, kHeight * 2);
     if (auto* editorConstrainer = getConstrainer())
         editorConstrainer->setFixedAspectRatio ((double) kWidth / (double) kHeight);
-    setSize (juce::roundToInt ((float) kWidth * savedScale), juce::roundToInt ((float) kHeight * savedScale));
 
-    timerCallback();
-    startTimerHz (60);
+    // Última línea: todos los componentes existen y están configurados
+    setSize (juce::roundToInt ((float) kWidth * savedScale), juce::roundToInt ((float) kHeight * savedScale));
 }
 
 SmartKeysAudioProcessorEditor::~SmartKeysAudioProcessorEditor()
 {
+    // 1) Nada más de la interfaz se ejecuta mientras la ventana se cierra
     stopTimer();
+
+    // 2) Los enlaces se destruyen antes que los controles que usan (además ya
+    //    van declarados después de ellos y guardan cada control con SafePointer)
+    micAttach.reset();
+    midiChannelAttach.reset();
+    strumAttach.reset();
+    gateAttach.reset();
+    gainAttach.reset();
+
+    // 3) Ninguna nota tocada con el ratón o el teclado de la PC queda colgada
+    piano.releaseMouseNote();
     for (size_t i = 0; i < computerKeysDown.size(); ++i)
         if (computerKeysDown[i] && computerKeyNotes[i] >= 0)
             audioProcessor.pushScreenNote (computerKeyNotes[i], 0, false);
-    audioProcessor.auditionChord (nullptr, 0, 0, false);
+
     setLookAndFeel (nullptr);
-}
-
-void SmartKeysAudioProcessorEditor::setRefPitch (float hz)
-{
-    if (auto* param = apvts.getParameter (ParamIDs::refPitch))
-    {
-        param->beginChangeGesture();
-        param->setValueNotifyingHost (param->convertTo0to1 (hz));
-        param->endChangeGesture();
-    }
-}
-
-juce::String SmartKeysAudioProcessorEditor::makeExportBaseName() const
-{
-    return "SmartKeys - " + displayEngine.getScaleDisplayName() + " - "
-           + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H.%M.%S");
-}
-
-void SmartKeysAudioProcessorEditor::showTab (Tab tab)
-{
-    currentTab = tab;
-    const bool keys = tab == Tab::KeyScale;
-
-    tabKeys.setToggleState (keys, juce::dontSendNotification);
-    tabProgression.setToggleState (! keys, juce::dontSendNotification);
-
-    for (juce::Component* c : { (juce::Component*) &keySelector, (juce::Component*) &scaleSelector, (juce::Component*) &scaleBar })
-        c->setVisible (keys);
-
-    for (juce::Component* c : { (juce::Component*) &previewButton, (juce::Component*) &recButton, (juce::Component*) &syncBox,
-                                (juce::Component*) &takeBox, (juce::Component*) &lengthBox, (juce::Component*) &namesButton,
-                                (juce::Component*) &romanButton, (juce::Component*) &quantizeBox, (juce::Component*) &undoButton,
-                                (juce::Component*) &clearProgressionButton, (juce::Component*) &lane, (juce::Component*) &palette })
-        c->setVisible (! keys);
-
-    content.repaint();
 }
 
 //==============================================================================
@@ -1407,15 +1123,12 @@ void SmartKeysAudioProcessorEditor::paintContent (juce::Graphics& g)
     g.setFont (makeFont (10.0f, true));
     g.drawText (u8 ("PIANO  ·  CHORDS  ·  VOICE"), 18, 36, 170, 12, juce::Justification::centredLeft, false);
 
-    // Rótulos de las filas superiores
+    // Rótulos de la fila superior
     g.setFont (makeFont (8.5f, true));
     g.drawText ("M O D E", 194, 2, 120, 10, juce::Justification::centredLeft, false);
-    g.drawText ("O U T P U T   M O D E", 590, 2, 200, 10, juce::Justification::centredLeft, false);
-
     g.setFont (makeFont (11.0f, true));
-    g.drawText ("A4", 18, 54, 26, 28, juce::Justification::centredLeft, false);
-    g.drawText ("MIDI", 244, 54, 40, 28, juce::Justification::centredLeft, false);
-    g.drawText ("GAIN", 634, 54, 36, 28, juce::Justification::centredLeft, false);
+    g.drawText ("MIDI", 574, 12, 34, 34, juce::Justification::centredLeft, false);
+    g.drawText ("GAIN", 690, 12, 36, 34, juce::Justification::centredLeft, false);
 
     // Tarjetas
     auto card = [&] (juce::Rectangle<float> r)
@@ -1425,75 +1138,28 @@ void SmartKeysAudioProcessorEditor::paintContent (juce::Graphics& g)
         g.setColour (Colours::border.withAlpha (0.8f));
         g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
     };
-    card ({ 16.0f, 90.0f, 818.0f, 62.0f });       // MIC
-    card ({ 16.0f, 458.0f, 818.0f, 218.0f });     // LIVE KEYBOARD
+    card ({ 16.0f, kMicCardY, 818.0f, kMicCardH });        // MIC
+    card ({ 16.0f, kKeyCardY, 410.0f, kKeyCardH });        // KEY
+    card ({ 436.0f, kKeyCardY, 398.0f, kKeyCardH });       // SCALE
+    card ({ 16.0f, kScaleBarY, 818.0f, kScaleBarH });      // ESCALA
+    card ({ 16.0f, kKeyboardY, 818.0f, kKeyboardH });      // LIVE KEYBOARD
 
     // Rótulo del GATE (dentro de la tarjeta MIC: se dibuja después de ella)
     g.setColour (Colours::label);
     g.setFont (makeFont (11.0f, true));
-    g.drawText ("GATE", 220, 124, 34, 24, juce::Justification::centredLeft, false);
+    g.drawText ("GATE", 344, 64, 34, 28, juce::Justification::centredLeft, false);
 
-    if (currentTab == Tab::KeyScale)
-    {
-        card ({ 16.0f, 188.0f, 410.0f, 170.0f });   // KEY
-        card ({ 436.0f, 188.0f, 398.0f, 170.0f });  // SCALE
-        card ({ 16.0f, 366.0f, 818.0f, 84.0f });    // ESCALA
-
-        // Pestaña de acento sobre KEY (como en la referencia)
-        g.setColour (Colours::accent);
-        g.fillRoundedRectangle (16.0f, 188.0f, 28.0f, 3.0f, 1.5f);
-        g.setColour (Colours::label);
-        g.setFont (makeFont (13.0f, true));
-        g.drawText ("K E Y", 30, 194, 120, 18, juce::Justification::centredLeft, false);
-    }
-    else
-    {
-        card ({ 16.0f, 188.0f, 818.0f, 262.0f });   // PROGRESIÓN
-
-        // Icono de rejilla junto al QUANTIZE (como en Klimper)
-        const juce::Rectangle<float> icon (594.0f, 200.0f, 12.0f, 12.0f);
-        g.setColour (Colours::charcoal.withAlpha (0.7f));
-        for (int i = 0; i < 3; ++i)
-        {
-            g.fillRect (icon.getX() + (float) i * 5.0f, icon.getY(), 1.4f, icon.getHeight());
-            g.fillRect (icon.getX(), icon.getY() + (float) i * 5.0f, icon.getWidth(), 1.4f);
-        }
-    }
-
-    // Estado de la captura (a la derecha de las pestañas)
-    juce::Colour statusColour;
-    const auto status = getCaptureStatusText (statusColour);
-    g.setColour (statusColour);
-    g.setFont (makeFont (11.5f, true));
-    g.drawText (status, 350, 158, 484, 26, juce::Justification::centredRight, false);
-
+    // Pestaña de acento sobre KEY
+    g.setColour (Colours::accent);
+    g.fillRoundedRectangle (16.0f, kKeyCardY, 28.0f, 3.0f, 1.5f);
     g.setColour (Colours::label);
     g.setFont (makeFont (13.0f, true));
-    g.drawText ("L I V E   K E Y B O A R D", 30, 464, 260, 16, juce::Justification::centredLeft, false);
+    g.drawText ("K E Y", 30, (int) kKeyCardY + 6, 120, 18, juce::Justification::centredLeft, false);
+
+    g.drawText ("L I V E   K E Y B O A R D", 30, (int) kKeyboardY + 6, 260, 16, juce::Justification::centredLeft, false);
     g.setFont (makeFont (10.0f, true));
-    g.drawText (u8 ("Teclado PC: A W S E D F T G Y H U J K  ·  Z / X octava"), 270, 464, 306, 16,
+    g.drawText (u8 ("Teclado PC: A W S E D F T G Y H U J K  ·  Z / X octava"), 270, (int) kKeyboardY + 6, 306, 16,
                 juce::Justification::centredRight, false);
-}
-
-juce::String SmartKeysAudioProcessorEditor::getCaptureStatusText (juce::Colour& colour) const
-{
-    if (audioProcessor.isCapturing())
-    {
-        const double head = audioProcessor.withProgression ([] (smartkeys::ProgressionModel& m) { return m.getCaptureHead(); });
-        const int bar = (int) std::floor (juce::jmax (0.0, head) / juce::jmax (1.0, audioProcessor.getBeatsPerBar())) + 1;
-        colour = Colours::recording;
-        return audioProcessor.isCapturingFromHost()
-                 ? u8 ("● GRABANDO DESDE EL DAW · compás ") + juce::String (bar)
-                 : u8 ("● REC · grabando a ") + juce::String (audioProcessor.getHostBpm(), 0) + " BPM";
-    }
-
-    colour = Colours::label;
-    switch (audioProcessor.getCaptureSync())
-    {
-        case CaptureSync::RecordOnly: return u8 ("Captura: al grabar (●) en el DAW");
-        case CaptureSync::ManualOnly: return u8 ("Captura: sólo con ● REC");
-        default:                      return u8 ("Captura: al dar ▶ o ● en el DAW  ·  detenido no se guarda nada");
-    }
 }
 
 void SmartKeysAudioProcessorEditor::resized()
@@ -1507,60 +1173,32 @@ void SmartKeysAudioProcessorEditor::resized()
 
 void SmartKeysAudioProcessorEditor::layoutContent()
 {
-    // Fila 1: título | SMART CHORDS · SINGLE NOTES · COMPLEX CHORDS | PIANO + MIDI · MIDI OUT
-    modeSwitch.setBounds (190, 12, 390, 34);
-    outputSwitch.setBounds (586, 12, 248, 34);
+    // Fila superior: título | SMART CHORDS · SINGLE NOTES · COMPLEX CHORDS | MIDI CH | GAIN
+    modeSwitch.setBounds (190, 12, 378, 34);
+    midiChannelBox.setBounds (606, 17, 76, 24);
+    gainSlider.setBounds (724, 15, 110, 28);
 
-    // Fila 2: afinación | canal MIDI | microafinación | pánico | ganancia
-    tuningSlider.setBounds (44, 54, 100, 28);
-    tune440.setBounds (146, 54, 44, 28);
-    tune442.setBounds (190, 54, 44, 28);
-    midiChannelBox.setBounds (284, 56, 76, 24);
-    microButton.setBounds (366, 54, 114, 28);
-    panicButton.setBounds (484, 54, 142, 28);
-    gainSlider.setBounds (670, 54, 164, 28);
+    // Tira MIC: MIC VOICE | medidor | GATE | estado
+    micButton.setBounds (22, 64, 150, 28);
+    micMeter.setBounds (184, 70, 150, 16);
+    gateSlider.setBounds (378, 66, 140, 24);
+    micStatusLabel.setBounds (528, 64, 300, 28);
 
-    // Tira MIC + PUERTO MIDI
-    micButton.setBounds (22, 94, 150, 28);
-    voiceInputLabel.setBounds (180, 94, 356, 28);
-    portButton.setBounds (544, 94, 138, 28);
-    portStatusLabel.setBounds (688, 94, 142, 28);
-    micMeter.setBounds (26, 128, 186, 16);
-    gateSlider.setBounds (256, 124, 160, 24);
-    micStatusLabel.setBounds (424, 124, 404, 24);
+    // KEY · SCALE · ESCALA
+    keySelector.setBounds (30, (int) kKeyCardY + 28, 382, 132);
+    scaleSelector.setBounds (448, (int) kKeyCardY + 6, 374, 158);
+    scaleBar.setBounds (24, (int) kScaleBarY + 4, 802, 74);
 
-    // Pestañas
-    tabKeys.setBounds (16, 158, 160, 26);
-    tabProgression.setBounds (180, 158, 160, 26);
-
-    // KEY · SCALE
-    keySelector.setBounds (30, 216, 382, 132);
-    scaleSelector.setBounds (448, 194, 374, 158);
-    scaleBar.setBounds (24, 370, 802, 74);
-
-    // PROGRESIÓN
-    previewButton.setBounds (24, 194, 32, 26);
-    recButton.setBounds (60, 194, 62, 26);
-    syncBox.setBounds (126, 195, 136, 24);
-    takeBox.setBounds (266, 195, 124, 24);
-    lengthBox.setBounds (394, 195, 100, 24);
-    namesButton.setBounds (498, 194, 46, 26);
-    romanButton.setBounds (544, 194, 46, 26);
-    quantizeBox.setBounds (610, 195, 112, 24);
-    undoButton.setBounds (726, 194, 32, 26);
-    clearProgressionButton.setBounds (762, 194, 64, 26);
-    lane.setBounds (24, 226, 802, 94);
-    palette.setBounds (24, 326, 802, 120);
-
-    // Teclado + display + selector + STRUM + exportación
-    piano.setBounds (24, 486, 552, 182);
-    chordDisplay.setBounds (590, 466, 236, 76);
-    chordTypeSwitch.setBounds (587, 546, 242, 28);
-    variationSwitch.setBounds (587, 546, 242, 28);
-    strumKnob.setBounds (587, 578, 40, 40);
-    strumValueLabel.setBounds (629, 578, 74, 40);
-    strumDirSwitch.setBounds (705, 584, 124, 28);
-    dragButton.setBounds (587, 624, 242, 44);
+    // LIVE KEYBOARD | display | voicing | STRUM SPEED + ASC/DESC
+    const int y = (int) kKeyboardY;
+    piano.setBounds (24, y + 28, 552, 182);
+    chordDisplay.setBounds (590, y + 8, 236, 80);
+    chordTypeSwitch.setBounds (587, y + 92, 242, 30);
+    variationSwitch.setBounds (587, y + 92, 242, 30);
+    strumKnob.setBounds (590, y + 130, 46, 46);
+    strumTitleLabel.setBounds (642, y + 132, 186, 16);
+    strumValueLabel.setBounds (642, y + 148, 186, 26);
+    strumDirSwitch.setBounds (587, y + 180, 242, 30);
 }
 
 //==============================================================================
@@ -1601,67 +1239,21 @@ void SmartKeysAudioProcessorEditor::timerCallback()
     micMeter.setState (audioProcessor.getMicLevelDb(), apvts.getRawParameterValue (ParamIDs::micGate)->load(),
                        tracker.gateOpen.load(), audioProcessor.isMicSourceAvailable());
 
-    updatePortStatus();
     updateMicStatus();
-    updateProgressionControls();
-    dragButton.setCount (audioProcessor.getNumProgressionChords(), audioProcessor.isProgressionFull(),
-                         audioProcessor.isCapturing());
+    updateStrumLabel();
     updateDisplay();
 }
 
-void SmartKeysAudioProcessorEditor::updateProgressionControls()
+void SmartKeysAudioProcessorEditor::updateStrumLabel()
 {
-    // Ajustes (también si el host cargó otro proyecto)
-    if (syncBox.getSelectedId() != audioProcessor.getCaptureSync() + 1)
-        syncBox.setSelectedId (audioProcessor.getCaptureSync() + 1, juce::dontSendNotification);
-    if (takeBox.getSelectedId() != audioProcessor.getTakeMode() + 1)
-        takeBox.setSelectedId (audioProcessor.getTakeMode() + 1, juce::dontSendNotification);
-    if (lengthBox.getSelectedId() != audioProcessor.getNewChordLengthIndex() + 1)
-        lengthBox.setSelectedId (audioProcessor.getNewChordLengthIndex() + 1, juce::dontSendNotification);
-    if (quantizeBox.getSelectedId() != audioProcessor.getQuantizeIndex() + 1)
-        quantizeBox.setSelectedId (audioProcessor.getQuantizeIndex() + 1, juce::dontSendNotification);
-
-    const bool roman = audioProcessor.getShowRoman();
-    if (romanButton.getToggleState() != roman)
-        romanButton.setToggleState (roman, juce::dontSendNotification);
-    if (namesButton.getToggleState() == roman)
-        namesButton.setToggleState (! roman, juce::dontSendNotification);
-
-    const bool armed = audioProcessor.isRecArmed();
-    if (recButton.getToggleState() != armed)
-        recButton.setToggleState (armed, juce::dontSendNotification);
-
-    const auto previewText = audioProcessor.isPreviewPlaying() ? u8 ("■") : u8 ("▶");
-    if (previewButton.getButtonText() != previewText)
-        previewButton.setButtonText (previewText);
-
-    // Valor de la perilla STRUM
     const double strumMs = audioProcessor.getStrumMs();
-    const auto strumText = "STRUM SPEED\n" + (strumMs < 0.05 ? juce::String ("OFF")
-                                       : (strumMs < 10.0 ? juce::String (strumMs, 1) : juce::String (juce::roundToInt (strumMs))) + " ms");
-    if (strumValueLabel.getText() != strumText)
-        strumValueLabel.setText (strumText, juce::dontSendNotification);
-
-    // Estado de la captura (cambia el texto de la fila de pestañas)
-    juce::Colour statusColour;
-    const auto status = getCaptureStatusText (statusColour);
-    if (status != shownCaptureStatus)
+    const bool off = strumMs < 0.05;
+    const auto text = off ? juce::String ("OFF")
+                          : (strumMs < 10.0 ? juce::String (strumMs, 1) : juce::String (juce::roundToInt (strumMs))) + " ms";
+    if (strumValueLabel.getText() != text)
     {
-        shownCaptureStatus = status;
-        content.repaint (350, 158, 484, 26);
-    }
-
-    if (currentTab == Tab::Progression)
-    {
-        palette.refresh (displayEngine.getRootKey(), displayEngine.getCustomMask(), roman, displayEngine);
-        lane.update (roman, displayEngine);
-
-        if (++blinkCounter >= 6)
-        {
-            blinkCounter = 0;
-            undoButton.setEnabled (audioProcessor.withProgression ([] (smartkeys::ProgressionModel& m) { return m.canUndo(); }));
-            clearProgressionButton.setEnabled (audioProcessor.getNumProgressionChords() > 0);
-        }
+        strumValueLabel.setText (text, juce::dontSendNotification);
+        strumValueLabel.setColour (juce::Label::textColourId, off ? Colours::disabled : Colours::accent);
     }
 }
 
@@ -1676,13 +1268,13 @@ void SmartKeysAudioProcessorEditor::updateMicStatus()
 
     if (! audioProcessor.isMicSourceAvailable() || audioProcessor.getMicLevelDb() < -90.0f)
     {
-        text = SmartKeysAudioProcessor::isFxVariant ? u8 ("Sin señal en la pista: canta o revisa la entrada del Mixer")
-             : standalone ? u8 ("Sin señal: elige tu micrófono en Options > Audio/MIDI Settings")
-                          : u8 ("Sin señal: manda el mic al sidechain o usa SmartKeys FX en su pista");
+        text = SmartKeysAudioProcessor::isFxVariant ? u8 ("Sin señal: revisa la entrada de la pista")
+             : standalone ? u8 ("Sin señal: elige el micro en Options")
+                          : u8 ("Sin señal: usa el sidechain o SmartKeys FX");
     }
     else if (! tracker.gateOpen.load())
     {
-        text = u8 ("Mic: por debajo del GATE (canta más fuerte o baja el GATE)");
+        text = u8 ("Mic: por debajo del GATE");
     }
     else
     {
@@ -1696,7 +1288,7 @@ void SmartKeysAudioProcessorEditor::updateMicStatus()
             const auto noteName = displayEngine.getNoteName ((int) std::lround (detected));
             if (! micOn)
             {
-                text = "Mic: " + noteName + u8 ("  ·  activa MIC VOICE para disparar acordes");
+                text = "Mic: " + noteName + u8 ("  ·  activa MIC VOICE");
             }
             else if (audioProcessor.isVoiceChordSounding())
             {
@@ -1716,40 +1308,6 @@ void SmartKeysAudioProcessorEditor::updateMicStatus()
         micStatusLabel.setText (text, juce::dontSendNotification);
     if (micStatusLabel.findColour (juce::Label::textColourId) != colour)
         micStatusLabel.setColour (juce::Label::textColourId, colour);
-}
-
-void SmartKeysAudioProcessorEditor::updatePortStatus()
-{
-    // El botón refleja el proyecto cargado (el host puede cambiarlo con la ventana abierta)
-    const bool enabled = audioProcessor.isVirtualPortEnabled();
-    if (portButton.getToggleState() != enabled)
-    {
-        portButton.setToggleState (enabled, juce::dontSendNotification);
-        portButton.onStateChange();
-    }
-
-    const int state = audioProcessor.getVirtualPortState();
-    if (state == shownPortState)
-        return;
-    shownPortState = state;
-
-    juce::String text;
-    auto colour = Colours::label;
-    switch (state)
-    {
-        case PortState::Active:      text = u8 ("● Chord Controller activo");  colour = juce::Colour (0xFF12B76A); break;
-       #if JUCE_WINDOWS
-        case PortState::Unavailable: text = u8 ("Sólo macOS (usa el MIDI Out)"); colour = Colours::warning;       break;
-       #else
-        // macOS no dejó crear el puerto: casi siempre porque la app SmartKeys u otro
-        // DAW con SmartKeys ya lo tiene abierto. El procesador reintenta solo.
-        case PortState::Unavailable: text = u8 ("En uso por otra app");         colour = Colours::warning;       break;
-       #endif
-        case PortState::Waiting:     text = u8 ("Esperando al DAW...");                                             break;
-        default:                     text = u8 ("Puerto apagado");                                                  break;
-    }
-    portStatusLabel.setText (text, juce::dontSendNotification);
-    portStatusLabel.setColour (juce::Label::textColourId, colour);
 }
 
 void SmartKeysAudioProcessorEditor::updateDisplay()
@@ -1790,11 +1348,7 @@ void SmartKeysAudioProcessorEditor::updateDisplay()
         notes << (notes.isEmpty() ? "" : " ") << displayEngine.getNoteName (n);
 
     juce::String detail;
-    if (ev.mode == smartkeys::MidiOutputRouter::kExplicitMode)
-    {
-        detail = u8 ("Progresión  ->  ") + notes;
-    }
-    else if (ev.fromVoice)
+    if (ev.fromVoice)
     {
         const int shownInput = voiceNote >= 0 ? voiceNote : ev.triggerNote;
         detail = "Voice Input: " + displayEngine.getNoteName (shownInput) + " -> " + name;

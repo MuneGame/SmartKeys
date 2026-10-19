@@ -30,14 +30,6 @@ namespace Colours
     inline const juce::Colour softPanel    { 0xFFF7F8FA };
     inline const juce::Colour ledBack      { 0xFF1B1D21 };
     inline const juce::Colour warning      { 0xFFD92D20 };
-
-    // Funciones armónicas (paleta de acordes y carril de progresión)
-    inline const juce::Colour chordMajor     { 0xFF1F6F8B };
-    inline const juce::Colour chordMinor     { 0xFF6B3FA0 };
-    inline const juce::Colour chordDim       { 0xFF5D6B7E };
-    inline const juce::Colour chordOther     { 0xFF8A6D3B };
-    inline const juce::Colour laneBackground { 0xFF1E2230 };
-    inline const juce::Colour recording      { 0xFFE5322D };
 }
 
 juce::Font makeFont (float height, bool bold = true);
@@ -145,16 +137,21 @@ private:
     float lastNormalised = -1.0f;
 };
 
-// Equivalentes de los Slider/ComboBox/Button attachments de JUCE, con sondeo
+// Equivalentes de los Slider/ComboBox/Button attachments de JUCE, con sondeo.
+//
+// Cada enlace guarda su control con un Component::SafePointer: si el control
+// llegara a destruirse antes que el enlace (orden de los miembros del editor),
+// el enlace lo sabe y no lo toca. En la 1.2–1.3 la perilla STRUM se destruía
+// antes que su enlace y FL Studio se cerraba al cerrar la ventana del plugin.
 class PolledSliderAttachment : private juce::Slider::Listener
 {
 public:
     PolledSliderAttachment (juce::RangedAudioParameter& param, juce::Slider& s)
-        : slider (s), attachment (param, [this] (float f) { setValue (f); })
+        : slider (&s), attachment (param, [this] (float f) { setValue (f); })
     {
-        slider.valueFromTextFunction = [&param] (const juce::String& text) { return (double) param.convertFrom0to1 (param.getValueForText (text)); };
-        slider.textFromValueFunction = [&param] (double value) { return param.getText (param.convertTo0to1 ((float) value), 0); };
-        slider.setDoubleClickReturnValue (true, param.convertFrom0to1 (param.getDefaultValue()));
+        s.valueFromTextFunction = [&param] (const juce::String& text) { return (double) param.convertFrom0to1 (param.getValueForText (text)); };
+        s.textFromValueFunction = [&param] (double value) { return param.getText (param.convertTo0to1 ((float) value), 0); };
+        s.setDoubleClickReturnValue (true, param.convertFrom0to1 (param.getDefaultValue()));
 
         auto range = param.getNormalisableRange();
         auto from0To1 = [range] (double start, double end, double normalised) mutable
@@ -177,26 +174,33 @@ public:
         newRange.interval = range.interval;
         newRange.skew = range.skew;
         newRange.symmetricSkew = range.symmetricSkew;
-        slider.setNormalisableRange (newRange);
+        s.setNormalisableRange (newRange);
 
         attachment.sendInitialUpdate();
-        slider.valueChanged();
-        slider.addListener (this);
+        s.valueChanged();
+        s.addListener (this);
     }
 
-    ~PolledSliderAttachment() override   { slider.removeListener (this); }
+    ~PolledSliderAttachment() override
+    {
+        if (auto* s = slider.getComponent())
+            s->removeListener (this);
+    }
 
 private:
     void setValue (float v)
     {
-        const juce::ScopedValueSetter<bool> svs (ignoreCallbacks, true);
-        slider.setValue (v, juce::sendNotificationSync);
+        if (auto* s = slider.getComponent())
+        {
+            const juce::ScopedValueSetter<bool> svs (ignoreCallbacks, true);
+            s->setValue (v, juce::sendNotificationSync);
+        }
     }
-    void sliderValueChanged (juce::Slider*) override  { if (! ignoreCallbacks) attachment.setValueAsPartOfGesture ((float) slider.getValue()); }
-    void sliderDragStarted (juce::Slider*) override   { attachment.beginGesture(); }
-    void sliderDragEnded (juce::Slider*) override     { attachment.endGesture(); }
+    void sliderValueChanged (juce::Slider* s) override { if (! ignoreCallbacks) attachment.setValueAsPartOfGesture ((float) s->getValue()); }
+    void sliderDragStarted (juce::Slider*) override    { attachment.beginGesture(); }
+    void sliderDragEnded (juce::Slider*) override      { attachment.endGesture(); }
 
-    juce::Slider& slider;
+    juce::Component::SafePointer<juce::Slider> slider;
     PolledParameterAttachment attachment;
     bool ignoreCallbacks = false;
 };
@@ -205,34 +209,41 @@ class PolledComboBoxAttachment : private juce::ComboBox::Listener
 {
 public:
     PolledComboBoxAttachment (juce::RangedAudioParameter& param, juce::ComboBox& c)
-        : comboBox (c), parameter (param), attachment (param, [this] (float f) { setValue (f); })
+        : comboBox (&c), parameter (param), attachment (param, [this] (float f) { setValue (f); })
     {
         attachment.sendInitialUpdate();
-        comboBox.addListener (this);
+        c.addListener (this);
     }
 
-    ~PolledComboBoxAttachment() override   { comboBox.removeListener (this); }
+    ~PolledComboBoxAttachment() override
+    {
+        if (auto* c = comboBox.getComponent())
+            c->removeListener (this);
+    }
 
 private:
     void setValue (float v)
     {
-        const auto index = juce::roundToInt (parameter.convertTo0to1 (v) * (float) (comboBox.getNumItems() - 1));
-        if (index == comboBox.getSelectedItemIndex())
+        auto* c = comboBox.getComponent();
+        if (c == nullptr)
+            return;
+        const auto index = juce::roundToInt (parameter.convertTo0to1 (v) * (float) (c->getNumItems() - 1));
+        if (index == c->getSelectedItemIndex())
             return;
         const juce::ScopedValueSetter<bool> svs (ignoreCallbacks, true);
-        comboBox.setSelectedItemIndex (index, juce::sendNotificationSync);
+        c->setSelectedItemIndex (index, juce::sendNotificationSync);
     }
 
-    void comboBoxChanged (juce::ComboBox*) override
+    void comboBoxChanged (juce::ComboBox* c) override
     {
         if (ignoreCallbacks)
             return;
-        const auto numItems = comboBox.getNumItems();
-        const auto normalised = numItems > 1 ? (float) comboBox.getSelectedItemIndex() / (float) (numItems - 1) : 0.0f;
+        const auto numItems = c->getNumItems();
+        const auto normalised = numItems > 1 ? (float) c->getSelectedItemIndex() / (float) (numItems - 1) : 0.0f;
         attachment.setValueAsCompleteGesture (parameter.convertFrom0to1 (normalised));
     }
 
-    juce::ComboBox& comboBox;
+    juce::Component::SafePointer<juce::ComboBox> comboBox;
     juce::RangedAudioParameter& parameter;
     PolledParameterAttachment attachment;
     bool ignoreCallbacks = false;
@@ -242,28 +253,35 @@ class PolledButtonAttachment : private juce::Button::Listener
 {
 public:
     PolledButtonAttachment (juce::RangedAudioParameter& param, juce::Button& b)
-        : button (b), attachment (param, [this] (float f) { setValue (f); })
+        : button (&b), attachment (param, [this] (float f) { setValue (f); })
     {
         attachment.sendInitialUpdate();
-        button.addListener (this);
+        b.addListener (this);
     }
 
-    ~PolledButtonAttachment() override   { button.removeListener (this); }
+    ~PolledButtonAttachment() override
+    {
+        if (auto* b = button.getComponent())
+            b->removeListener (this);
+    }
 
 private:
     void setValue (float v)
     {
-        const juce::ScopedValueSetter<bool> svs (ignoreCallbacks, true);
-        button.setToggleState (v >= 0.5f, juce::sendNotificationSync);
+        if (auto* b = button.getComponent())
+        {
+            const juce::ScopedValueSetter<bool> svs (ignoreCallbacks, true);
+            b->setToggleState (v >= 0.5f, juce::sendNotificationSync);
+        }
     }
 
-    void buttonClicked (juce::Button*) override
+    void buttonClicked (juce::Button* b) override
     {
         if (! ignoreCallbacks)
-            attachment.setValueAsCompleteGesture (button.getToggleState() ? 1.0f : 0.0f);
+            attachment.setValueAsCompleteGesture (b->getToggleState() ? 1.0f : 0.0f);
     }
 
-    juce::Button& button;
+    juce::Component::SafePointer<juce::Button> button;
     PolledParameterAttachment attachment;
     bool ignoreCallbacks = false;
 };

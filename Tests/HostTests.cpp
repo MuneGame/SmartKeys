@@ -8,17 +8,17 @@
       1. Cada tecla sale por MIDI OUT como el ACORDE COMPLETO (lo que pinta el
          Piano Roll del instrumento destino), en el canal MIDI elegido, y los
          NoteOff llegan por el mismo canal aunque se cambie con la tecla pulsada.
-      2. OUTPUT MODE: la salida MIDI está SIEMPRE activa; PIANO + MIDI (audio y
-         MIDI) · MIDI OUT (MIDI, piano interno en silencio absoluto).
-      2b. STRUM: las notas del acorde entran escalonadas ASC/DESC, exactas a la
+      2. Siempre a la vez: el piano interno suena (con su GAIN) y los acordes
+         completos salen por MIDI. Ya no existen OUTPUT MODE, A4 ni MICROTUNING,
+         y los proyectos guardados con la 1.3 se abren sin restos de lo quitado.
+      3. STRUM: las notas del acorde entran escalonadas ASC/DESC, exactas a la
          muestra, y un NoteOff anticipado no deja notas colgadas.
-      2c. DRAG CHORDS: con el DAW detenido no se guarda nada; con el DAW en PLAY
-         cada nota suelta del Piano Roll se guarda como acorde completo en su
-         tiempo exacto; en bucle sólo queda la última vuelta.
-      3. COMPLEX CHORDS: 5–7 notas por tecla y el mismo número de NoteOff.
-      4. Voz por la entrada del DAW (vía A): una voz cantando La3 dispara el
-         acorde La menor, se suelta al callar, y la voz cruda NUNCA sale.
-      5. SmartKeys FX: la voz de la pista (entrada principal) dispara acordes y
+      4. COMPLEX CHORDS: 5–7 notas por tecla y el mismo número de NoteOff.
+      5. Voz por la entrada del DAW: una voz cantando La3 dispara el acorde La
+         menor, se suelta al callar, y la voz cruda NUNCA sale.
+      6. Bloques de 0 a 512 muestras (FL Studio), cero asignaciones de memoria
+         en el processBlock real y concurrencia audio + estado.
+      7. SmartKeys FX: la voz de la pista (entrada principal) dispara acordes y
          se reemplaza por el piano.
 
     Uso:  SmartKeysHostTests <SmartKeys.vst3> [<SmartKeys FX.vst3>] [--stress <segundos>]
@@ -183,9 +183,6 @@ struct Transport : public AudioPlayHead
     }
 };
 
-struct TimedNote { double beatOn, beatOff; int note; };
-struct SavedChord { double start = 0.0, length = 0.0; std::set<int> notes; };
-
 //==============================================================================
 class Host
 {
@@ -238,6 +235,55 @@ public:
     void setState (const MemoryBlock& mb)         { plugin->setStateInformation (mb.getData(), (int) mb.getSize()); }
     bool isInstrument() const { return plugin != nullptr && plugin->getPluginDescription().isInstrument; }
     int getNumInputs() const  { return numIns; }
+
+    bool hasParameter (const String& name)
+    {
+        for (auto* p : plugin->getParameters())
+            if (p->getName (128) == name)
+                return true;
+        return false;
+    }
+
+    // Estado interno del plugin (el host VST3 lo envuelve en
+    // <VST3PluginState><IComponent>base64</IComponent></VST3PluginState>)
+    std::unique_ptr<XmlElement> getPluginStateXml()
+    {
+        MemoryBlock state;
+        plugin->getStateInformation (state);
+        auto xml = AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+        if (xml != nullptr && xml->hasTagName ("VST3PluginState"))
+        {
+            std::unique_ptr<XmlElement> inner;
+            if (auto* component = xml->getChildByName ("IComponent"))
+            {
+                MemoryBlock data;
+                if (data.fromBase64Encoding (component->getAllSubText().trim()))
+                    inner = AudioProcessor::getXmlFromBinary (data.getData(), (int) data.getSize());
+            }
+            return inner;
+        }
+        return xml;
+    }
+
+    // Carga en el plugin un estado interno (como si FL abriera un proyecto)
+    void setPluginStateXml (const XmlElement& pluginState)
+    {
+        MemoryBlock state;
+        plugin->getStateInformation (state);
+        auto wrapper = AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+        if (wrapper == nullptr || ! wrapper->hasTagName ("VST3PluginState"))
+            return;
+        if (auto* component = wrapper->getChildByName ("IComponent"))
+        {
+            MemoryBlock inner;
+            AudioProcessor::copyXmlToBinary (pluginState, inner);
+            component->deleteAllTextElements();
+            component->addTextElement (inner.toBase64Encoding());
+            MemoryBlock out;
+            AudioProcessor::copyXmlToBinary (*wrapper, out);
+            plugin->setStateInformation (out.getData(), (int) out.getSize());
+        }
+    }
 
     AudioProcessorParameter* findParameter (const String& name)
     {
@@ -350,88 +396,6 @@ public:
 
     int eventsOutOfRange = 0;
 
-    // Reproduce 'lengthBeats' desde 'startBeat' con el DAW en PLAY tocando 'notes'
-    // (como un Piano Roll con notas sueltas) y devuelve todo el MIDI de salida
-    BlockResult playPattern (double startBeat, double lengthBeats, const std::vector<TimedNote>& notes, bool keepPlaying = false)
-    {
-        transport.playing = true;
-        transport.ppq = startBeat;
-        const double samplesPerBeat = 60.0 * sampleRate / transport.bpm;
-        const auto numBlocks = (int) std::ceil (lengthBeats * samplesPerBeat / blockSize);
-
-        BlockResult total;
-        for (int b = 0; b < numBlocks; ++b)
-        {
-            const double blockStartBeat = transport.ppq;
-            std::vector<std::pair<int, MidiMessage>> events;
-            for (const auto& n : notes)
-            {
-                // Muestra más cercana al tiempo de la nota (como un Piano Roll real)
-                const auto on  = (int) std::llround ((n.beatOn  - blockStartBeat) * samplesPerBeat);
-                const auto off = (int) std::llround ((n.beatOff - blockStartBeat) * samplesPerBeat);
-                if (on >= 0 && on < blockSize)
-                    events.push_back ({ on, MidiMessage::noteOn (1, n.note, (uint8) 100) });
-                if (off >= 0 && off < blockSize)
-                    events.push_back ({ off, MidiMessage::noteOff (1, n.note) });
-            }
-            std::sort (events.begin(), events.end(), [] (const auto& x, const auto& y) { return x.first < y.first; });
-            auto r = runAt (events);
-            total.midi.insert (total.midi.end(), r.midi.begin(), r.midi.end());
-            total.outputRms = jmax (total.outputRms, r.outputRms);
-        }
-
-        if (! keepPlaying)
-        {
-            transport.playing = false;
-            runBlocks (2);   // el plugin ve el STOP
-        }
-        return total;
-    }
-
-    // Progresión guardada en el estado del plugin (lo mismo que exporta DRAG CHORDS)
-    std::vector<SavedChord> getProgression()
-    {
-        // En Linux el VST3 tiene su propio hilo de mensajes (sin editor abierto):
-        // su temporizador (25 Hz) vacía la cola de captura; basta con esperar.
-        Thread::sleep (200);
-
-        MemoryBlock state;
-        plugin->getStateInformation (state);
-        std::vector<SavedChord> chords;
-        auto xml = AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
-
-        // El host VST3 envuelve el estado del plugin en <VST3PluginState><IComponent>base64</IComponent>
-        if (xml != nullptr && xml->hasTagName ("VST3PluginState"))
-        {
-            std::unique_ptr<XmlElement> inner;
-            if (auto* component = xml->getChildByName ("IComponent"))
-            {
-                MemoryBlock data;
-                if (data.fromBase64Encoding (component->getAllSubText().trim()))
-                    inner = AudioProcessor::getXmlFromBinary (data.getData(), (int) data.getSize());
-            }
-            xml = std::move (inner);
-        }
-
-        if (xml != nullptr && SystemStats::getEnvironmentVariable ("SK_DEBUG_STATE", {}).isNotEmpty())
-            std::cout << xml->toString().toStdString() << std::endl;
-        if (xml != nullptr)
-            if (auto* p = xml->getChildByName ("Progression"))
-                for (auto* c : p->getChildWithTagNameIterator ("Chord"))
-                {
-                    SavedChord sc;
-                    sc.start = c->getDoubleAttribute ("start");
-                    sc.length = c->getDoubleAttribute ("length");
-                    StringArray tokens;
-                    tokens.addTokens (c->getStringAttribute ("notes"), " ", "");
-                    for (auto& t : tokens)
-                        if (t.isNotEmpty())
-                            sc.notes.insert (t.getIntValue());
-                    chords.push_back (sc);
-                }
-        return chords;
-    }
-
     Transport transport;
 
     // Varios bloques: acumula el MIDI y devuelve el RMS máximo
@@ -469,12 +433,11 @@ void testInstrument (const String& path)
     check (host.isInstrument(), "se registra como instrumento (Channel Rack / pista MIDI)");
     check (host.getNumInputs() >= 1, "tiene entrada de micrófono (sidechain)");
 
-    // Do mayor, SMART CHORDS, tríadas, OUTPUT = BOTH, canal 1
+    // Do mayor, SMART CHORDS, tríadas, canal 1
     host.setChoice ("Key", 0);
     host.setChoice ("Scale", 0);
     host.setChoice ("Mode", 0);
     host.setChoice ("Chord Type", 0);
-    host.setChoice ("Output Mode", 0);
     host.setChoice ("MIDI Out Channel", 0);
     host.setBool ("Mic Voice Controller", false);
     host.settle (4);
@@ -485,7 +448,7 @@ void testInstrument (const String& path)
         std::cout << "     D4 -> " << describe (r.notesOn()) << std::endl;
         check (r.notesOn (1) == std::set<int> { 62, 65, 69 }, "D4 en Do mayor sale como Dm completo {D4 F4 A4} por el canal 1");
         auto tail = host.runBlocks (3);
-        check (tail.outputRms > 1.0e-3f || r.outputRms > 1.0e-3f, "BOTH: el piano interno suena");
+        check (tail.outputRms > 1.0e-3f || r.outputRms > 1.0e-3f, "el piano interno suena a la vez");
         auto off = host.run ({ MidiMessage::noteOff (1, 62) });
         check (off.notesOff (1) == std::set<int> { 62, 65, 69 }, "al soltar la tecla salen los 3 NoteOff");
     }
@@ -505,24 +468,86 @@ void testInstrument (const String& path)
         host.settle();
     }
 
-    std::cout << "\n-- 3. OUTPUT MODE (la salida MIDI está siempre activa)" << std::endl;
+    std::cout << "\n-- 3. Piano interno + MIDI siempre a la vez (sin OUTPUT MODE, A4 ni MICROTUNING)" << std::endl;
     {
-        host.setChoice ("Output Mode", 1);   // MIDI OUT (piano interno en silencio)
-        host.run();
-        auto r = host.run ({ MidiMessage::noteOn (1, 64, (uint8) 100) });   // E4 -> Em
-        auto tail = host.runBlocks (4);
-        check (r.notesOn (1) == std::set<int> { 64, 67, 71 }, "MIDI OUT: el acorde Em sale por MIDI");
-        check (jmax (r.outputRms, tail.outputRms) < 1.0e-9f, "MIDI OUT: el piano interno queda en silencio absoluto");
-        host.run ({ MidiMessage::noteOff (1, 64) });
+        check (! host.hasParameter ("Output Mode") && ! host.hasParameter ("Reference Pitch")
+                 && ! host.hasParameter ("Scale Microtuning"),
+               "OUTPUT MODE, A4 (Reference Pitch) y MICROTUNING ya no existen");
+        check (host.hasParameter ("Master Gain") && host.hasParameter ("MIDI Out Channel") && host.hasParameter ("Strum Speed")
+                 && host.hasParameter ("Strum Direction") && host.hasParameter ("Mic Gate"),
+               "GAIN, MIDI CH, STRUM SPEED, ASC/DESC y GATE siguen ahí");
 
-        host.setChoice ("Output Mode", 0);   // PIANO + MIDI (por defecto)
         host.run();
         auto r2 = host.run ({ MidiMessage::noteOn (1, 69, (uint8) 100) });   // A4 -> Am
         auto tail2 = host.runBlocks (4);
-        check (r2.notesOn (1) == std::set<int> { 69, 72, 76 }, "PIANO + MIDI: el acorde Am completo sale por MIDI");
-        check (jmax (r2.outputRms, tail2.outputRms) > 1.0e-3f, "PIANO + MIDI: y suena el piano interno a la vez");
+        check (r2.notesOn (1) == std::set<int> { 69, 72, 76 }, "el acorde Am completo sale por MIDI");
+        const float loud = jmax (r2.outputRms, tail2.outputRms);
+        check (loud > 1.0e-3f, "y suena el piano interno a la vez");
         host.run ({ MidiMessage::noteOff (1, 69) });
         host.settle();
+
+        // GAIN baja el piano, pero el MIDI sale igual
+        if (auto* g = host.findParameter ("Master Gain"))
+            g->setValueNotifyingHost (g->getValueForText ("-30"));
+        host.settle (4);
+        auto r3 = host.run ({ MidiMessage::noteOn (1, 69, (uint8) 100) });
+        auto tail3 = host.runBlocks (4);
+        const float quiet = jmax (r3.outputRms, tail3.outputRms);
+        std::cout << "     RMS con GAIN -3 dB: " << loud << "   con -30 dB: " << quiet << std::endl;
+        check (r3.notesOn (1) == std::set<int> { 69, 72, 76 } && quiet > 0.0f && quiet < loud * 0.1f,
+               "GAIN -30 dB: el piano baja ~27 dB y el acorde sigue saliendo completo por MIDI");
+        host.run ({ MidiMessage::noteOff (1, 69) });
+        if (auto* g = host.findParameter ("Master Gain"))
+            g->setValueNotifyingHost (g->getValueForText ("-3"));
+        host.settle();
+    }
+
+    std::cout << "\n-- 3b. Un proyecto guardado con la 1.3 se abre sin restos de lo quitado" << std::endl;
+    {
+        auto old = host.getPluginStateXml();
+        check (old != nullptr && old->hasTagName ("SmartKeysState"), "el estado del plugin se puede leer");
+        if (old != nullptr)
+        {
+            // Lo que guardaba la 1.3: OUTPUT MODE = MIDI OUT, A4 = 442 Hz, MICROTUNING,
+            // puerto MIDI, ajustes de la captura y una progresión
+            old->setAttribute ("stateVersion", 3);
+            old->removeAttribute ("customMask");   // la máscara se recalcula para la tónica guardada
+            old->setAttribute ("virtualPort", 1);
+            old->setAttribute ("captureSync", 1);
+            old->setAttribute ("quantize", 3);
+            for (auto [id, value] : { std::pair<const char*, double> { "outputMode", 1.0 }, { "refPitch", 442.0 }, { "microTuning", 1.0 } })
+            {
+                auto* param = old->createNewChildElement ("PARAM");
+                param->setAttribute ("id", id);
+                param->setAttribute ("value", value);
+            }
+            for (auto* param : old->getChildWithTagNameIterator ("PARAM"))
+                if (param->getStringAttribute ("id") == "rootKey")
+                    param->setAttribute ("value", 2.0);   // Re
+            auto* progression = old->createNewChildElement ("Progression");
+            progression->createNewChildElement ("Chord")->setAttribute ("notes", "60 64 67");
+
+            host.setPluginStateXml (*old);
+            host.settle (2);
+
+            auto loaded = host.getPluginStateXml();
+            bool clean = loaded != nullptr && loaded->getChildByName ("Progression") == nullptr;
+            for (auto* attr : { "virtualPort", "captureSync", "quantize" })
+                clean = clean && loaded != nullptr && ! loaded->hasAttribute (attr);
+            if (loaded != nullptr)
+                for (auto* param : loaded->getChildWithTagNameIterator ("PARAM"))
+                    for (auto* gone : { "outputMode", "refPitch", "microTuning" })
+                        clean = clean && param->getStringAttribute ("id") != gone;
+            check (clean, "se descartan OUTPUT MODE, A4, MICROTUNING, el puerto y la progresión");
+
+            auto r = host.run ({ MidiMessage::noteOn (1, 62, (uint8) 100) });   // D4 en Re mayor -> D mayor
+            auto tail = host.runBlocks (4);
+            check (r.notesOn (1) == std::set<int> { 62, 66, 69 }, "la tónica guardada (Re) se respeta: D4 -> D mayor");
+            check (jmax (r.outputRms, tail.outputRms) > 1.0e-3f, "aunque el proyecto tenía MIDI OUT, el piano suena");
+            host.run ({ MidiMessage::noteOff (1, 62) });
+            host.setChoice ("Key", 0);
+            host.settle();
+        }
     }
 
     std::cout << "\n-- 4. COMPLEX CHORDS" << std::endl;
@@ -596,53 +621,6 @@ void testInstrument (const String& path)
         host.settle();
     }
 
-    std::cout << "\n-- 4c. DRAG CHORDS: sólo se graba con el DAW en PLAY / REC" << std::endl;
-    {
-        host.setChoice ("Mode", 0);
-        host.transport.playing = false;
-        host.run ({ MidiMessage::noteOn (1, 60, (uint8) 100) });
-        host.runBlocks (10);
-        host.run ({ MidiMessage::noteOff (1, 60) });
-        check (host.getProgression().empty(), "DAW detenido: probar teclas NO guarda nada");
-
-        // Piano Roll con notas sueltas F4, C5, B4, A4 (1 tiempo cada una) -> PLAY
-        const std::vector<TimedNote> pianoRoll { { 0.0, 0.95, 65 }, { 1.0, 1.95, 72 }, { 2.0, 2.95, 71 }, { 3.0, 3.95, 69 } };
-        host.playPattern (0.0, 4.0, pianoRoll);
-        const auto chords = host.getProgression();
-        std::cout << "     capturado:";
-        for (auto& c : chords)
-        {
-            std::cout << " [" << c.start << " +" << String (c.length, 2) << ":";
-            for (int n : c.notes) std::cout << " " << n;
-            std::cout << "]";
-        }
-        std::cout << std::endl;
-        const bool okCount = chords.size() == 4;
-        check (okCount, "4 notas sueltas del Piano Roll -> 4 acordes en la progresión");
-        if (okCount)
-        {
-            check (chords[0].notes == std::set<int> { 65, 69, 72 } && chords[1].notes == std::set<int> { 72, 76, 79 }
-                   && chords[2].notes == std::set<int> { 71, 74, 77 } && chords[3].notes == std::set<int> { 69, 72, 76 },
-                   "F Maj, C Maj, B dim, A min: todas las notas de cada acorde apiladas");
-            bool timing = true;
-            for (int i = 0; i < 4; ++i)
-                timing = timing && std::abs (chords[(size_t) i].start - (double) i) < 0.002
-                                && std::abs (chords[(size_t) i].length - 0.95) < 0.02;
-            check (timing, "cada acorde en su tiempo exacto del compás y con la duración de la nota original");
-        }
-
-        // Bucle: la segunda vuelta reemplaza a la primera (sin duplicar acordes)
-        host.playPattern (0.0, 4.0, { { 0.0, 0.9, 60 }, { 2.0, 2.9, 67 } }, true);
-        host.playPattern (0.0, 4.0, { { 1.0, 1.9, 65 } });
-        const auto looped = host.getProgression();
-        check (looped.size() == 1 && looped[0].notes == std::set<int> { 65, 69, 72 } && std::abs (looped[0].start - 1.0) < 0.002,
-               "patrón en bucle: sólo queda la última vuelta");
-
-        // DAW en PLAY sin notas: la progresión no se toca
-        host.playPattern (0.0, 4.0, {});
-        check (host.getProgression().size() == 1, "reproducir sin tocar nada no borra la progresión");
-    }
-
     std::cout << "\n-- 5. La voz cruda nunca sale por el plugin" << std::endl;
     {
         host.setBool ("Mic Voice Controller", false);
@@ -654,19 +632,18 @@ void testInstrument (const String& path)
     {
         host.setChoice ("Mic Gate", 0);     // umbral mínimo: no influye en la prueba
         host.setBool ("Mic Voice Controller", true);
-        host.setChoice ("Output Mode", 1);  // sólo MIDI, para medir el silencio del audio
         host.run();
 
         auto sing = host.runBlocks (40, 220.0, 0.3f);   // La3 cantado ~0.4 s
         const auto on = sing.notesOn (1);
         std::cout << "     voz La3 (220 Hz) -> " << describe (on) << std::endl;
         check (on.size() == 3 && pitchClasses (on) == std::set<int> { 9, 0, 4 }, "cantar La3 dispara el acorde La menor completo por MIDI");
-        check (sing.outputRms < 1.0e-9f, "la voz no se cuela en la salida de audio");
+        check (sing.outputRms > 1.0e-3f, "y el piano interno lo toca");
 
         auto quiet = host.runBlocks (30);
         check (! on.empty() && quiet.notesOff (1) == on, "al dejar de cantar se sueltan todas las notas del acorde");
         host.setBool ("Mic Voice Controller", false);
-        host.setChoice ("Output Mode", 0);
+        host.settle();
     }
 
     std::cout << "\n-- 7. Bloques de tamaño variable y de 0 muestras (como FL Studio)" << std::endl;
@@ -674,8 +651,6 @@ void testInstrument (const String& path)
         host.setChoice ("Mode", 0);
         host.setText ("Strum Speed", "60");
         host.setBool ("Mic Voice Controller", true);
-        host.transport.playing = true;
-        host.transport.ppq = 0.0;
         host.eventsOutOfRange = 0;
 
         std::mt19937 rng (7);
@@ -694,8 +669,6 @@ void testInstrument (const String& path)
             }
             if (n > 0 && rng() % 97 == 0)
                 ev.push_back ({ 0, MidiMessage::controllerEvent (1, 64, 127) });
-            if (rng() % 600 == 0)
-                host.transport.ppq = 0.0;   // el patrón vuelve a empezar
             auto r = host.runSized (n, ev, rng() % 3 == 0 ? 220.0 : 0.0, 0.3f);
             totalEvents += (int) r.midi.size();
             outputNoteOns += r.countNoteOn();
@@ -706,7 +679,6 @@ void testInstrument (const String& path)
         for (int note : held)
             offs.push_back ({ 0, MidiMessage::noteOff (1, note) });
         host.runSized (256, offs);
-        host.transport.playing = false;
         host.setBool ("Mic Voice Controller", false);
         host.setText ("Strum Speed", "0");
         host.settle();
@@ -717,41 +689,12 @@ void testInstrument (const String& path)
         check (zeroBlocksWithMidi == 0, "un bloque de 0 muestras no saca ningún evento MIDI");
     }
 
-    std::cout << "\n-- 7b. Puerto MIDI virtual: los acordes salen por el puerto y su eco no vuelve a entrar" << std::endl;
-    {
-        // El temporizador del plugin crea el puerto (SMARTKEYS_TEST_VIRTUAL_PORT: sin MIDI del
-        // sistema). Su hilo de mensajes es este (el host le da su bucle de eventos): hay que darle cuerda.
-        MessageManager::getInstance()->runDispatchLoopUntil (400);
-        host.setText ("Strum Speed", "0");
-        host.setChoice ("Mode", 0);
-        host.settle (2);
-
-        auto chord = host.run ({ MidiMessage::noteOn (1, 60, (uint8) 100) });   // C4 -> C E G
-        check (chord.notesOn (1) == std::set<int> { 60, 64, 67 }, "C4 -> C mayor completo");
-        Thread::sleep (60);   // el hilo del puerto los envía en su instante
-
-        // FL devuelve el acorde por el puerto al propio SmartKeys (su canal seleccionado)
-        auto echo = host.run ({ MidiMessage::noteOn (1, 64, (uint8) 100), MidiMessage::noteOn (1, 67, (uint8) 100) });
-        check (echo.countNoteOn() == 0, "el eco del puerto (E4, G4) no dispara acordes nuevos: no hay bucle");
-        auto echoOff = host.run ({ MidiMessage::noteOff (1, 64), MidiMessage::noteOff (1, 67) });
-        check (echoOff.countNoteOff() == 0, "y sus NoteOff no sueltan el acorde que suena");
-
-        auto real = host.run ({ MidiMessage::noteOn (1, 62, (uint8) 100) });    // D4 de verdad
-        check (real.notesOn (1) == std::set<int> { 62, 65, 69 }, "una tecla real (D4) sigue funcionando: Dm");
-        auto offs = host.run ({ MidiMessage::noteOff (1, 60), MidiMessage::noteOff (1, 62) });
-        check (offs.notesOff (1) == std::set<int> { 60, 62, 64, 65, 67, 69 }, "al soltar todo, salen los 6 NoteOff");
-        host.settle();
-    }
-
    #if SK_COUNT_ALLOCATIONS
     std::cout << "\n-- 8. processBlock del VST3 compilado: cero asignaciones de memoria" << std::endl;
     {
         host.setText ("Strum Speed", "80");
         host.setBool ("Mic Voice Controller", true);
-        host.transport.playing = true;
-        host.transport.ppq = 0.0;
 
-        // (el puerto MIDI virtual sigue activo: su FIFO también se llena en estos bloques)
         std::mt19937 rng (3);
         std::set<int> held;
         auto scenarioBlock = [&] (int i)
@@ -765,12 +708,35 @@ void testInstrument (const String& path)
                 else                       { ev.push_back ({ 0, MidiMessage::noteOn (1, note, (uint8) 90) }); held.insert (note); }
             }
             if (i % 400 == 0)
-                host.transport.ppq = 0.0;
+                ev.push_back ({ 0, MidiMessage::controllerEvent (1, 123, 0) });   // All Notes Off del DAW
             host.runSized (n, ev, (i / 100) % 2 == 0 ? 220.0 : 0.0, 0.3f);
         };
 
         for (int i = 0; i < 300; ++i)
             scenarioBlock (i);   // calentamiento (los buffers alcanzan su capacidad)
+
+        // Calentamiento del HOST de prueba: sus listas de eventos VST3 crecen la
+        // primera vez que un bloque trae muchos eventos. El caso más grande: las
+        // 30 teclas en COMPLEX CHORDS y un All Notes Off que las suelta todas.
+        {
+            host.setChoice ("Mode", 2);
+            std::vector<std::pair<int, MidiMessage>> burst;
+            for (int note = 48; note < 78; ++note)
+                burst.push_back ({ 0, MidiMessage::noteOn (1, note, (uint8) 90) });
+            host.runSized (512, burst);
+            host.runBlocks (4);
+            host.runSized (512, { { 0, MidiMessage::controllerEvent (1, 123, 0) } });
+            host.runBlocks (2);
+            host.setChoice ("Mode", 0);
+            held.clear();
+
+            // Un bloque con 600 eventos de control (pasan tal cual a la salida)
+            std::vector<std::pair<int, MidiMessage>> many;
+            for (int k = 0; k < 600; ++k)
+                many.push_back ({ k % 512, MidiMessage::controllerEvent (1, 1, k % 128) });
+            host.runSized (512, many);
+            host.runBlocks (2);
+        }
 
         {
             void* warm[4];
@@ -790,7 +756,7 @@ void testInstrument (const String& path)
             scenarioBlock (i);
         }
         const long allocs = gProcessAllocations.load();
-        std::cout << "     3000 bloques (notas, STRUM, captura con el DAW en PLAY, voz, cambios de modo/escala): "
+        std::cout << "     3000 bloques (notas, STRUM, voz, All Notes Off, cambios de modo/escala): "
                   << allocs << " asignaciones" << std::endl;
         check (allocs == 0, "el hilo de audio nunca pide memoria (ni realloc, ni new, ni juce::String)");
         if (gTraceAllocations)
@@ -801,7 +767,6 @@ void testInstrument (const String& path)
         for (int note : held)
             offs.push_back ({ 0, MidiMessage::noteOff (1, note) });
         host.runSized (256, offs);
-        host.transport.playing = false;
         host.setBool ("Mic Voice Controller", false);
         host.setText ("Strum Speed", "0");
         host.setChoice ("Mode", 0);
@@ -816,7 +781,7 @@ void testInstrument (const String& path)
 
 //==============================================================================
 // Concurrencia: un hilo de "audio" llama a processBlock sin parar (bloques de
-// tamaño variable, notas, transporte en PLAY con bucles, voz) mientras el hilo
+// tamaño variable, notas, voz) mientras el hilo
 // de mensajes guarda / carga el estado y cambia parámetros, como hace FL Studio.
 // Pensada para ejecutarse también con AddressSanitizer / ThreadSanitizer.
 void testConcurrency (const String& path, double seconds)
@@ -835,7 +800,6 @@ void testConcurrency (const String& path, double seconds)
     {
         std::mt19937 rng (11);
         std::set<int> held;
-        host.transport.playing = true;
         while (! stop.load())
         {
             const int n = rng() % 13 == 0 ? 0 : 16 + (int) (rng() % 497);
@@ -846,8 +810,6 @@ void testConcurrency (const String& path, double seconds)
                 if (held.count (note) > 0) { ev.push_back ({ (int) (rng() % (unsigned) n), MidiMessage::noteOff (1, note) }); held.erase (note); }
                 else                       { ev.push_back ({ (int) (rng() % (unsigned) n), MidiMessage::noteOn (1, note, (uint8) 100) }); held.insert (note); }
             }
-            if (rng() % 500 == 0)
-                host.transport.ppq = 0.0;
             host.runSized (n, ev, rng() % 2 == 0 ? 220.0 : 0.0, 0.25f);
             ++blocks;
         }
@@ -873,7 +835,7 @@ void testConcurrency (const String& path, double seconds)
             host.setChoice ("Key", (int) (rng() % 12));
             host.setText ("Strum Speed", String ((int) (rng() % 200)));
             host.setChoice ("Strum Direction", (int) (rng() % 2));
-            host.setChoice ("Output Mode", (int) (rng() % 2));
+            host.setText ("Master Gain", String (-(int) (rng() % 40)));
             if (Time::getMillisecondCounterHiRes() > endMs)
             {
                 stopTimer();
@@ -913,7 +875,6 @@ void testFx (const String& path)
     host.setChoice ("Key", 0);
     host.setChoice ("Scale", 0);
     host.setChoice ("Mode", 0);
-    host.setChoice ("Output Mode", 0);
     host.setChoice ("MIDI Out Channel", 0);
     host.setChoice ("Mic Gate", 0);
     host.setBool ("Mic Voice Controller", false);
@@ -945,8 +906,6 @@ void testFx (const String& path)
 //==============================================================================
 int main (int argc, char* argv[])
 {
-    // Puerto MIDI virtual de prueba (estas máquinas no tienen MIDI del sistema)
-    setenv ("SMARTKEYS_TEST_VIRTUAL_PORT", "1", 1);
     ScopedJuceInitialiser_GUI juceInit;
 
     if (argc < 2)

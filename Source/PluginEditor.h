@@ -2,7 +2,7 @@
   ==============================================================================
 
     PluginEditor.h
-    SmartKeys — Interfaz gráfica vectorial (850 x 686 px, redimensionable).
+    SmartKeys — Interfaz gráfica vectorial (850 x 606 px, redimensionable).
 
   ==============================================================================
 */
@@ -12,7 +12,6 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
 #include "UiCommon.h"
-#include "ProgressionView.h"
 
 namespace smartkeys::ui
 {
@@ -128,6 +127,9 @@ public:
     void setActiveNotes (uint64_t lo, uint64_t hi);
     void setScaleMask (uint16_t mask)    { if (mask != scaleMask) { scaleMask = mask; repaint(); } }
 
+    // Suelta la nota que el ratón mantenía pulsada (al cerrar la ventana)
+    void releaseMouseNote();
+
 private:
     static bool isBlack (int note) noexcept;
     bool isNoteLit (int note) const noexcept;
@@ -153,41 +155,10 @@ private:
     bool isLit = false;
 };
 
-//==============================================================================
-// [ DRAG CHORDS TO PIANO ROLL ]: arrastra la progresión grabada (todas las
-// notas de cada acorde) como archivo .mid al Piano Roll; un clic la guarda
-// y la muestra en el Finder / Explorador.
-class DragChordsButton : public juce::Component,
-                         public juce::SettableTooltipClient
-{
-public:
-    DragChordsButton (SmartKeysAudioProcessor& p, std::function<juce::String()> baseNameProvider);
-
-    void paint (juce::Graphics&) override;
-    void mouseEnter (const juce::MouseEvent&) override;
-    void mouseExit (const juce::MouseEvent&) override;
-    void mouseDown (const juce::MouseEvent&) override;
-    void mouseDrag (const juce::MouseEvent&) override;
-    void mouseUp (const juce::MouseEvent&) override;
-
-    void setCount (int numChords, bool isFull, bool isCapturing);
-
-private:
-    juce::File exportNow();
-
-    SmartKeysAudioProcessor& processor;
-    std::function<juce::String()> makeBaseName;
-    int count = 0;
-    bool full = false, capturing = false, hover = false, pressed = false, dragStarted = false;
-    juce::String flashText;
-    juce::uint32 flashUntilMs = 0;
-};
-
 } // namespace smartkeys::ui
 
 //==============================================================================
 class SmartKeysAudioProcessorEditor : public juce::AudioProcessorEditor,
-                                      public juce::DragAndDropContainer,
                                       private juce::Timer
 {
 public:
@@ -195,7 +166,7 @@ public:
     ~SmartKeysAudioProcessorEditor() override;
 
     static constexpr int kWidth = 850;
-    static constexpr int kHeight = 686;
+    static constexpr int kHeight = 606;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -204,7 +175,7 @@ public:
     bool keyStateChanged (bool isKeyDown) override;
 
 private:
-    // Todo el contenido vive en un componente de 850 x 686 que se escala al redimensionar
+    // Todo el contenido vive en un componente de 850 x 606 que se escala al redimensionar
     struct Content : public juce::Component
     {
         std::function<void (juce::Graphics&)> painter;
@@ -216,74 +187,46 @@ private:
         }
     };
 
-    enum class Tab { KeyScale = 0, Progression = 1 };
-
     void paintContent (juce::Graphics&);
     void layoutContent();
-    void showTab (Tab);
     void timerCallback() override;
     void updateDisplay();
     void updateMicStatus();
-    void updatePortStatus();
-    void updateProgressionControls();
-    void setRefPitch (float hz);
-    juce::String makeExportBaseName() const;
-    juce::String getCaptureStatusText (juce::Colour& colour) const;
+    void updateStrumLabel();
 
+    //==========================================================================
+    // ORDEN DE LOS MIEMBROS: C++ los destruye en orden inverso. Primero el
+    // LookAndFeel y los controles; los enlaces con los parámetros van al FINAL
+    // para destruirse ANTES que los controles que usan.
     SmartKeysAudioProcessor& audioProcessor;
     juce::AudioProcessorValueTreeState& apvts;
     smartkeys::ui::SmartKeysLookAndFeel lookAndFeel;
     Content content;
 
-    // Fila 1: modo + salida
+    // Fila superior: modo, canal MIDI y volumen
     smartkeys::ui::ChoiceButtons modeSwitch;
-    smartkeys::ui::ChoiceButtons outputSwitch;
-
-    // Fila 2: afinación, canal MIDI, microafinación, pánico, ganancia
-    juce::Slider tuningSlider, gainSlider, gateSlider;
-    juce::TextButton tune440 { "440" }, tune442 { "442" };
     juce::ComboBox midiChannelBox;
-    juce::TextButton microButton, panicButton { "ALL NOTES OFF" };
+    juce::Slider gainSlider;
 
-    // Tira MIC + PUERTO MIDI: controlador de voz (entrada del plugin), medidor,
-    // gate, estado; puerto MIDI virtual "SmartKeys Chord Controller"
+    // Tira MIC: controlador de voz (entrada del plugin), medidor, gate y estado
     juce::TextButton micButton;
-    juce::Label voiceInputLabel;
-    juce::TextButton portButton;
-    juce::Label portStatusLabel;
     smartkeys::ui::LevelMeter micMeter;
+    juce::Slider gateSlider;
     juce::Label micStatusLabel;
 
-    // Enlaces por sondeo: el hilo de audio nunca avisa a la interfaz
-    std::unique_ptr<smartkeys::ui::PolledButtonAttachment> micAttach, microAttach;
-    std::unique_ptr<smartkeys::ui::PolledSliderAttachment> gainAttach, gateAttach, tuningAttach, strumAttach;
-    std::unique_ptr<smartkeys::ui::PolledComboBoxAttachment> midiChannelAttach;
-
-    // Pestañas
-    juce::TextButton tabKeys, tabProgression;
-    Tab currentTab = Tab::KeyScale;
-
-    // Pestaña KEY · SCALE
+    // KEY · SCALE · ESCALA
     smartkeys::ui::KeySelector keySelector;
     smartkeys::ui::ScaleSelector scaleSelector;
     smartkeys::ui::ScaleBar scaleBar;
 
-    // Pestaña PROGRESIÓN (estilo Klimper)
-    juce::TextButton previewButton, recButton, undoButton, clearProgressionButton { "CLEAR" };
-    juce::ComboBox syncBox, takeBox, lengthBox, quantizeBox;
-    juce::TextButton namesButton, romanButton;
-    smartkeys::ui::ProgressionLane lane;
-    smartkeys::ui::ChordPaletteView palette;
-
-    // Teclado + acorde + STRUM + exportación
+    // LIVE KEYBOARD + acorde + voicing + STRUM
     smartkeys::ui::PianoVisualizer piano;
     smartkeys::ui::ChordDisplay chordDisplay;
     smartkeys::ui::ChoiceButtons chordTypeSwitch;     // SMART CHORDS: TRIAD / +8VA / 7TH
     smartkeys::ui::ChoiceButtons variationSwitch;     // COMPLEX CHORDS: Lush / Neo-Soul / Cinematic
     juce::Slider strumKnob;
-    juce::Label strumValueLabel;
+    juce::Label strumTitleLabel, strumValueLabel;
     smartkeys::ui::ChoiceButtons strumDirSwitch;      // ASC ▲ / DESC ▼
-    smartkeys::ui::DragChordsButton dragButton;
 
     // Motor local (hilo de mensajes) para nombres de escala y acordes
     smartkeys::ScaleChordEngine displayEngine;
@@ -291,15 +234,18 @@ private:
     uint16_t shownMask = 0;
     uint64_t shownEvent = ~(uint64_t) 0, shownLo = ~(uint64_t) 0, shownHi = ~(uint64_t) 0;
     int shownVoiceNote = -2;
-    int shownPortState = -1;
-    juce::String shownCaptureStatus;
-    int blinkCounter = 0;
 
     // Teclado de la computadora (A W S E D F T G Y H U J K, Z/X = octava)
     static constexpr const char* kKeyMap = "awsedftgyhujk";
     std::array<bool, 13> computerKeysDown {};
     std::array<int, 13> computerKeyNotes {};
     int computerOctave = 4;
+
+    // Enlaces por sondeo (el hilo de audio nunca avisa a la interfaz).
+    // Declarados DESPUÉS de todos los controles: se destruyen antes que ellos.
+    std::unique_ptr<smartkeys::ui::PolledButtonAttachment> micAttach;
+    std::unique_ptr<smartkeys::ui::PolledSliderAttachment> gainAttach, gateAttach, strumAttach;
+    std::unique_ptr<smartkeys::ui::PolledComboBoxAttachment> midiChannelAttach;
 
     juce::TooltipWindow tooltipWindow { this, 600 };
 

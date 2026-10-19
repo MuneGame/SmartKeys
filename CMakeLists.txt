@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SmartKeys VERSION 1.3.0 LANGUAGES C CXX)
+project(SmartKeys VERSION 1.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -52,8 +52,7 @@ endif()
 
 set(SMARTKEYS_SOURCES
     Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp
-    Source/ProgressionView.cpp)
+    Source/PluginEditor.cpp)
 
 #-------------------------------------------------------------------------------
 # smartkeys_add_plugin(): crea una variante del plugin a partir del mismo código
@@ -140,7 +139,7 @@ endfunction()
 
 #-------------------------------------------------------------------------------
 # Variante 1 — SmartKeys (instrumento: Channel Rack de FL / pista MIDI de Ableton)
-#   Entrada de micrófono como sidechain (como un vocoder) + micrófono directo.
+#   Entrada de micrófono como sidechain (como un vocoder).
 #-------------------------------------------------------------------------------
 smartkeys_add_plugin(SmartKeys
     PRODUCT      "SmartKeys"
@@ -191,7 +190,7 @@ endif()
 
 #-------------------------------------------------------------------------------
 # Prueba de integración: carga los VST3 compilados como un DAW y comprueba la
-# salida MIDI (acordes completos, canal, OUTPUT MODE) y la voz por la entrada.
+# salida MIDI (acordes completos, canal, STRUM) y la voz por la entrada.
 #   cmake -DSMARTKEYS_BUILD_HOST_TESTS=ON ... && cmake --build . --target SmartKeysHostTests
 #   SmartKeysHostTests <SmartKeys.vst3> [<SmartKeys FX.vst3>]
 #-------------------------------------------------------------------------------
