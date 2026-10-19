@@ -77,6 +77,198 @@ public:
 };
 
 //==============================================================================
+// Enlace parámetro <-> control SIN escuchar al parámetro.
+//
+// juce::ParameterAttachment se registra como oyente del parámetro: cuando el
+// host automatiza un parámetro, JUCE lo avisa DESDE EL HILO DE AUDIO y el enlace
+// publica un mensaje al hilo de mensajes (triggerAsyncUpdate). En FL Studio para
+// Mac eso pasa por su puente con el hilo principal. Aquí, en cambio, el hilo de
+// mensajes LEE el valor (atómico) 30 veces por segundo: el audio nunca llama a
+// la interfaz ni al MessageManager.
+class PolledParameterAttachment : private juce::Timer
+{
+public:
+    PolledParameterAttachment (juce::RangedAudioParameter& p, std::function<void (float)> onChange, juce::UndoManager* = nullptr)
+        : parameter (p), setValue (std::move (onChange))
+    {
+        startTimerHz (30);
+    }
+
+    ~PolledParameterAttachment() override   { stopTimer(); }
+
+    void sendInitialUpdate()
+    {
+        lastNormalised = parameter.getValue();
+        if (setValue != nullptr)
+            setValue (parameter.convertFrom0to1 (lastNormalised));
+    }
+
+    void setValueAsCompleteGesture (float newDenormalisedValue)
+    {
+        const auto v = parameter.convertTo0to1 (newDenormalisedValue);
+        if (juce::approximatelyEqual (parameter.getValue(), v))
+            return;
+        parameter.beginChangeGesture();
+        parameter.setValueNotifyingHost (v);
+        parameter.endChangeGesture();
+        timerCallback();   // como JUCE: el control refleja el valor al instante
+    }
+
+    void beginGesture()   { parameter.beginChangeGesture(); }
+    void endGesture()     { parameter.endChangeGesture(); }
+
+    void setValueAsPartOfGesture (float newDenormalisedValue)
+    {
+        const auto v = parameter.convertTo0to1 (newDenormalisedValue);
+        if (! juce::approximatelyEqual (parameter.getValue(), v))
+        {
+            parameter.setValueNotifyingHost (v);
+            timerCallback();
+        }
+    }
+
+private:
+    // Hilo de mensajes: ¿cambió el parámetro (el host, la automatización o este control)?
+    void timerCallback() override
+    {
+        const float now = parameter.getValue();
+        if (! juce::approximatelyEqual (now, lastNormalised))
+        {
+            lastNormalised = now;
+            if (setValue != nullptr)
+                setValue (parameter.convertFrom0to1 (now));
+        }
+    }
+
+    juce::RangedAudioParameter& parameter;
+    std::function<void (float)> setValue;
+    float lastNormalised = -1.0f;
+};
+
+// Equivalentes de los Slider/ComboBox/Button attachments de JUCE, con sondeo
+class PolledSliderAttachment : private juce::Slider::Listener
+{
+public:
+    PolledSliderAttachment (juce::RangedAudioParameter& param, juce::Slider& s)
+        : slider (s), attachment (param, [this] (float f) { setValue (f); })
+    {
+        slider.valueFromTextFunction = [&param] (const juce::String& text) { return (double) param.convertFrom0to1 (param.getValueForText (text)); };
+        slider.textFromValueFunction = [&param] (double value) { return param.getText (param.convertTo0to1 ((float) value), 0); };
+        slider.setDoubleClickReturnValue (true, param.convertFrom0to1 (param.getDefaultValue()));
+
+        auto range = param.getNormalisableRange();
+        auto from0To1 = [range] (double start, double end, double normalised) mutable
+        {
+            range.start = (float) start; range.end = (float) end;
+            return (double) range.convertFrom0to1 ((float) normalised);
+        };
+        auto to0To1 = [range] (double start, double end, double mapped) mutable
+        {
+            range.start = (float) start; range.end = (float) end;
+            return (double) range.convertTo0to1 ((float) mapped);
+        };
+        auto snap = [range] (double start, double end, double mapped) mutable
+        {
+            range.start = (float) start; range.end = (float) end;
+            return (double) range.snapToLegalValue ((float) mapped);
+        };
+        juce::NormalisableRange<double> newRange { (double) range.start, (double) range.end,
+                                                   std::move (from0To1), std::move (to0To1), std::move (snap) };
+        newRange.interval = range.interval;
+        newRange.skew = range.skew;
+        newRange.symmetricSkew = range.symmetricSkew;
+        slider.setNormalisableRange (newRange);
+
+        attachment.sendInitialUpdate();
+        slider.valueChanged();
+        slider.addListener (this);
+    }
+
+    ~PolledSliderAttachment() override   { slider.removeListener (this); }
+
+private:
+    void setValue (float v)
+    {
+        const juce::ScopedValueSetter<bool> svs (ignoreCallbacks, true);
+        slider.setValue (v, juce::sendNotificationSync);
+    }
+    void sliderValueChanged (juce::Slider*) override  { if (! ignoreCallbacks) attachment.setValueAsPartOfGesture ((float) slider.getValue()); }
+    void sliderDragStarted (juce::Slider*) override   { attachment.beginGesture(); }
+    void sliderDragEnded (juce::Slider*) override     { attachment.endGesture(); }
+
+    juce::Slider& slider;
+    PolledParameterAttachment attachment;
+    bool ignoreCallbacks = false;
+};
+
+class PolledComboBoxAttachment : private juce::ComboBox::Listener
+{
+public:
+    PolledComboBoxAttachment (juce::RangedAudioParameter& param, juce::ComboBox& c)
+        : comboBox (c), parameter (param), attachment (param, [this] (float f) { setValue (f); })
+    {
+        attachment.sendInitialUpdate();
+        comboBox.addListener (this);
+    }
+
+    ~PolledComboBoxAttachment() override   { comboBox.removeListener (this); }
+
+private:
+    void setValue (float v)
+    {
+        const auto index = juce::roundToInt (parameter.convertTo0to1 (v) * (float) (comboBox.getNumItems() - 1));
+        if (index == comboBox.getSelectedItemIndex())
+            return;
+        const juce::ScopedValueSetter<bool> svs (ignoreCallbacks, true);
+        comboBox.setSelectedItemIndex (index, juce::sendNotificationSync);
+    }
+
+    void comboBoxChanged (juce::ComboBox*) override
+    {
+        if (ignoreCallbacks)
+            return;
+        const auto numItems = comboBox.getNumItems();
+        const auto normalised = numItems > 1 ? (float) comboBox.getSelectedItemIndex() / (float) (numItems - 1) : 0.0f;
+        attachment.setValueAsCompleteGesture (parameter.convertFrom0to1 (normalised));
+    }
+
+    juce::ComboBox& comboBox;
+    juce::RangedAudioParameter& parameter;
+    PolledParameterAttachment attachment;
+    bool ignoreCallbacks = false;
+};
+
+class PolledButtonAttachment : private juce::Button::Listener
+{
+public:
+    PolledButtonAttachment (juce::RangedAudioParameter& param, juce::Button& b)
+        : button (b), attachment (param, [this] (float f) { setValue (f); })
+    {
+        attachment.sendInitialUpdate();
+        button.addListener (this);
+    }
+
+    ~PolledButtonAttachment() override   { button.removeListener (this); }
+
+private:
+    void setValue (float v)
+    {
+        const juce::ScopedValueSetter<bool> svs (ignoreCallbacks, true);
+        button.setToggleState (v >= 0.5f, juce::sendNotificationSync);
+    }
+
+    void buttonClicked (juce::Button*) override
+    {
+        if (! ignoreCallbacks)
+            attachment.setValueAsCompleteGesture (button.getToggleState() ? 1.0f : 0.0f);
+    }
+
+    juce::Button& button;
+    PolledParameterAttachment attachment;
+    bool ignoreCallbacks = false;
+};
+
+//==============================================================================
 // Grupo de botones exclusivos enlazado a un parámetro de elección
 class ChoiceButtons : public juce::Component
 {
@@ -91,7 +283,7 @@ private:
     void setSelected (int index);
 
     juce::OwnedArray<juce::TextButton> buttons;
-    juce::ParameterAttachment attachment;
+    PolledParameterAttachment attachment;
 };
 
 } // namespace smartkeys::ui

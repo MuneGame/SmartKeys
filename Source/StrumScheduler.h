@@ -49,7 +49,7 @@ class StrumScheduler
 public:
     static constexpr int    kMaxPending = 512;
     static constexpr int    kMaxGroup   = 128;
-    static constexpr double kMaxStrumMs = 250.0;
+    static constexpr double kMaxStrumMs = 200.0;   // STRUM SPEED: 0–200 ms
 
     void prepare (double newSampleRate) noexcept
     {
@@ -86,6 +86,11 @@ public:
 
         for (const auto meta : in)
         {
+            const auto* data = meta.data;
+            const int size = meta.numBytes;
+            if (data == nullptr || size <= 0)
+                continue;
+
             const int pos = juce::jlimit (0, lastSample, meta.samplePosition);
 
             if (pos != groupPos)
@@ -95,29 +100,33 @@ public:
                 groupPos = pos;
             }
 
-            const auto msg = meta.getMessage();
+            // Bytes crudos (sin construir juce::MidiMessage: cero asignaciones)
+            const int type = data[0] & 0xF0;
+            const int channel = (data[0] & 0x0F) + 1;
+            const int note = size >= 2 ? (data[1] & 0x7F) : 0;
+            const int velocity = size >= 3 ? (data[2] & 0x7F) : 0;
 
-            if (msg.isNoteOn())
+            if (type == 0x90 && size >= 3 && velocity > 0)
             {
                 if (groupSize < kMaxGroup)
-                    group[(size_t) groupSize++] = { msg.getNoteNumber(), msg.getChannel(), msg.getVelocity() };
+                    group[(size_t) groupSize++] = { note, channel, (juce::uint8) velocity };
                 else
-                    emitNoteOn (msg.getNoteNumber(), msg.getChannel(), msg.getVelocity(), pos, out);
+                    emitNoteOn (note, channel, (juce::uint8) velocity, pos, out);
                 continue;
             }
 
             // Un NoteOff u otro evento cierra el grupo de esta muestra
             flushGroup (pos, out);
 
-            if (msg.isNoteOff())
+            if ((type == 0x80 || type == 0x90) && size >= 3)
             {
-                handleNoteOff (msg.getNoteNumber(), msg.getChannel(), pos, out);
+                handleNoteOff (note, channel, pos, out);
             }
             else
             {
-                if (msg.isAllNotesOff() || msg.isAllSoundOff())
-                    cancelPendingOnChannel (msg.getChannel());
-                out.addEvent (msg, pos);
+                if (type == 0xB0 && size >= 3 && (note == 120 || note == 123))
+                    cancelPendingOnChannel (channel);   // All Sound Off / All Notes Off
+                out.addEvent (data, size, pos);
             }
         }
 

@@ -34,7 +34,7 @@ private:
 
     int selected = 0;
     int hovered = -1;
-    juce::ParameterAttachment attachment;
+    PolledParameterAttachment attachment;
 };
 
 //==============================================================================
@@ -68,7 +68,7 @@ private:
     MenuBox menuBox { *this };
     juce::TextButton majorButton { "Major" }, minorButton { "Minor" }, chromaticButton { "Chromatic" };
     int selected = 0;
-    juce::ParameterAttachment attachment;
+    PolledParameterAttachment attachment;
 };
 
 //==============================================================================
@@ -224,9 +224,8 @@ private:
     void timerCallback() override;
     void updateDisplay();
     void updateMicStatus();
+    void updatePortStatus();
     void updateProgressionControls();
-    void refreshDeviceList();
-    void applyDeviceSelection();
     void setRefPitch (float hz);
     juce::String makeExportBaseName() const;
     juce::String getCaptureStatusText (juce::Colour& colour) const;
@@ -246,17 +245,19 @@ private:
     juce::ComboBox midiChannelBox;
     juce::TextButton microButton, panicButton { "ALL NOTES OFF" };
 
-    // Tira MIC: controlador de voz, fuente, dispositivo, canal, medidor, gate, estado
+    // Tira MIC + PUERTO MIDI: controlador de voz (entrada del plugin), medidor,
+    // gate, estado; puerto MIDI virtual "SmartKeys Chord Controller"
     juce::TextButton micButton;
-    smartkeys::ui::ChoiceButtons sourceSwitch;
-    juce::ComboBox deviceBox, channelBox;
-    juce::TextButton rescanButton { "RESCAN" };
+    juce::Label voiceInputLabel;
+    juce::TextButton portButton;
+    juce::Label portStatusLabel;
     smartkeys::ui::LevelMeter micMeter;
     juce::Label micStatusLabel;
 
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> micAttach, microAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gainAttach, gateAttach, tuningAttach, strumAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> midiChannelAttach;
+    // Enlaces por sondeo: el hilo de audio nunca avisa a la interfaz
+    std::unique_ptr<smartkeys::ui::PolledButtonAttachment> micAttach, microAttach;
+    std::unique_ptr<smartkeys::ui::PolledSliderAttachment> gainAttach, gateAttach, tuningAttach, strumAttach;
+    std::unique_ptr<smartkeys::ui::PolledComboBoxAttachment> midiChannelAttach;
 
     // Pestañas
     juce::TextButton tabKeys, tabProgression;
@@ -290,9 +291,7 @@ private:
     uint16_t shownMask = 0;
     uint64_t shownEvent = ~(uint64_t) 0, shownLo = ~(uint64_t) 0, shownHi = ~(uint64_t) 0;
     int shownVoiceNote = -2;
-    juce::StringArray shownDevices;
-    bool autoDeviceAttempted = false;
-    int stateSyncCounter = 0;   // re-sincroniza los selectores con el proyecto cargado (~4 veces/s)
+    int shownPortState = -1;
     juce::String shownCaptureStatus;
     int blinkCounter = 0;
 

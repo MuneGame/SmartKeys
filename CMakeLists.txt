@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SmartKeys VERSION 1.2.0 LANGUAGES C CXX)
+project(SmartKeys VERSION 1.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -200,7 +200,8 @@ if(SMARTKEYS_BUILD_HOST_TESTS)
     juce_add_console_app(SmartKeysHostTests PRODUCT_NAME "SmartKeysHostTests")
     target_sources(SmartKeysHostTests PRIVATE Tests/HostTests.cpp)
     target_compile_definitions(SmartKeysHostTests PRIVATE
-        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1 JUCE_STANDALONE_APPLICATION=1)
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1 JUCE_STANDALONE_APPLICATION=1
+        JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(SmartKeysHostTests
         PRIVATE
             juce::juce_audio_processors_headless

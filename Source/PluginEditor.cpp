@@ -1019,7 +1019,6 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
       apvts (p.getValueTreeState()),
       modeSwitch (*apvts.getParameter (ParamIDs::mode), { "SMART CHORDS", "SINGLE NOTES", "COMPLEX CHORDS" }),
       outputSwitch (*apvts.getParameter (ParamIDs::outputMode), { "PIANO + MIDI", "MIDI OUT" }),
-      sourceSwitch (*apvts.getParameter (ParamIDs::micSource), { "DAW INPUT", "DEVICE" }),
       keySelector (*apvts.getParameter (ParamIDs::rootKey)),
       scaleSelector (*apvts.getParameter (ParamIDs::scale)),
       scaleBar (p, *apvts.getParameter (ParamIDs::scale)),
@@ -1070,9 +1069,9 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
         s->setColour (juce::Slider::textBoxTextColourId, Colours::text);
         content.addAndMakeVisible (s);
     }
-    gainAttach   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, ParamIDs::masterGain, gainSlider);
-    gateAttach   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, ParamIDs::micGate, gateSlider);
-    tuningAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, ParamIDs::refPitch, tuningSlider);
+    gainAttach   = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::masterGain), gainSlider);
+    gateAttach   = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::micGate), gateSlider);
+    tuningAttach = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::refPitch), tuningSlider);
 
     tune440.onClick = [this] { setRefPitch (440.0f); };
     tune442.onClick = [this] { setRefPitch (442.0f); };
@@ -1081,14 +1080,14 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
 
     for (int ch = 1; ch <= 16; ++ch)
         midiChannelBox.addItem ("CH " + juce::String (ch), ch);
-    midiChannelAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (apvts, ParamIDs::midiOutCh, midiChannelBox);
+    midiChannelAttach = std::make_unique<PolledComboBoxAttachment> (*apvts.getParameter (ParamIDs::midiOutCh), midiChannelBox);
     midiChannelBox.setTooltip (u8 ("Canal MIDI de salida (1-16) de los acordes hacia el plugin externo. "
                                    "El puerto MIDI se elige en el DAW (en FL Studio: engranaje del plugin > MIDI > Output port)."));
     content.addAndMakeVisible (midiChannelBox);
 
     setupToggle (microButton, "MICROTUNING", false, 11.0f);
     microButton.setTooltip (u8 ("Afina el piano interno con los cents reales de la escala (cuartos de tono, entonación justa)"));
-    microAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, ParamIDs::microTuning, microButton);
+    microAttach = std::make_unique<PolledButtonAttachment> (*apvts.getParameter (ParamIDs::microTuning), microButton);
     microButton.onStateChange();
 
     panicButton.getProperties().set (fontSizeProperty, 11.5f);
@@ -1099,36 +1098,47 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     // Tira MIC: controlador de voz en tiempo real
     setupToggle (micButton, "MIC VOICE: ", true, 12.0f);
     micButton.setTooltip (u8 ("Tu voz dispara notas o acordes (según el modo) en tiempo real"));
-    micAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, ParamIDs::micOn, micButton);
+    micAttach = std::make_unique<PolledButtonAttachment> (*apvts.getParameter (ParamIDs::micOn), micButton);
     micButton.onStateChange();
 
-    sourceSwitch.setButtonFontSize (11.5f);
-    sourceSwitch.setTooltips ({ SmartKeysAudioProcessor::isFxVariant
-                                    ? u8 ("DAW INPUT: la voz de la pista donde está insertado SmartKeys FX")
-                                    : u8 ("DAW INPUT: la voz llega por la entrada sidechain del plugin (ruteo del DAW)"),
-                                u8 ("DEVICE: SmartKeys lee el micrófono directamente de tu interfaz de audio, sin ruteos") });
-    content.addAndMakeVisible (sourceSwitch);
+    // De dónde llega la voz (siempre el bus de entrada del plugin: nunca se
+    // abren dispositivos de audio propios dentro del DAW)
+    const bool standaloneApp = audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
+    voiceInputLabel.setText (SmartKeysAudioProcessor::isFxVariant
+                                 ? u8 ("Voz: la pista del Mixer donde está SmartKeys FX")
+                                 : standaloneApp ? u8 ("Voz: entrada de audio de la app (Options)")
+                                                 : u8 ("Voz: entrada sidechain del plugin (o usa SmartKeys FX)"),
+                             juce::dontSendNotification);
+    voiceInputLabel.setFont (makeFont (11.5f, true));
+    voiceInputLabel.setJustificationType (juce::Justification::centredLeft);
+    voiceInputLabel.setMinimumHorizontalScale (0.7f);
+    voiceInputLabel.setColour (juce::Label::textColourId, Colours::label);
+    voiceInputLabel.setTooltip (SmartKeysAudioProcessor::isFxVariant
+                                    ? u8 ("SmartKeys FX escucha la pista del Mixer donde está insertado (tu micrófono).")
+                                    : u8 ("El instrumento escucha la voz por su entrada sidechain. En FL Studio lo más fácil es "
+                                          "poner SmartKeys FX en la pista del micrófono del Mixer."));
+    content.addAndMakeVisible (voiceInputLabel);
 
-    deviceBox.setTooltip (u8 ("Micrófono / interfaz de audio que SmartKeys escucha directamente (vía DEVICE)"));
-    deviceBox.onChange = [this] { applyDeviceSelection(); };
-    content.addAndMakeVisible (deviceBox);
-
-    channelBox.addItem ("CH 1", 1);
-    channelBox.addItem ("CH 2", 2);
-    channelBox.addItem ("CH 1+2", 3);
-    channelBox.setSelectedId (audioProcessor.getHardwareChannelMode() + 1, juce::dontSendNotification);
-    channelBox.setTooltip (u8 ("Canal de la interfaz donde está conectado el micrófono"));
-    channelBox.onChange = [this] { applyDeviceSelection(); };
-    content.addAndMakeVisible (channelBox);
-
-    rescanButton.getProperties().set (fontSizeProperty, 11.0f);
-    rescanButton.setTooltip (u8 ("Vuelve a buscar micrófonos e interfaces conectados"));
-    rescanButton.onClick = [this]
+    // Puerto MIDI virtual "SmartKeys Chord Controller"
+    setupToggle (portButton, "MIDI PORT: ", true, 11.5f);
+    portButton.setToggleState (audioProcessor.isVirtualPortEnabled(), juce::dontSendNotification);
+    portButton.onStateChange();
+    portButton.onClick = [this] { audioProcessor.setVirtualPortEnabled (portButton.getToggleState()); };
     {
-        refreshDeviceList();
-        audioProcessor.retryHardwareInput();
-    };
-    content.addAndMakeVisible (rescanButton);
+        const auto portName = juce::String (smartkeys::VirtualMidiPort::kPortName);
+        portButton.setTooltip (u8 ("Crea el puerto MIDI \"") + portName + u8 ("\": el DAW lo ve como un teclado MIDI que toca "
+                               "los acordes completos.\nFL Studio: Options > MIDI Settings > Input > ") + portName
+                               + u8 (" > Enable y ponle un Port libre (p. ej. 10).\nLuego clic derecho en el canal del instrumento "
+                                     "(FLEX, Serum...) > Receive notes from > ") + portName
+                               + u8 (".\nCon SmartKeys seleccionado, toca y graba: ese instrumento recibe y graba el acorde completo."));
+    }
+    content.addAndMakeVisible (portButton);
+
+    portStatusLabel.setFont (makeFont (11.0f, true));
+    portStatusLabel.setJustificationType (juce::Justification::centredLeft);
+    portStatusLabel.setMinimumHorizontalScale (0.65f);
+    portStatusLabel.setInterceptsMouseClicks (false, false);
+    content.addAndMakeVisible (portStatusLabel);
 
     content.addAndMakeVisible (micMeter);
 
@@ -1137,8 +1147,6 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     micStatusLabel.setMinimumHorizontalScale (0.7f);
     micStatusLabel.setColour (juce::Label::textColourId, Colours::label);
     content.addAndMakeVisible (micStatusLabel);
-
-    refreshDeviceList();
 
     //--------------------------------------------------------------------------
     // Pestañas: KEY · SCALE  |  PROGRESIÓN
@@ -1265,13 +1273,14 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
 
     strumKnob.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     strumKnob.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-    strumKnob.setTooltip (u8 ("STRUM / NOTE ENTRY: retardo progresivo entre las notas del acorde (0 a 250 ms por nota). "
+    strumKnob.setTooltip (u8 ("STRUM SPEED / NOTE ENTRY: retardo progresivo entre las notas del acorde (0 a 200 ms). "
                               "0 = todas juntas. Doble clic: OFF."));
-    strumAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, ParamIDs::strumMs, strumKnob);
+    strumAttach = std::make_unique<PolledSliderAttachment> (*apvts.getParameter (ParamIDs::strumMs), strumKnob);
     strumKnob.setDoubleClickReturnValue (true, 0.0);
     content.addAndMakeVisible (strumKnob);
 
-    strumValueLabel.setFont (makeFont (10.5f, true));
+    strumValueLabel.setFont (makeFont (10.0f, true));
+    strumValueLabel.setBorderSize ({ 0, 2, 0, 0 });
     strumValueLabel.setJustificationType (juce::Justification::centredLeft);
     strumValueLabel.setColour (juce::Label::textColourId, Colours::text);
     strumValueLabel.setInterceptsMouseClicks (false, false);
@@ -1289,6 +1298,7 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
 
     setWantsKeyboardFocus (true);
     computerKeyNotes.fill (-1);
+    audioProcessor.editorOpened();   // con la ventana abierta ya puede crearse el puerto MIDI virtual
 
    #if JucePlugin_Build_Standalone
     // En la app Standalone JUCE silencia la entrada por defecto "para evitar
@@ -1339,34 +1349,6 @@ juce::String SmartKeysAudioProcessorEditor::makeExportBaseName() const
 {
     return "SmartKeys - " + displayEngine.getScaleDisplayName() + " - "
            + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H.%M.%S");
-}
-
-void SmartKeysAudioProcessorEditor::refreshDeviceList()
-{
-    shownDevices = audioProcessor.getHardwareInputDevices();
-    deviceBox.clear (juce::dontSendNotification);
-
-    if (shownDevices.isEmpty())
-    {
-        deviceBox.setTextWhenNothingSelected ("Sin entradas de audio");
-        return;
-    }
-
-    deviceBox.setTextWhenNothingSelected (u8 ("Elige tu micrófono / interfaz..."));
-    for (int i = 0; i < shownDevices.size(); ++i)
-        deviceBox.addItem (shownDevices[i], i + 1);
-
-    const int index = shownDevices.indexOf (audioProcessor.getHardwareDeviceName());
-    if (index >= 0)
-        deviceBox.setSelectedId (index + 1, juce::dontSendNotification);
-}
-
-void SmartKeysAudioProcessorEditor::applyDeviceSelection()
-{
-    const int id = deviceBox.getSelectedId();
-    if (id <= 0 || id > shownDevices.size())
-        return;
-    audioProcessor.setHardwareInput (shownDevices[id - 1], juce::jmax (0, channelBox.getSelectedId() - 1), true);
 }
 
 void SmartKeysAudioProcessorEditor::showTab (Tab tab)
@@ -1538,12 +1520,11 @@ void SmartKeysAudioProcessorEditor::layoutContent()
     panicButton.setBounds (484, 54, 142, 28);
     gainSlider.setBounds (670, 54, 164, 28);
 
-    // Tira MIC
+    // Tira MIC + PUERTO MIDI
     micButton.setBounds (22, 94, 150, 28);
-    sourceSwitch.setBounds (174, 94, 180, 28);
-    deviceBox.setBounds (360, 96, 296, 24);
-    channelBox.setBounds (662, 96, 80, 24);
-    rescanButton.setBounds (746, 94, 82, 28);
+    voiceInputLabel.setBounds (180, 94, 356, 28);
+    portButton.setBounds (544, 94, 138, 28);
+    portStatusLabel.setBounds (688, 94, 142, 28);
     micMeter.setBounds (26, 128, 186, 16);
     gateSlider.setBounds (256, 124, 160, 24);
     micStatusLabel.setBounds (424, 124, 404, 24);
@@ -1577,8 +1558,8 @@ void SmartKeysAudioProcessorEditor::layoutContent()
     chordTypeSwitch.setBounds (587, 546, 242, 28);
     variationSwitch.setBounds (587, 546, 242, 28);
     strumKnob.setBounds (587, 578, 40, 40);
-    strumValueLabel.setBounds (629, 578, 62, 40);
-    strumDirSwitch.setBounds (693, 584, 136, 28);
+    strumValueLabel.setBounds (629, 578, 74, 40);
+    strumDirSwitch.setBounds (705, 584, 124, 28);
     dragButton.setBounds (587, 624, 242, 44);
 }
 
@@ -1615,39 +1596,12 @@ void SmartKeysAudioProcessorEditor::timerCallback()
 
     piano.setActiveNotes (audioProcessor.getActiveNotesLo(), audioProcessor.getActiveNotesHi());
 
-    // Micrófono: medidor, dispositivo y estado en vivo
-    const int source = juce::jlimit (0, 1, juce::roundToInt (apvts.getRawParameterValue (ParamIDs::micSource)->load()));
-    const auto& tracker = audioProcessor.getActiveVoiceTracker();
+    // Micrófono: medidor y estado en vivo
+    const auto& tracker = audioProcessor.getVoiceTracker();
     micMeter.setState (audioProcessor.getMicLevelDb(), apvts.getRawParameterValue (ParamIDs::micGate)->load(),
                        tracker.gateOpen.load(), audioProcessor.isMicSourceAvailable());
 
-    const bool deviceSource = source == MicSource::HardwareDevice;
-    deviceBox.setAlpha (deviceSource ? 1.0f : 0.6f);
-    channelBox.setAlpha (deviceSource ? 1.0f : 0.6f);
-
-    if (deviceSource && ! autoDeviceAttempted && audioProcessor.getHardwareDeviceName().isEmpty())
-    {
-        // Primera vez en DEVICE: proponer la entrada por defecto del sistema
-        autoDeviceAttempted = true;
-        const int index = shownDevices.indexOf (audioProcessor.getDefaultHardwareInputDevice());
-        if (index >= 0)
-            deviceBox.setSelectedId (index + 1, juce::sendNotificationSync);
-    }
-    if (! deviceSource)
-        autoDeviceAttempted = false;
-
-    // Si el host carga otro proyecto con la ventana abierta, los selectores lo reflejan
-    if (++stateSyncCounter >= 15)
-    {
-        stateSyncCounter = 0;
-        const int deviceIndex = shownDevices.indexOf (audioProcessor.getHardwareDeviceName());
-        if (deviceIndex >= 0 && deviceBox.getSelectedId() != deviceIndex + 1)
-            deviceBox.setSelectedId (deviceIndex + 1, juce::dontSendNotification);
-        const int channelId = audioProcessor.getHardwareChannelMode() + 1;
-        if (channelBox.getSelectedId() != channelId)
-            channelBox.setSelectedId (channelId, juce::dontSendNotification);
-    }
-
+    updatePortStatus();
     updateMicStatus();
     updateProgressionControls();
     dragButton.setCount (audioProcessor.getNumProgressionChords(), audioProcessor.isProgressionFull(),
@@ -1683,7 +1637,7 @@ void SmartKeysAudioProcessorEditor::updateProgressionControls()
 
     // Valor de la perilla STRUM
     const double strumMs = audioProcessor.getStrumMs();
-    const auto strumText = "STRUM\n" + (strumMs < 0.05 ? juce::String ("OFF")
+    const auto strumText = "STRUM SPEED\n" + (strumMs < 0.05 ? juce::String ("OFF")
                                        : (strumMs < 10.0 ? juce::String (strumMs, 1) : juce::String (juce::roundToInt (strumMs))) + " ms");
     if (strumValueLabel.getText() != strumText)
         strumValueLabel.setText (strumText, juce::dontSendNotification);
@@ -1714,35 +1668,17 @@ void SmartKeysAudioProcessorEditor::updateProgressionControls()
 void SmartKeysAudioProcessorEditor::updateMicStatus()
 {
     const bool micOn = apvts.getRawParameterValue (ParamIDs::micOn)->load() > 0.5f;
-    const int source = juce::jlimit (0, 1, juce::roundToInt (apvts.getRawParameterValue (ParamIDs::micSource)->load()));
-    const auto& tracker = audioProcessor.getActiveVoiceTracker();
+    const auto& tracker = audioProcessor.getVoiceTracker();
     const bool standalone = audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
 
     juce::String text;
     auto colour = Colours::label;
 
-    if (source == MicSource::HardwareDevice && ! audioProcessor.isHardwareMicOpen())
+    if (! audioProcessor.isMicSourceAvailable() || audioProcessor.getMicLevelDb() < -90.0f)
     {
-        const auto status = audioProcessor.getHardwareStatus();
-        text = status.isNotEmpty() ? u8 ("No se pudo abrir el micrófono: ") + status
-                                   : u8 ("Elige tu micrófono en la lista de arriba");
-        colour = status.isNotEmpty() ? Colours::warning : Colours::label;
-    }
-    else if (source == MicSource::HardwareDevice
-             && audioProcessor.getHardwareMsSinceStart() > 2500.0 && audioProcessor.getHardwareMsSinceSignal() > 2500.0)
-    {
-        text = standalone ? u8 ("Sin señal: permite el micrófono a SmartKeys (Ajustes > Privacidad y seguridad > Micrófono)")
-                          : u8 ("Sin señal: permite el micrófono a tu DAW (Ajustes > Privacidad y seguridad > Micrófono)");
-        colour = Colours::warning;
-    }
-    else if (! audioProcessor.isMicSourceAvailable() || audioProcessor.getMicLevelDb() < -90.0f)
-    {
-        if (source == MicSource::DawInput)
-            text = SmartKeysAudioProcessor::isFxVariant ? u8 ("Sin señal en la pista: canta o revisa la entrada del Mixer")
-                 : standalone ? u8 ("Sin señal en la entrada (Options): pulsa DEVICE para leer el micrófono directo")
-                              : u8 ("Sin señal del DAW: pulsa DEVICE para leer el micrófono directo");
-        else
-            text = u8 ("Mic: silencio");
+        text = SmartKeysAudioProcessor::isFxVariant ? u8 ("Sin señal en la pista: canta o revisa la entrada del Mixer")
+             : standalone ? u8 ("Sin señal: elige tu micrófono en Options > Audio/MIDI Settings")
+                          : u8 ("Sin señal: manda el mic al sidechain o usa SmartKeys FX en su pista");
     }
     else if (! tracker.gateOpen.load())
     {
@@ -1782,12 +1718,46 @@ void SmartKeysAudioProcessorEditor::updateMicStatus()
         micStatusLabel.setColour (juce::Label::textColourId, colour);
 }
 
+void SmartKeysAudioProcessorEditor::updatePortStatus()
+{
+    // El botón refleja el proyecto cargado (el host puede cambiarlo con la ventana abierta)
+    const bool enabled = audioProcessor.isVirtualPortEnabled();
+    if (portButton.getToggleState() != enabled)
+    {
+        portButton.setToggleState (enabled, juce::dontSendNotification);
+        portButton.onStateChange();
+    }
+
+    const int state = audioProcessor.getVirtualPortState();
+    if (state == shownPortState)
+        return;
+    shownPortState = state;
+
+    juce::String text;
+    auto colour = Colours::label;
+    switch (state)
+    {
+        case PortState::Active:      text = u8 ("● Chord Controller activo");  colour = juce::Colour (0xFF12B76A); break;
+       #if JUCE_WINDOWS
+        case PortState::Unavailable: text = u8 ("Sólo macOS (usa el MIDI Out)"); colour = Colours::warning;       break;
+       #else
+        // macOS no dejó crear el puerto: casi siempre porque la app SmartKeys u otro
+        // DAW con SmartKeys ya lo tiene abierto. El procesador reintenta solo.
+        case PortState::Unavailable: text = u8 ("En uso por otra app");         colour = Colours::warning;       break;
+       #endif
+        case PortState::Waiting:     text = u8 ("Esperando al DAW...");                                             break;
+        default:                     text = u8 ("Puerto apagado");                                                  break;
+    }
+    portStatusLabel.setText (text, juce::dontSendNotification);
+    portStatusLabel.setColour (juce::Label::textColourId, colour);
+}
+
 void SmartKeysAudioProcessorEditor::updateDisplay()
 {
     const uint64_t packed = audioProcessor.getLastEventPacked();
     const uint64_t lo = audioProcessor.getActiveNotesLo();
     const uint64_t hi = audioProcessor.getActiveNotesHi();
-    const float detected = audioProcessor.getActiveVoiceTracker().detectedMidiNote.load();
+    const float detected = audioProcessor.getVoiceTracker().detectedMidiNote.load();
     const int voiceNote = detected >= 0.0f ? (int) std::lround (detected) : -1;
 
     if (packed == shownEvent && lo == shownLo && hi == shownHi && voiceNote == shownVoiceNote)

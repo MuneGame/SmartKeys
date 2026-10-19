@@ -10,12 +10,15 @@
       - SmartKeys FX  (efecto, SMARTKEYS_FX_VARIANT=1): se inserta en la pista
                       del micrófono del Mixer y recibe la voz como entrada
                       principal, sin ruteos.
-    Ambas pueden además leer el micrófono DIRECTAMENTE desde la interfaz de
-    audio (selector "DEVICE"), sin depender del ruteo del DAW.
+    La voz llega SÓLO por el bus de entrada del plugin: el plugin nunca abre
+    dispositivos de audio propios dentro del DAW.
 
     1.2: la salida MIDI de los acordes completos está SIEMPRE activa; STRUM
     (entrada progresiva ASC/DESC); captura inteligente sincronizada con el
     transporte del DAW; carril de progresión + paleta de acordes estilo Klimper.
+    1.3: puerto MIDI virtual "SmartKeys Chord Controller" (el DAW graba los
+    acordes completos en el Piano Roll de cualquier canal) y processBlock sin
+    asignaciones de memoria ni llamadas al hilo de mensajes.
 
   ==============================================================================
 */
@@ -30,9 +33,9 @@
 #include "VoicePitchTracker.h"
 #include "FlKeysPianoSynth.h"
 #include "MidiOutputRouter.h"
-#include "HardwareMicInput.h"
 #include "StrumScheduler.h"
 #include "Progression.h"
+#include "VirtualMidiPort.h"
 
 #ifndef SMARTKEYS_FX_VARIANT
  #define SMARTKEYS_FX_VARIANT 0
@@ -47,7 +50,6 @@ namespace ParamIDs
     inline constexpr const char* chordExt    = "chordExt";
     inline constexpr const char* complexVar  = "complexVar";
     inline constexpr const char* micOn       = "micOn";
-    inline constexpr const char* micSource   = "micSource";
     inline constexpr const char* micGate     = "micGate";
     inline constexpr const char* outputMode  = "outputMode";
     inline constexpr const char* midiOutCh   = "midiOutCh";
@@ -59,8 +61,8 @@ namespace ParamIDs
 
 // La salida MIDI de los acordes está siempre activa; sólo se elige si suena el piano interno
 namespace OutputMode  { enum : int { PianoAndMidi = 0, MidiOnly = 1 }; }
-namespace MicSource   { enum : int { DawInput = 0, HardwareDevice = 1 }; }
 namespace StrumDir    { enum : int { Ascending = 0, Descending = 1 }; }
+namespace PortState   { enum : int { Off = 0, Active = 1, Unavailable = 2, Waiting = 3 }; }
 namespace CaptureSync { enum : int { PlayOrRecord = 0, RecordOnly = 1, ManualOnly = 2 }; }
 namespace TakeMode    { enum : int { Replace = 0, Add = 1 }; }
 
@@ -126,26 +128,18 @@ public:
     uint64_t getLastEventPacked() const noexcept      { return router.lastEventPacked.load (std::memory_order_acquire); }
     uint64_t getLastVoiceEventPacked() const noexcept { return router.lastVoiceEventPacked.load (std::memory_order_acquire); }
 
-    // Micrófono: detector de la fuente activa, nivel y estado
-    const smartkeys::VoicePitchTracker& getActiveVoiceTracker() const noexcept
-    {
-        return activeVoiceSource.load() == MicSource::HardwareDevice ? hardwareTracker : dawTracker;
-    }
+    // Micrófono (bus de entrada del plugin): detector, nivel y estado
+    const smartkeys::VoicePitchTracker& getVoiceTracker() const noexcept { return voiceTracker; }
     float getMicLevelDb() const noexcept          { return micLevelDb.load(); }
     bool  isMicSourceAvailable() const noexcept   { return micSourceAvailable.load(); }
     bool  isVoiceChordSounding() const noexcept   { return voiceChordSounding.load(); }
 
-    // Micrófono de hardware (vía B) — hilo de mensajes
-    juce::StringArray getHardwareInputDevices()   { return hardwareMic.getInputDeviceNames(); }
-    juce::String getDefaultHardwareInputDevice()  { return hardwareMic.getDefaultInputDeviceName(); }
-    juce::String getHardwareDeviceName() const    { const juce::ScopedLock sl (hardwareStateLock); return hardwareDeviceName; }
-    int  getHardwareChannelMode() const noexcept  { return hardwareChannelMode.load(); }
-    bool isHardwareMicOpen() const noexcept       { return hardwareMic.isOpen(); }
-    juce::String getHardwareStatus() const        { const juce::ScopedLock sl (hardwareStateLock); return hardwareStatus; }
-    double getHardwareMsSinceSignal() const noexcept { return hardwareMic.getMillisecondsSinceSignal(); }
-    double getHardwareMsSinceStart() const noexcept  { return hardwareMic.getMillisecondsSinceStart(); }
-    void setHardwareInput (const juce::String& deviceName, int channelMode, bool activate);
-    void retryHardwareInput();
+    // Puerto MIDI virtual "SmartKeys Chord Controller" (hilo de mensajes)
+    void setVirtualPortEnabled (bool shouldBeOn) noexcept { virtualPortWanted.store (shouldBeOn); }
+    bool isVirtualPortEnabled() const noexcept            { return virtualPortWanted.load(); }
+    int  getVirtualPortState() const noexcept             { return virtualPortState.load(); }
+    int  getVirtualPortSoundingNotes() const noexcept     { return virtualFeed.getNumSoundingNotes(); }
+    void editorOpened() noexcept                          { pluginInUse.store (true); }
 
     //==========================================================================
     // Progresión (DRAG CHORDS TO PIANO ROLL) — hilo de mensajes.
@@ -211,9 +205,11 @@ private:
     void updateEngineIfNeeded();
     void drainScreenNotes (juce::MidiBuffer& out, int outChannel, double ppq, double bpm);
     void drainPaletteEvents (juce::MidiBuffer& out, int outChannel);
-    void openHardwareMicIfNeeded();
     void rebuildPreviewSnapshot();
     void drainCaptureEvents();
+    void updateVirtualPort();
+    void disconnectVirtualPort();
+    void feedVirtualPort (const juce::MidiBuffer& out, int numSamples, double blockStartMs) noexcept;
 
     // Captura (hilo de audio)
     enum class CaptureBase { None, Host, Free };
@@ -240,7 +236,6 @@ private:
     std::atomic<float>* pChordExt    = nullptr;
     std::atomic<float>* pComplexVar  = nullptr;
     std::atomic<float>* pMicOn       = nullptr;
-    std::atomic<float>* pMicSource   = nullptr;
     std::atomic<float>* pMicGate     = nullptr;
     std::atomic<float>* pOutputMode  = nullptr;
     std::atomic<float>* pMidiOutCh   = nullptr;
@@ -250,12 +245,10 @@ private:
     std::atomic<float>* pStrumDir    = nullptr;
 
     smartkeys::ScaleChordEngine  engine;
-    smartkeys::VoicePitchTracker dawTracker;        // vía A: bus de entrada del DAW
-    smartkeys::VoicePitchTracker hardwareTracker;   // vía B: micrófono directo
+    smartkeys::VoicePitchTracker voiceTracker;      // voz: bus de entrada del plugin
     smartkeys::FlKeysPianoSynth  pianoSynth;
     smartkeys::MidiOutputRouter  router;
     smartkeys::StrumScheduler    strum;
-    smartkeys::HardwareMicInput  hardwareMic;
 
     // Personalización de las 12 notas (bit 0 = C)
     std::atomic<uint16_t> customMask { 0b101010110101 };
@@ -268,25 +261,21 @@ private:
     bool     micWasOn = false;
     bool     pianoWasActive = true;
     bool     hostWasRunning = false;
-    int      lastVoiceSource = -1;
     double   currentSampleRate = 44100.0;
 
     // Estado del micrófono para la interfaz
-    std::atomic<int>   activeVoiceSource { MicSource::DawInput };
     std::atomic<float> micLevelDb { -100.0f };
     std::atomic<bool>  micSourceAvailable { false };
     std::atomic<bool>  voiceChordSounding { false };
 
-    // Micrófono de hardware. Lo usan el hilo de mensajes y setStateInformation
-    // (que algunos hosts llaman desde otro hilo): protegido por un candado que
-    // el hilo de audio nunca toma.
-    juce::CriticalSection hardwareStateLock;
-    juce::String     hardwareDeviceName;
-    juce::String     hardwareStatus;
-    bool             hardwareOpenFailed = false;
-    std::atomic<int>  hardwareChannelMode { (int) smartkeys::HardwareMicInput::ChannelMode::Mix };
-    std::atomic<bool> hardwareReopenRequested { false };
-    std::vector<float> hardwareScratch;   // reservado en prepareToPlay
+    // Puerto MIDI virtual. El hilo de audio sólo escribe en 'virtualFeed' (FIFO
+    // lock-free); crear / destruir el puerto ocurre en el hilo de mensajes.
+    smartkeys::VirtualMidiFeed virtualFeed;
+    std::unique_ptr<juce::SharedResourcePointer<smartkeys::VirtualMidiPort>> virtualPort;
+    std::atomic<bool> virtualPortWanted { true }, virtualFeedActive { false }, pluginInUse { false };
+    std::atomic<int>  virtualPortState { PortState::Off };
+    int portRetryTicks = 0;                    // hilo de mensajes: reintentos del puerto si macOS no lo dejó crear
+    std::array<bool, 128> echoSuppressed {};   // hilo de audio: NoteOn de eco ignorados (y sus NoteOff)
 
     // FIFO del teclado en pantalla
     struct ScreenNoteEvent { int note = 60; int velocity = 100; bool on = true; };

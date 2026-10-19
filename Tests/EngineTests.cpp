@@ -15,7 +15,7 @@
 #include "MidiOutputRouter.h"
 #include "StrumScheduler.h"
 #include "Progression.h"
-#include "HardwareMicInput.h"
+#include "VirtualMidiPort.h"
 
 #if defined (__GNUC__) && ! defined (__clang__)
  #pragma GCC diagnostic ignored "-Wmismatched-new-delete"
@@ -470,6 +470,34 @@ static void testSynth()
     CHECK (peak > 0.05f && peak < 1.0f, "nivel audible sin clip");
     CHECK (c > off * 20 && e > off * 20 && g > off * 20, "el espectro contiene C-E-G");
     CHECK (synth.getNumActiveVoices() == 0, "las voces terminan tras el release");
+
+    // Robo de voces sin memoria dinámica: 41 notas pulsadas con 32 voces
+    {
+        juce::MidiBuffer burst;
+        for (int n = 40; n <= 80; ++n)
+            burst.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), n - 40);
+        juce::AudioBuffer<float> b2 (2, 512);
+        b2.clear();
+        long allocs = 0;
+        {
+            AllocationGuard guard;
+            synth.render (b2, burst, 0, 512);
+            allocs = guard.count();
+        }
+        bool lowAndTop = false, bothFound[2] = { false, false };
+        auto& sy = synth.getSynthesiser();
+        for (int i = 0; i < sy.getNumVoices(); ++i)
+        {
+            const int note = sy.getVoice (i)->getCurrentlyPlayingNote();
+            if (note == 40) bothFound[0] = true;
+            if (note == 80) bothFound[1] = true;
+        }
+        lowAndTop = bothFound[0] && bothFound[1];
+        CHECK (synth.getNumActiveVoices() == FlKeysPianoSynth::kNumVoices, "41 notas: las 32 voces suenan (se roban las más antiguas)");
+        CHECK (lowAndTop, "la nota más grave y la más aguda pulsadas se protegen del robo");
+        CHECK (allocs == 0, "robar voces no pide memoria (StealSafeSynthesiser)");
+        synth.allNotesOff();
+    }
 }
 
 //==============================================================================
@@ -1205,25 +1233,120 @@ static void testRouterChordIds()
     CHECK (offs == 3 && ! router.isExplicitSlotActive (MidiOutputRouter::Source::Palette), "el pánico también suelta la paleta");
 }
 
-static void testMicFifo()
+static void testVirtualMidiPort()
 {
-    std::printf ("[21] FIFO del micrófono directo (lock-free, latencia acotada)\n");
-    MicSampleFifo f (1024);
-    std::vector<float> in (300), out (4096);
-    for (int i = 0; i < 300; ++i) in[(size_t) i] = (float) i;
+    std::printf ("[21] Puerto MIDI virtual (FIFO lock-free + hilo propio con marcas de tiempo)\n");
 
-    CHECK (f.push (in.data(), 300) == 300, "escribe 300 muestras");
-    const int n1 = f.pull (out.data(), 4096, 1000);
-    CHECK (n1 == 300 && std::abs (out[0]) < 1.0e-6f && std::abs (out[299] - 299.0f) < 1.0e-6f, "lee en orden");
+    struct Received { juce::MidiMessage msg; double atMs; };
+    juce::CriticalSection lock;
+    std::vector<Received> received;
+    auto snapshot = [&]
+    {
+        const juce::ScopedLock sl (lock);
+        return received;
+    };
 
-    for (int k = 0; k < 3; ++k) f.push (in.data(), 300);   // 900 acumuladas
-    const int n2 = f.pull (out.data(), 4096, 400);
-    CHECK (n2 == 200 && std::abs (out[(size_t) n2 - 1] - 299.0f) < 1.0e-6f, "descarta lo antiguo y conserva lo más reciente");
+    VirtualMidiPort port ([&] (const juce::MidiMessage& m)
+    {
+        const juce::ScopedLock sl (lock);
+        received.push_back ({ m, juce::Time::getMillisecondCounterHiRes() });
+    });
+    CHECK (port.isAvailable(), "el puerto de prueba está disponible");
 
-    std::vector<float> big (2000, 1.0f);
-    CHECK (f.push (big.data(), 2000) == 1023, "nunca desborda el buffer");
-    f.discardAll();
-    CHECK (f.getNumReady() == 0, "discardAll vacía el FIFO");
+    auto feed = std::make_unique<VirtualMidiFeed>();
+    port.addFeed (*feed);
+
+    auto ev = [] (double due, int status, int d1, int d2)
+    {
+        VirtualMidiEvent e;
+        e.dueMs = due;
+        e.status = (uint8_t) status;
+        e.data1 = (uint8_t) d1;
+        e.data2 = (uint8_t) d2;
+        return e;
+    };
+
+    // Acorde C mayor con STRUM: C4 +20 ms, E4 +40 ms, G4 +60 ms; NoteOff juntos a +150 ms
+    const double t0 = juce::Time::getMillisecondCounterHiRes();
+    feed->push (ev (t0 + 20.0, 0x90, 60, 100));
+    feed->push (ev (t0 + 40.0, 0x90, 64, 100));
+    feed->push (ev (t0 + 60.0, 0x90, 67, 100));
+    juce::Thread::sleep (100);
+
+    auto r = snapshot();
+    CHECK (r.size() == 3 && r[0].msg.getNoteNumber() == 60 && r[1].msg.getNoteNumber() == 64 && r[2].msg.getNoteNumber() == 67,
+           "los 3 NoteOn salen en orden");
+    bool onTime = r.size() == 3;
+    for (size_t i = 0; i < r.size(); ++i)
+    {
+        const double due = t0 + 20.0 * (double) (i + 1);
+        std::printf ("     nota %d: %+.1f ms respecto a su instante\n", r[i].msg.getNoteNumber(), r[i].atMs - due);
+        onTime = onTime && r[i].atMs >= due - 0.5 && r[i].atMs <= due + 15.0;
+    }
+    CHECK (onTime, "cada nota sale en su instante (el desfase del STRUM se conserva)");
+
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    CHECK (feed->isEcho (64, now) && ! feed->isEcho (62, now), "una nota que acaba de salir y vuelve al plugin se reconoce como eco");
+    CHECK (feed->getNumSoundingNotes() == 3, "3 notas encendidas en el puerto");
+
+    feed->push (ev (t0 + 150.0, 0x80, 60, 0));
+    feed->push (ev (t0 + 150.0, 0x80, 64, 0));
+    juce::Thread::sleep (120);
+    r = snapshot();
+    CHECK (r.size() == 5 && r[3].msg.isNoteOff() && r[4].msg.isNoteOff(), "los NoteOff salen");
+    CHECK (! feed->isEcho (60, juce::Time::getMillisecondCounterHiRes()), "tras su NoteOff ya no es eco");
+
+    // NoteOff de una nota que nunca se envió: no sale
+    feed->push (ev (juce::Time::getMillisecondCounterHiRes(), 0x80, 72, 0));
+    // NoteOn viejo (el puerto estaba apagado): se descarta
+    feed->push (ev (juce::Time::getMillisecondCounterHiRes() - 1000.0, 0x90, 74, 100));
+    juce::Thread::sleep (60);
+    CHECK (snapshot().size() == 5, "ni NoteOff huérfanos ni NoteOn caducados");
+
+    // Desconectar con G4 aún sonando: el DAW recibe su NoteOff (nada queda colgado)
+    port.removeFeed (*feed);
+    r = snapshot();
+    CHECK (r.size() == 6 && r[5].msg.isNoteOff() && r[5].msg.getNoteNumber() == 67, "al desconectar se apaga lo que sonaba");
+    CHECK (feed->getNumSoundingNotes() == 0, "sin notas encendidas tras desconectar");
+
+    // FIFO lleno: push devuelve false y nunca bloquea
+    int accepted = 0;
+    for (int i = 0; i < VirtualMidiFeed::kCapacity + 100; ++i)
+        accepted += feed->push (ev (0.0, 0x90, 60, 100)) ? 1 : 0;
+    CHECK (accepted == VirtualMidiFeed::kCapacity - 1, "FIFO de tamaño fijo: lo que no cabe se descarta");
+
+    // Al volver a conectar se descarta lo que quedó en el FIFO
+    port.addFeed (*feed);
+    juce::Thread::sleep (30);
+    CHECK (snapshot().size() == 6, "lo antiguo del FIFO no se envía al reconectar");
+    port.removeFeed (*feed);
+
+   #if ! JUCE_WINDOWS
+    // Si el sistema no deja crear el puerto (en Mac: otra app con SmartKeys ya lo
+    // tiene), retryOpen() lo vuelve a intentar más tarde
+    {
+        unsetenv ("SMARTKEYS_TEST_VIRTUAL_PORT");
+        VirtualMidiPort systemPort;
+        if (systemPort.isAvailable())
+        {
+            std::printf ("     (este sistema sí deja crear el puerto: se omite la prueba del reintento)\n");
+        }
+        else
+        {
+            CHECK (! systemPort.retryOpen(), "sin MIDI del sistema el reintento sigue sin puerto, sin caerse");
+            setenv ("SMARTKEYS_TEST_VIRTUAL_PORT", "1", 1);
+            CHECK (systemPort.retryOpen() && systemPort.isAvailable(), "cuando el sistema lo permite, el reintento abre el puerto");
+            auto feed2 = std::make_unique<VirtualMidiFeed>();
+            systemPort.addFeed (*feed2);
+            feed2->push (ev (juce::Time::getMillisecondCounterHiRes(), 0x90, 60, 100));
+            juce::Thread::sleep (40);
+            CHECK (feed2->getNumSoundingNotes() == 1, "y su hilo empieza a enviar las notas");
+            systemPort.removeFeed (*feed2);
+            CHECK (feed2->getNumSoundingNotes() == 0, "al desconectar no queda nada encendido");
+            unsetenv ("SMARTKEYS_TEST_VIRTUAL_PORT");
+        }
+    }
+   #endif
 }
 
 //==============================================================================
@@ -1244,6 +1367,7 @@ static void testRealtimeAllocations()
     strum.prepare (sr);
     strum.setStrum (40.0, false);
     auto captureFifo = std::make_unique<CaptureFifo>();
+    auto portFeed = std::make_unique<VirtualMidiFeed>();
     juce::MidiBuffer routed, out;
     routed.ensureSize (16384);
     out.ensureSize (16384);
@@ -1284,9 +1408,27 @@ static void testRealtimeAllocations()
         if (b % 11 == 5) router.handleExplicitChordOff (MidiOutputRouter::Source::Preview, 7, routed);
         if (b % 200 == 199) captureFifo->drain ([] (const CaptureEvent&) {});
         strum.process (routed, out, block);
+        for (const auto meta : out)   // puerto MIDI virtual: sólo el FIFO de tamaño fijo
+        {
+            VirtualMidiEvent pe;
+            pe.status = meta.data[0];
+            pe.data1 = meta.numBytes > 1 ? meta.data[1] : 0;
+            pe.data2 = meta.numBytes > 2 ? meta.data[2] : 0;
+            portFeed->push (pe);   // lleno: se descarta, nunca bloquea ni asigna
+            (void) portFeed->isEcho (pe.data1 & 0x7F, 0.0);
+        }
         if (b % 50 == 0) engine.setState ((b / 50) % 12, (b / 50) % kNumScales, ScaleChordEngine::getPitchClassMask ((b / 50) % 12, (b / 50) % kNumScales));
         if (b % 90 == 0) engine.setMode ((OperationMode) ((b / 90) % 3));                 // Smart / Single / Complex
         if (b % 130 == 0) engine.setComplexVariation ((ComplexVariation) ((b / 130) % 3));
+        if (b % 37 == 0)
+        {
+            // Ráfaga de 40 notas con 32 voces: obliga a robar voces (sin memoria dinámica)
+            for (int n = 0; n < 40; ++n)
+                out.addEvent (juce::MidiMessage::noteOn (1, 36 + n, (juce::uint8) 90), n);
+        }
+        if (b % 37 == 20)
+            for (int n = 0; n < 40; ++n)
+                out.addEvent (juce::MidiMessage::noteOff (1, 36 + n), n);
         audio.clear();
         synth.render (audio, out, 0, block);
     };
@@ -1299,7 +1441,7 @@ static void testRealtimeAllocations()
         for (int b = 64; b < 2000; ++b) runBlock (b);
         allocs = guard.count();
     }
-    std::printf ("    1936 bloques (tracker + router + STRUM + captura + motor + sinte): %ld asignaciones\n", allocs);
+    std::printf ("    1936 bloques (tracker + router + STRUM + captura + puerto MIDI + motor + sinte con robo de voces): %ld asignaciones\n", allocs);
     CHECK (allocs == 0, "cero asignaciones en el hilo de audio");
 }
 
@@ -1326,7 +1468,7 @@ int main()
     testPaletteAndNumerals();
     testStrumScheduler();
     testRouterChordIds();
-    testMicFifo();
+    testVirtualMidiPort();
     testRealtimeAllocations();
 
     std::printf ("\n%d comprobaciones, %d fallos\n", gChecks, gFailures);

@@ -21,7 +21,7 @@
 # ==============================================================================
 set -euo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 ID_BASE="com.jeanpaulaudio.smartkeys"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

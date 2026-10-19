@@ -21,7 +21,7 @@
       5. SmartKeys FX: la voz de la pista (entrada principal) dispara acordes y
          se reemplaza por el piano.
 
-    Uso:  SmartKeysHostTests <SmartKeys.vst3> [<SmartKeys FX.vst3>]
+    Uso:  SmartKeysHostTests <SmartKeys.vst3> [<SmartKeys FX.vst3>] [--stress <segundos>]
 
   ==============================================================================
 */
@@ -32,8 +32,77 @@
 #include <set>
 #include <map>
 #include <vector>
+#include <thread>
+#include <random>
+#include <cerrno>
+#include <cstdlib>
 
 using namespace juce;
+
+//==============================================================================
+// Contador de asignaciones de memoria de TODO el proceso (host + plugin), sólo
+// en el hilo que lo activa: se reemplaza malloc de glibc. Así se comprueba que
+// el processBlock del VST3 compilado no pide memoria. (No con sanitizers.)
+#if JUCE_LINUX && ! defined (__SANITIZE_ADDRESS__) && ! defined (__SANITIZE_THREAD__)
+ #define SK_COUNT_ALLOCATIONS 1
+ #include <execinfo.h>
+static __thread int tlsCountAllocations = 0;
+static __thread int tlsInHook = 0;
+static std::atomic<long> gProcessAllocations { 0 };
+
+// Con SK_ALLOC_TRACE=1 se guarda la pila de las primeras asignaciones contadas
+static bool gTraceAllocations = false;
+static void* gTraceStacks[8][24];
+static int gTraceDepth[8];
+static std::atomic<int> gNumTraces { 0 };
+
+static void noteAllocation()
+{
+    gProcessAllocations.fetch_add (1);
+    if (gTraceAllocations && tlsInHook == 0)
+    {
+        const int slot = gNumTraces.fetch_add (1);
+        if (slot < 8)
+        {
+            ++tlsInHook;
+            gTraceDepth[slot] = backtrace (gTraceStacks[slot], 24);
+            --tlsInHook;
+        }
+    }
+}
+
+static void printAllocationTraces()
+{
+    for (int i = 0; i < jmin (8, gNumTraces.load()); ++i)
+    {
+        std::cout << "     --- asignación " << (i + 1) << ":" << std::endl;
+        backtrace_symbols_fd (gTraceStacks[i], gTraceDepth[i], 1);
+    }
+}
+
+extern "C"
+{
+    void* __libc_malloc (size_t);
+    void* __libc_calloc (size_t, size_t);
+    void* __libc_realloc (void*, size_t);
+    void* __libc_memalign (size_t, size_t);
+
+    void* malloc (size_t n)            { if (tlsCountAllocations && ! tlsInHook) noteAllocation(); return __libc_malloc (n); }
+    void* calloc (size_t a, size_t b)  { if (tlsCountAllocations && ! tlsInHook) noteAllocation(); return __libc_calloc (a, b); }
+    void* realloc (void* p, size_t n)  { if (tlsCountAllocations && ! tlsInHook) noteAllocation(); return __libc_realloc (p, n); }
+    void* memalign (size_t a, size_t n){ if (tlsCountAllocations && ! tlsInHook) noteAllocation(); return __libc_memalign (a, n); }
+    void* aligned_alloc (size_t a, size_t n) { return memalign (a, n); }
+    int posix_memalign (void** out, size_t a, size_t n)
+    {
+        *out = memalign (a, n);
+        return *out != nullptr ? 0 : ENOMEM;
+    }
+}
+#else
+ #define SK_COUNT_ALLOCATIONS 0
+static int tlsCountAllocations = 0;
+static std::atomic<long> gProcessAllocations { 0 };
+#endif
 
 namespace
 {
@@ -164,6 +233,9 @@ public:
     }
 
     AudioPluginInstance& instance() { return *plugin; }
+
+    void getState (MemoryBlock& mb)               { plugin->getStateInformation (mb); }
+    void setState (const MemoryBlock& mb)         { plugin->setStateInformation (mb.getData(), (int) mb.getSize()); }
     bool isInstrument() const { return plugin != nullptr && plugin->getPluginDescription().isInstrument; }
     int getNumInputs() const  { return numIns; }
 
@@ -183,6 +255,12 @@ public:
             const int steps = p->getNumSteps();
             p->setValueNotifyingHost (steps > 1 ? (float) index / (float) (steps - 1) : (float) index);
         }
+    }
+
+    void setText (const String& name, const String& text)
+    {
+        if (auto* p = findParameter (name))
+            p->setValueNotifyingHost (p->getValueForText (text));
     }
 
     void setBool (const String& name, bool on)
@@ -224,25 +302,53 @@ public:
         return process();
     }
 
-    BlockResult process()
+    BlockResult process (int numSamples = blockSize)
     {
-        plugin->processBlock (buffer, midi);
+        AudioBuffer<float> view (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), numSamples);
+
+        ++tlsCountAllocations;
+        plugin->processBlock (view, midi);
+        --tlsCountAllocations;
 
         BlockResult r;
         for (const auto meta : midi)
         {
+            if (meta.samplePosition < 0 || meta.samplePosition >= jmax (1, numSamples) || (numSamples == 0))
+                ++eventsOutOfRange;
             auto m = meta.getMessage();
             m.setTimeStamp ((double) (sampleClock + meta.samplePosition));
             r.midi.push_back (m);
         }
-        for (int ch = 0; ch < numOuts; ++ch)
-            r.outputRms = jmax (r.outputRms, buffer.getRMSLevel (ch, 0, blockSize));
+        for (int ch = 0; ch < numOuts && numSamples > 0; ++ch)
+            r.outputRms = jmax (r.outputRms, view.getRMSLevel (ch, 0, numSamples));
 
-        sampleClock += blockSize;
+        sampleClock += numSamples;
         if (transport.playing || transport.recording)
-            transport.ppq += (double) blockSize * transport.bpm / (60.0 * sampleRate);
+            transport.ppq += (double) numSamples * transport.bpm / (60.0 * sampleRate);
         return r;
     }
+
+    // Bloque de 'numSamples' muestras (FL Studio usa tamaños variables, incluso 0)
+    BlockResult runSized (int numSamples, const std::vector<std::pair<int, MidiMessage>>& events, double sineHz = 0.0, float amplitude = 0.0f)
+    {
+        buffer.clear();
+        if (sineHz > 0.0)
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float v = amplitude * (float) std::sin (phase);
+                phase += MathConstants<double>::twoPi * sineHz / sampleRate;
+                for (int ch = 0; ch < numIns; ++ch)
+                    buffer.setSample (ch, i, v);
+            }
+        }
+        midi.clear();
+        for (auto& e : events)
+            midi.addEvent (e.second, jlimit (0, jmax (0, numSamples - 1), e.first));
+        return process (numSamples);
+    }
+
+    int eventsOutOfRange = 0;
 
     // Reproduce 'lengthBeats' desde 'startBeat' con el DAW en PLAY tocando 'notes'
     // (como un Piano Roll con notas sueltas) y devuelve todo el MIDI de salida
@@ -441,7 +547,7 @@ void testInstrument (const String& path)
     std::cout << "\n-- 4b. STRUM: entrada progresiva ASC / DESC (exacta a la muestra)" << std::endl;
     {
         host.setChoice ("Mode", 0);
-        if (auto* p = host.findParameter ("Strum"))
+        if (auto* p = host.findParameter ("Strum Speed"))
         {
             p->setValueNotifyingHost (p->getValueForText ("100"));   // el plugin convierte "100" ms a su rango
             std::cout << "     Strum = " << p->getCurrentValueAsText() << std::endl;
@@ -484,7 +590,7 @@ void testInstrument (const String& path)
         re.midi.insert (re.midi.end(), taile.midi.begin(), taile.midi.end());
         check (re.countNoteOn() == 1 && re.countNoteOff() == 1, "NoteOff anticipado: las notas pendientes se cancelan (0 notas colgadas)");
 
-        if (auto* p = host.findParameter ("Strum"))
+        if (auto* p = host.findParameter ("Strum Speed"))
             p->setValueNotifyingHost (0.0f);
         host.setChoice ("Strum Direction", 0);
         host.settle();
@@ -546,7 +652,6 @@ void testInstrument (const String& path)
 
     std::cout << "\n-- 6. Voz -> acorde por la entrada del DAW (vía A)" << std::endl;
     {
-        host.setChoice ("Mic Source", 0);   // DAW INPUT
         host.setChoice ("Mic Gate", 0);     // umbral mínimo: no influye en la prueba
         host.setBool ("Mic Voice Controller", true);
         host.setChoice ("Output Mode", 1);  // sólo MIDI, para medir el silencio del audio
@@ -564,6 +669,234 @@ void testInstrument (const String& path)
         host.setChoice ("Output Mode", 0);
     }
 
+    std::cout << "\n-- 7. Bloques de tamaño variable y de 0 muestras (como FL Studio)" << std::endl;
+    {
+        host.setChoice ("Mode", 0);
+        host.setText ("Strum Speed", "60");
+        host.setBool ("Mic Voice Controller", true);
+        host.transport.playing = true;
+        host.transport.ppq = 0.0;
+        host.eventsOutOfRange = 0;
+
+        std::mt19937 rng (7);
+        std::set<int> held;
+        int zeroBlocksWithMidi = 0, totalEvents = 0, inputNoteOns = 0, outputNoteOns = 0;
+        for (int i = 0; i < 4000; ++i)
+        {
+            const int n = rng() % 9 == 0 ? 0 : 1 + (int) (rng() % 512);
+            std::vector<std::pair<int, MidiMessage>> ev;
+            if (n > 0 && rng() % 4 == 0)
+            {
+                const int note = 48 + (int) (rng() % 36);
+                const int pos = (int) (rng() % (unsigned) n);
+                if (held.count (note) > 0) { ev.push_back ({ pos, MidiMessage::noteOff (1, note) }); held.erase (note); }
+                else                       { ev.push_back ({ pos, MidiMessage::noteOn (1, note, (uint8) 100) }); held.insert (note); ++inputNoteOns; }
+            }
+            if (n > 0 && rng() % 97 == 0)
+                ev.push_back ({ 0, MidiMessage::controllerEvent (1, 64, 127) });
+            if (rng() % 600 == 0)
+                host.transport.ppq = 0.0;   // el patrón vuelve a empezar
+            auto r = host.runSized (n, ev, rng() % 3 == 0 ? 220.0 : 0.0, 0.3f);
+            totalEvents += (int) r.midi.size();
+            outputNoteOns += r.countNoteOn();
+            if (n == 0 && ! r.midi.empty())
+                ++zeroBlocksWithMidi;
+        }
+        std::vector<std::pair<int, MidiMessage>> offs;
+        for (int note : held)
+            offs.push_back ({ 0, MidiMessage::noteOff (1, note) });
+        host.runSized (256, offs);
+        host.transport.playing = false;
+        host.setBool ("Mic Voice Controller", false);
+        host.setText ("Strum Speed", "0");
+        host.settle();
+
+        std::cout << "     4000 bloques de 0 a 512 muestras: " << inputNoteOns << " teclas -> " << outputNoteOns
+                  << " NoteOn de salida (" << totalEvents << " eventos MIDI)" << std::endl;
+        check (host.eventsOutOfRange == 0, "cada evento MIDI de salida cae dentro de su bloque (0 <= posición < tamaño)");
+        check (zeroBlocksWithMidi == 0, "un bloque de 0 muestras no saca ningún evento MIDI");
+    }
+
+    std::cout << "\n-- 7b. Puerto MIDI virtual: los acordes salen por el puerto y su eco no vuelve a entrar" << std::endl;
+    {
+        // El temporizador del plugin crea el puerto (SMARTKEYS_TEST_VIRTUAL_PORT: sin MIDI del
+        // sistema). Su hilo de mensajes es este (el host le da su bucle de eventos): hay que darle cuerda.
+        MessageManager::getInstance()->runDispatchLoopUntil (400);
+        host.setText ("Strum Speed", "0");
+        host.setChoice ("Mode", 0);
+        host.settle (2);
+
+        auto chord = host.run ({ MidiMessage::noteOn (1, 60, (uint8) 100) });   // C4 -> C E G
+        check (chord.notesOn (1) == std::set<int> { 60, 64, 67 }, "C4 -> C mayor completo");
+        Thread::sleep (60);   // el hilo del puerto los envía en su instante
+
+        // FL devuelve el acorde por el puerto al propio SmartKeys (su canal seleccionado)
+        auto echo = host.run ({ MidiMessage::noteOn (1, 64, (uint8) 100), MidiMessage::noteOn (1, 67, (uint8) 100) });
+        check (echo.countNoteOn() == 0, "el eco del puerto (E4, G4) no dispara acordes nuevos: no hay bucle");
+        auto echoOff = host.run ({ MidiMessage::noteOff (1, 64), MidiMessage::noteOff (1, 67) });
+        check (echoOff.countNoteOff() == 0, "y sus NoteOff no sueltan el acorde que suena");
+
+        auto real = host.run ({ MidiMessage::noteOn (1, 62, (uint8) 100) });    // D4 de verdad
+        check (real.notesOn (1) == std::set<int> { 62, 65, 69 }, "una tecla real (D4) sigue funcionando: Dm");
+        auto offs = host.run ({ MidiMessage::noteOff (1, 60), MidiMessage::noteOff (1, 62) });
+        check (offs.notesOff (1) == std::set<int> { 60, 62, 64, 65, 67, 69 }, "al soltar todo, salen los 6 NoteOff");
+        host.settle();
+    }
+
+   #if SK_COUNT_ALLOCATIONS
+    std::cout << "\n-- 8. processBlock del VST3 compilado: cero asignaciones de memoria" << std::endl;
+    {
+        host.setText ("Strum Speed", "80");
+        host.setBool ("Mic Voice Controller", true);
+        host.transport.playing = true;
+        host.transport.ppq = 0.0;
+
+        // (el puerto MIDI virtual sigue activo: su FIFO también se llena en estos bloques)
+        std::mt19937 rng (3);
+        std::set<int> held;
+        auto scenarioBlock = [&] (int i)
+        {
+            const int n = 32 + (int) (rng() % 481);
+            std::vector<std::pair<int, MidiMessage>> ev;
+            if (rng() % 3 == 0)
+            {
+                const int note = 48 + (int) (rng() % 30);
+                if (held.count (note) > 0) { ev.push_back ({ 0, MidiMessage::noteOff (1, note) }); held.erase (note); }
+                else                       { ev.push_back ({ 0, MidiMessage::noteOn (1, note, (uint8) 90) }); held.insert (note); }
+            }
+            if (i % 400 == 0)
+                host.transport.ppq = 0.0;
+            host.runSized (n, ev, (i / 100) % 2 == 0 ? 220.0 : 0.0, 0.3f);
+        };
+
+        for (int i = 0; i < 300; ++i)
+            scenarioBlock (i);   // calentamiento (los buffers alcanzan su capacidad)
+
+        {
+            void* warm[4];
+            backtrace (warm, 4);   // la primera llamada carga libgcc (asigna): fuera del contador
+        }
+        gTraceAllocations = SystemStats::getEnvironmentVariable ("SK_ALLOC_TRACE", {}).isNotEmpty();
+        gProcessAllocations = 0;
+        for (int i = 300; i < 3300; ++i)
+        {
+            if (i % 250 == 0)
+            {
+                host.setChoice ("Mode", (i / 250) % 3);                  // SMART / SINGLE / COMPLEX
+                host.setChoice ("Scale", (i / 250) % 12);
+                host.setText ("Strum Speed", String ((i / 250) % 5 * 40));
+                host.setChoice ("Strum Direction", (i / 250) % 2);
+            }
+            scenarioBlock (i);
+        }
+        const long allocs = gProcessAllocations.load();
+        std::cout << "     3000 bloques (notas, STRUM, captura con el DAW en PLAY, voz, cambios de modo/escala): "
+                  << allocs << " asignaciones" << std::endl;
+        check (allocs == 0, "el hilo de audio nunca pide memoria (ni realloc, ni new, ni juce::String)");
+        if (gTraceAllocations)
+            printAllocationTraces();
+        gTraceAllocations = false;
+
+        std::vector<std::pair<int, MidiMessage>> offs;
+        for (int note : held)
+            offs.push_back ({ 0, MidiMessage::noteOff (1, note) });
+        host.runSized (256, offs);
+        host.transport.playing = false;
+        host.setBool ("Mic Voice Controller", false);
+        host.setText ("Strum Speed", "0");
+        host.setChoice ("Mode", 0);
+        host.setChoice ("Scale", 0);
+        host.setChoice ("Strum Direction", 0);
+        host.settle();
+    }
+   #endif
+
+    host.unload();
+}
+
+//==============================================================================
+// Concurrencia: un hilo de "audio" llama a processBlock sin parar (bloques de
+// tamaño variable, notas, transporte en PLAY con bucles, voz) mientras el hilo
+// de mensajes guarda / carga el estado y cambia parámetros, como hace FL Studio.
+// Pensada para ejecutarse también con AddressSanitizer / ThreadSanitizer.
+void testConcurrency (const String& path, double seconds)
+{
+    std::cout << "\n=== Concurrencia: audio + mensajes durante " << seconds << " s ===" << std::endl;
+    Host host;
+    if (! host.load (path)) { check (false, "cargar el plugin"); return; }
+
+    host.setText ("Strum Speed", "70");
+    host.setBool ("Mic Voice Controller", true);
+    host.eventsOutOfRange = 0;
+
+    std::atomic<bool> stop { false };
+    std::atomic<long> blocks { 0 };
+    std::thread audio ([&]
+    {
+        std::mt19937 rng (11);
+        std::set<int> held;
+        host.transport.playing = true;
+        while (! stop.load())
+        {
+            const int n = rng() % 13 == 0 ? 0 : 16 + (int) (rng() % 497);
+            std::vector<std::pair<int, MidiMessage>> ev;
+            if (n > 0 && rng() % 3 == 0)
+            {
+                const int note = 40 + (int) (rng() % 50);
+                if (held.count (note) > 0) { ev.push_back ({ (int) (rng() % (unsigned) n), MidiMessage::noteOff (1, note) }); held.erase (note); }
+                else                       { ev.push_back ({ (int) (rng() % (unsigned) n), MidiMessage::noteOn (1, note, (uint8) 100) }); held.insert (note); }
+            }
+            if (rng() % 500 == 0)
+                host.transport.ppq = 0.0;
+            host.runSized (n, ev, rng() % 2 == 0 ? 220.0 : 0.0, 0.25f);
+            ++blocks;
+        }
+        std::vector<std::pair<int, MidiMessage>> offs;
+        for (int note : held)
+            offs.push_back ({ 0, MidiMessage::noteOff (1, note) });
+        host.runSized (256, offs);
+    });
+
+    struct Hammer : public Timer
+    {
+        Hammer (Host& h, double end) : host (h), endMs (end) {}
+        void timerCallback() override
+        {
+            ++iterations;
+            MemoryBlock state;
+            host.getState (state);
+            if (rng() % 3 == 0 && previous.getSize() > 0)
+                host.setState (previous);
+            previous = state;
+            host.setChoice ("Mode", (int) (rng() % 3));
+            host.setChoice ("Scale", (int) (rng() % 12));
+            host.setChoice ("Key", (int) (rng() % 12));
+            host.setText ("Strum Speed", String ((int) (rng() % 200)));
+            host.setChoice ("Strum Direction", (int) (rng() % 2));
+            host.setChoice ("Output Mode", (int) (rng() % 2));
+            if (Time::getMillisecondCounterHiRes() > endMs)
+            {
+                stopTimer();
+                MessageManager::getInstance()->stopDispatchLoop();
+            }
+        }
+        Host& host;
+        double endMs;
+        int iterations = 0;
+        MemoryBlock previous;
+        std::mt19937 rng { 5 };
+    };
+
+    Hammer hammer (host, Time::getMillisecondCounterHiRes() + seconds * 1000.0);
+    hammer.startTimer (7);
+    MessageManager::getInstance()->runDispatchLoop();
+    stop = true;
+    audio.join();
+
+    std::cout << "     " << blocks.load() << " bloques de audio, " << hammer.iterations
+              << " rondas de estado/parámetros en el hilo de mensajes" << std::endl;
+    check (blocks.load() > 200 && hammer.iterations > 20, "los dos hilos trabajaron a la vez");
+    check (host.eventsOutOfRange == 0, "con todo a la vez, ningún evento MIDI fuera de su bloque");
     host.unload();
 }
 
@@ -582,7 +915,6 @@ void testFx (const String& path)
     host.setChoice ("Mode", 0);
     host.setChoice ("Output Mode", 0);
     host.setChoice ("MIDI Out Channel", 0);
-    host.setChoice ("Mic Source", 0);
     host.setChoice ("Mic Gate", 0);
     host.setBool ("Mic Voice Controller", false);
     host.settle (4);
@@ -613,6 +945,8 @@ void testFx (const String& path)
 //==============================================================================
 int main (int argc, char* argv[])
 {
+    // Puerto MIDI virtual de prueba (estas máquinas no tienen MIDI del sistema)
+    setenv ("SMARTKEYS_TEST_VIRTUAL_PORT", "1", 1);
     ScopedJuceInitialiser_GUI juceInit;
 
     if (argc < 2)
@@ -623,9 +957,22 @@ int main (int argc, char* argv[])
 
     // Rutas absolutas (juce::File no admite rutas relativas)
     const auto cwd = File::getCurrentWorkingDirectory();
-    testInstrument (cwd.getChildFile (String::fromUTF8 (argv[1])).getFullPathName());
-    if (argc > 2)
-        testFx (cwd.getChildFile (String::fromUTF8 (argv[2])).getFullPathName());
+    double stressSeconds = 4.0;
+    StringArray paths;
+    for (int i = 1; i < argc; ++i)
+    {
+        const auto arg = String::fromUTF8 (argv[i]);
+        if (arg == "--stress" && i + 1 < argc)
+            stressSeconds = String::fromUTF8 (argv[++i]).getDoubleValue();
+        else
+            paths.add (cwd.getChildFile (arg).getFullPathName());
+    }
+
+    testInstrument (paths[0]);
+    if (paths.size() > 1)
+        testFx (paths[1]);
+    if (stressSeconds > 0.0)
+        testConcurrency (paths[0], stressSeconds);
 
     std::cout << "\n" << numChecks << " comprobaciones, " << numFailures << " fallos" << std::endl;
     return numFailures == 0 ? 0 : 1;

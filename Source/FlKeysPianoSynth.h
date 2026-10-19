@@ -349,6 +349,50 @@ private:
 };
 
 //==============================================================================
+//==============================================================================
+// juce::Synthesiser con robo de voces SIN memoria dinámica: el original crea un
+// Array temporal en cada robo (findVoiceToSteal), es decir, pide memoria en el
+// hilo de audio. Mismas reglas: la nota repetida primero, luego la voz más
+// antigua ya soltada, la más antigua sin dedo encima y la más antigua no
+// protegida; la nota más grave y la más aguda que siguen pulsadas se protegen.
+class StealSafeSynthesiser : public juce::Synthesiser
+{
+protected:
+    juce::SynthesiserVoice* findVoiceToSteal (juce::SynthesiserSound* sound, int, int midiNoteNumber) const override
+    {
+        juce::SynthesiserVoice* low = nullptr;   // nota más grave que sigue pulsada (no en release)
+        juce::SynthesiserVoice* top = nullptr;   // nota más aguda que sigue pulsada
+
+        for (auto* v : voices)
+        {
+            if (v->canPlaySound (sound) && ! v->isPlayingButReleased())
+            {
+                const int note = v->getCurrentlyPlayingNote();
+                if (low == nullptr || note < low->getCurrentlyPlayingNote())  low = v;
+                if (top == nullptr || note > top->getCurrentlyPlayingNote())  top = v;
+            }
+        }
+        if (top == low)
+            top = nullptr;
+
+        auto oldestWhere = [&] (auto&& predicate) -> juce::SynthesiserVoice*
+        {
+            juce::SynthesiserVoice* best = nullptr;
+            for (auto* v : voices)
+                if (v->canPlaySound (sound) && predicate (v) && (best == nullptr || v->wasStartedBefore (*best)))
+                    best = v;
+            return best;
+        };
+
+        if (auto* v = oldestWhere ([&] (auto* x) { return x->getCurrentlyPlayingNote() == midiNoteNumber; }))  return v;
+        if (auto* v = oldestWhere ([&] (auto* x) { return x != low && x != top && x->isPlayingButReleased(); }))  return v;
+        if (auto* v = oldestWhere ([&] (auto* x) { return x != low && x != top && ! x->isKeyDown(); }))  return v;
+        if (auto* v = oldestWhere ([&] (auto* x) { return x != low && x != top; }))  return v;
+        return top != nullptr ? top : low;
+    }
+};
+
+//==============================================================================
 class FlKeysPianoSynth
 {
 public:
@@ -406,7 +450,7 @@ public:
 
 private:
     std::array<float, 128> noteFrequencies {};
-    juce::Synthesiser synth;
+    StealSafeSynthesiser synth;
 };
 
 } // namespace smartkeys
