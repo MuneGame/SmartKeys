@@ -1632,6 +1632,7 @@ void testChordPort (const String& path)
 int main (int argc, char* argv[])
 {
     ScopedJuceInitialiser_GUI juceInit;
+    ScopedLowPowerModeDisabler noAppNap;   // como un DAW: macOS no "duerme" el proceso
 
     if (argc < 2)
     {

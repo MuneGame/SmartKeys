@@ -177,6 +177,15 @@ private:
     bool testSink = false;                       // pruebas en Linux sin MIDI del sistema
     std::FILE* testFile = nullptr;
 
+    // macOS: mientras exista el teclado, el sistema no "duerme" el proceso (App Nap
+    // agruparía los temporizadores y las notas saldrían tarde)
+    std::unique_ptr<juce::ScopedLowPowerModeDisabler> keepAwake;
+
+    // Diagnóstico (SMARTKEYS_PORT_DEBUG=1): con qué retraso salen las notas
+    bool debug = false, realtime = false;
+    double debugNextReportMs = 0.0, debugMaxLateMs = 0.0, debugSumLateMs = 0.0;
+    int debugSent = 0, debugLate = 0;
+
     juce::CriticalSection lock;                  // nunca lo toma el hilo de audio
     juce::Array<ChordPortFeed*> feeds;
     std::array<Pending, (size_t) kMaxPending> pending {};

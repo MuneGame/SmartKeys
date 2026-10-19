@@ -37,6 +37,7 @@ juce::String ChordMidiPort::getDeviceName()
 //==============================================================================
 ChordMidiPort::ChordMidiPort() : juce::Thread ("SmartKeys Chords")
 {
+    debug = juce::SystemStats::getEnvironmentVariable ("SMARTKEYS_PORT_DEBUG", {}).isNotEmpty();
     open();
 }
 
@@ -85,11 +86,22 @@ void ChordMidiPort::open()
     output = juce::MidiOutput::createNewDevice (getDeviceName());
    #endif
 
+    if (! isAvailable() || isThreadRunning())
+        return;
+
+   #if JUCE_MAC
+    if (keepAwake == nullptr)
+        keepAwake = std::make_unique<juce::ScopedLowPowerModeDisabler>();
+   #endif
+
     // Hilo de tiempo real (como el de un reloj MIDI): se despierta a su hora aunque
     // el sistema agrupe temporizadores. Si el sistema no lo permite, prioridad alta.
-    if (isAvailable() && ! isThreadRunning())
-        if (! startRealtimeThread (juce::Thread::RealtimeOptions{}.withPeriodMs (1.0).withMaximumProcessingTimeMs (0.5)))
-            startThread (juce::Thread::Priority::high);
+    realtime = startRealtimeThread (juce::Thread::RealtimeOptions{}.withPeriodMs (1.0).withMaximumProcessingTimeMs (1.0));
+    if (! realtime)
+        startThread (juce::Thread::Priority::high);
+
+    if (debug)
+        std::fprintf (stderr, "[SmartKeys Chords] teclado abierto, hilo %s\n", realtime ? "de tiempo real" : "de prioridad alta");
 }
 
 bool ChordMidiPort::retryOpen()
@@ -182,7 +194,26 @@ void ChordMidiPort::sendDue (double now)
 {
     int sent = 0;
     while (sent < numPending && pending[(size_t) sent].dueMs <= now)
+    {
+        if (debug)
+        {
+            const double late = now - pending[(size_t) sent].dueMs;
+            debugMaxLateMs = juce::jmax (debugMaxLateMs, late);
+            debugSumLateMs += late;
+            debugLate += late > 3.0 ? 1 : 0;
+            ++debugSent;
+        }
         send (pending[(size_t) sent++]);
+    }
+
+    if (debug && debugSent > 0 && now >= debugNextReportMs)
+    {
+        std::fprintf (stderr, "[SmartKeys Chords] %d envíos: retraso medio %.2f ms, máximo %.2f ms, %d con más de 3 ms\n",
+                      debugSent, debugSumLateMs / debugSent, debugMaxLateMs, debugLate);
+        debugNextReportMs = now + 2000.0;
+        debugSent = debugLate = 0;
+        debugMaxLateMs = debugSumLateMs = 0.0;
+    }
 
     if (sent > 0)
     {

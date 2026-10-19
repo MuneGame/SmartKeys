@@ -289,13 +289,29 @@ jobs:
           exit $code
 
       - name: SmartKeys (VST3) — teclado MIDI virtual "SmartKeys Chords" (CoreMIDI real)
+        env:
+          SMARTKEYS_PORT_DEBUG: "1"
         run: |
           set +e
           ./build-mic/SmartKeysHostTests_artefacts/Release/SmartKeysHostTests \
-            build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 --port-only | tee host-port.txt
+            build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 --port-only 2>&1 | tee host-port.txt
           code=${PIPESTATUS[0]}
-          echo "::notice title=SmartKeys Chords (CoreMIDI)::$(grep -E 'ok|FALLO|comprobaciones|->|teclado:|trozos|ecos|disponible' host-port.txt | tr '\n' ' ')"
+          echo "::notice title=SmartKeys Chords (CoreMIDI)::$(grep -E 'ok|FALLO|comprobaciones|->|teclado:|trozos|ecos|disponible|SmartKeys Chords\]' host-port.txt | tr '\n' ' ')"
           exit $code
+
+      - name: Guardar el registro de las pruebas (si algo falló)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          cp host-*.txt probe-*.txt "$RUNNER_TEMP/logs/" 2>/dev/null || true
+          cd "$RUNNER_TEMP/logs"
+          git init -q -b ci-logs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "Registro de pruebas macOS (${GITHUB_SHA::7})"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-logs || true
 
   publish:
     name: Publicar instaladores
