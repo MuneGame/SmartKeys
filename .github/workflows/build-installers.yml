@@ -9,7 +9,8 @@
 #
 #  En cada máquina de pruebas se simula una versión ANTERIOR instalada y se
 #  comprueba que el instalador nuevo la borra antes de instalar. Después se
-#  validan los plugins instalados (auval de Apple + pluginval nivel 10).
+#  validan los plugins instalados (auval de Apple + pluginval nivel 10, con las
+#  pruebas de editor: abrir y cerrar la ventana del plugin).
 #
 #  Se ejecuta en cada push a main o manualmente desde la pestaña "Actions".
 #  Los instaladores se publican en la Release v<versión> y en la rama "installers".
@@ -30,7 +31,8 @@ env:
 jobs:
   macos:
     name: macOS (.pkg)
-    runs-on: macos-latest
+    # Mac Intel (como el MacBook Air de las pruebas en FL Studio); compila el binario Universal
+    runs-on: macos-15-intel
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -120,8 +122,9 @@ jobs:
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip
           unzip -q pluginval.zip
           for p in "/Library/Audio/Plug-Ins/VST3/SmartKeys.vst3" "/Library/Audio/Plug-Ins/VST3/SmartKeys FX.vst3"; do
+            # Con las pruebas de editor: abrir y cerrar la ventana del plugin (el cierre de la 1.2–1.3)
             ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process \
-              --skip-gui-tests --timeout-ms 300000 --validate "$p"
+              --timeout-ms 300000 --validate "$p"
           done
 
       - name: Mostrar el registro de compilación (si algo falló)
@@ -194,7 +197,7 @@ jobs:
           Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pv
           foreach ($p in @("${env:CommonProgramFiles}\VST3\SmartKeys.vst3", "${env:CommonProgramFiles}\VST3\SmartKeys FX.vst3")) {
-            .\pv\pluginval.exe --strictness-level 10 --validate-in-process --skip-gui-tests --timeout-ms 300000 --validate "$p"
+            .\pv\pluginval.exe --strictness-level 10 --validate-in-process --timeout-ms 300000 --validate "$p"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 

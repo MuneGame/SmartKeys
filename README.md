@@ -317,4 +317,4 @@ SmartKeys/
   - La prueba de integración del instrumento, con 20 s de concurrencia.
   - Resultado: **0 errores de memoria**.
 - **Limpieza de versiones anteriores** simulada con instalaciones falsas: borra SmartKeys y SmartKeys FX de todas las rutas y deja intactos los demás plugins.
-- **En GitHub Actions**, en cada compilación se instala una "versión anterior" falsa en un Mac y en un PC de pruebas, se ejecuta el instalador nuevo y se comprueba que la borró. Después se validan los plugins instalados con `auval` (Apple) y `pluginval` nivel 10.
+- **En GitHub Actions**, en cada compilación se instala una "versión anterior" falsa en un Mac Intel y en un PC de pruebas, se ejecuta el instalador nuevo y se comprueba que la borró. Después se validan los plugins instalados con `auval` (Apple) y `pluginval` nivel 10, ahora **con las pruebas de editor** (abrir y cerrar la ventana del plugin; hasta la 1.3 se omitían).
