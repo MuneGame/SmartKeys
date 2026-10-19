@@ -1,0 +1,75 @@
+
+=== Teclado MIDI virtual "SmartKeys Chords" (lo que FL Studio graba en el Piano Roll) ===
+Plugin: SmartKeys  (Instrument|Synth|Generator, instrumento)
+Buses: 2 canal(es) de entrada (micrófono), 2 de salida
+
+-- P0. Fuera de FL Studio empieza apagado (Logic / Ableton grabarían ese teclado en la pista)
+  ok     en un DAW que no es FL Studio, el teclado no se crea (y el proyecto lo guarda apagado)
+
+-- P1. Encendido (clic en la etiqueta o proyecto guardado así): aparece en cuanto el plugin suena
+[SmartKeys Chords] teclado abierto, hilo de tiempo real
+     "SmartKeys Chords" disponible a los 450 ms
+  ok     el plugin crea el teclado MIDI "SmartKeys Chords" (FL Studio lo ve como un teclado)
+  ok     el proyecto guarda el teclado encendido
+
+-- P2. Una tecla -> el acorde COMPLETO sale por el teclado, todas las notas a la vez
+[SmartKeys Chords] 3 envíos: retraso medio 0.40 ms, máximo 0.40 ms, 0 con más de 3 ms
+     F#3 -> salida MIDI {F3 A3 C4}; teclado {F3 A3 C4} en 0.06 ms, 28.9 ms después de la tecla
+  ok     salida MIDI del plugin: F#3 en Fa mayor -> {F3 A3 C4} en la misma muestra
+  ok     por el teclado salen las 3 notas del acorde (no sólo la tecla), canal 1
+  ok     las 3 notas a la vez (±2 ms): FL las dibuja apiladas
+  ok     con la latencia de ~1 bloque de audio
+  ok     al soltar, los 3 NoteOff
+
+-- P3. STRUM 41 ms DESC: el mismo desfase en la salida MIDI y en el teclado
+     teclado: C4 +0, A3 +50.7 ms, F3 +100.4 ms (esperado +47.1 / +106.6)
+  ok     salida MIDI: C4 -> A3 -> F3 con el desfase exacto (±2 muestras)
+  FALLO  teclado: el mismo desfase (±5 ms): FL graba el acorde rasgueado
+  ok     al soltar, ninguna nota colgada
+[SmartKeys Chords] 9 envíos: retraso medio 15.33 ms, máximo 42.67 ms, 6 con más de 3 ms
+     en 4 trozos de 128 muestras seguidos: A3 +48.7 ms, F3 +112.8 ms
+  FALLO  con el búfer partido en trozos (como FL Studio), el teclado conserva el desfase (±5 ms)
+
+-- P4. Sin bucle (FLEX enganchado al teclado): ninguna tecla se pierde
+[SmartKeys Chords] 39 envíos: retraso medio 6.79 ms, máximo 34.90 ms, 15 con más de 3 ms
+     NoteOn de salida: {F3x10 A3x10 C4x10 E4x1}
+  ok     repetir F3 cada 60 ms: el acorde sale las 8 veces
+  ok     A3 20 ms después de F3 (nota del acorde anterior) también dispara su acorde (La menor)
+  ok     nada queda colgado
+
+-- P5. Bucle: FL devuelve el teclado a SmartKeys -> los ecos no disparan acordes
+[SmartKeys Chords] 32 envíos: retraso medio 10.05 ms, máximo 43.46 ms, 12 con más de 3 ms
+[SmartKeys Chords] 47 envíos: retraso medio 7.73 ms, máximo 37.64 ms, 12 con más de 3 ms
+     50 ecos devueltos; NoteOn de salida: {F3x8 A3x8 C4x8 E4x1}
+  ok     con el bucle: sólo los acordes de las teclas pulsadas (F, legato F -> Am, 6 repeticiones), ni uno más
+  ok     los ecos llegaron de verdad (NoteOn y NoteOff de cada acorde)
+  ok     y nada queda colgado
+     STRUM 41 ms DESC con el bucle: {F3x1 A3x1 C4x1}
+  ok     con STRUM, los ecos que vuelven de uno en uno tampoco disparan nada
+
+-- P6. El bucle aparece de repente (SmartKeys creía que no había)
+[SmartKeys Chords] 9 envíos: retraso medio 4.34 ms, máximo 29.24 ms, 2 con más de 3 ms
+[SmartKeys Chords] 9 envíos: retraso medio 4.50 ms, máximo 13.07 ms, 3 con más de 3 ms
+     STRUM 0 ms: {F3x1 A3x1 C4x1}  (0 notas de más)
+  ok     sin STRUM, el acorde que vuelve entero se reconoce al instante
+  ok     y nada queda colgado
+[SmartKeys Chords] 9 envíos: retraso medio 1.78 ms, máximo 13.82 ms, 1 con más de 3 ms
+     STRUM 41 ms: {F3x1 A3x1 C4x1 E4x1 G4x1 A#4x1}  (3 notas de más)
+  ok     con STRUM: tras soltar la tecla no queda ninguna nota colgada
+[SmartKeys Chords] 9 envíos: retraso medio 24.30 ms, máximo 47.38 ms, 8 con más de 3 ms
+
+-- P7. Bypass, exportar y cerrar el plugin con un acorde sonando
+  ok     bypass: el acorde que sonaba recibe sus NoteOff (salida MIDI y teclado)
+  ok     al quitar el bypass vuelve a funcionar (A3 -> La menor)
+  ok     al exportar (fuera de tiempo real) los acordes salen por MIDI, pero no por el teclado
+[SmartKeys Chords] 9 envíos: retraso medio 1.98 ms, máximo 5.32 ms, 3 con más de 3 ms
+  ok     al apagarlo con un acorde sonando, salen sus NoteOff y nada más
+  ok     y el teclado desaparece del sistema
+  ok     apagado: los acordes siguen saliendo por la salida MIDI, pero no por el teclado
+[SmartKeys Chords] teclado abierto, hilo de tiempo real
+  ok     se vuelve a encender
+[SmartKeys Chords] 3 envíos: retraso medio 10.39 ms, máximo 10.39 ms, 3 con más de 3 ms
+  ok     al cerrar el plugin con el acorde pulsado, sus NoteOff salen por el teclado
+  ok     y el teclado desaparece del sistema
+
+31 comprobaciones, 2 fallos

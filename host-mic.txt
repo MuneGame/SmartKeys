@@ -1,0 +1,15 @@
+
+=== MIC VOICE sin sidechain: micrófono del sistema ===
+Plugin: SmartKeys  (Instrument|Synth|Generator, instrumento)
+Buses: 2 canal(es) de entrada (micrófono), 2 de salida
+     entrada del plugin en silencio, micrófono del sistema con La3 -> {A3 C4 E4}
+  ok     MIC VOICE lee el micrófono del sistema sin ruteo: La3 -> La menor completo por MIDI
+  ok     y el piano interno lo toca
+  ok     por el canal 1
+     el DAW manda Do4 por la entrada -> {C4 E4 G4}
+  ok     con audio en la entrada del plugin, se usa esa voz (se suelta La menor, suena Do mayor)
+     la entrada vuelve al silencio -> {A3 C4 E4}
+  ok     al callar la entrada, vuelve a sonar la voz del micrófono del sistema
+  ok     MIC VOICE OFF: se sueltan las notas y la voz ya no dispara
+
+6 comprobaciones, 0 fallos
