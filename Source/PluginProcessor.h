@@ -13,6 +13,13 @@
     en el Channel Rack de FL Studio, SmartKeys lee él mismo la entrada activa de
     macOS (SystemMicInput: sólo entrada, búfer circular lock-free).
 
+    Teclado MIDI "SmartKeys Chords" (1.6): los mismos acordes completos (con
+    STRUM) salen también por un teclado MIDI virtual de macOS. FL Studio graba
+    lo que entra por un teclado, no lo que un plugin manda por su salida MIDI:
+    así el instrumento enganchado a ese teclado dibuja los acordes en su Piano
+    Roll al grabar. Si el DAW devuelve ese teclado al propio SmartKeys, el eco
+    se reconoce y se ignora.
+
     El hilo de audio sólo usa memoria fija y atómicos, y nunca llama a la
     interfaz ni al hilo de mensajes.
 
@@ -30,6 +37,7 @@
 #include "MidiOutputRouter.h"
 #include "StrumScheduler.h"
 #include "SystemMicInput.h"
+#include "ChordMidiPort.h"
 
 namespace ParamIDs
 {
@@ -50,6 +58,9 @@ namespace StrumDir { enum : int { Ascending = 0, Descending = 1 }; }
 // De dónde llega la voz que se analiza
 namespace VoiceSource { enum : int { None = 0, PluginInput = 1, SystemMic = 2 }; }
 
+// Teclado MIDI virtual "SmartKeys Chords"
+namespace ChordPortState { enum : int { Waiting = 0, Active = 1, Unavailable = 2, Unsupported = 3, Off = 4 }; }
+
 //==============================================================================
 class SmartKeysAudioProcessor : public juce::AudioProcessor,
                                 public juce::VST3ClientExtensions,
@@ -69,6 +80,10 @@ public:
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using AudioProcessor::processBlock;
+
+    // En bypass no suena nada y no queda ninguna nota encendida (piano, MIDI ni teclado virtual)
+    void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    using AudioProcessor::processBlockBypassed;
 
     //==========================================================================
     juce::AudioProcessorEditor* createEditor() override;
@@ -125,6 +140,19 @@ public:
 
     double getStrumMs() const noexcept            { return pStrumMs->load(); }
 
+    // Teclado MIDI virtual "SmartKeys Chords"
+    int getChordPortState() const noexcept        { return chordPortState.load(); }
+    static juce::String getChordPortName()        { return smartkeys::ChordMidiPort::getDeviceName(); }
+    bool isChordPortLooping() const noexcept      { return chordPortLooping.load (std::memory_order_relaxed); }
+    void markInUse() noexcept                     { pluginInUse.store (true); }   // la ventana se abrió
+
+    // Encendido / apagado (hilo de mensajes; se guarda con el proyecto). Por
+    // defecto encendido en FL Studio y en la app; apagado en los DAW que meten
+    // cualquier teclado nuevo en la grabación de la pista (Logic, Ableton...).
+    bool isChordPortEnabled() const noexcept      { return chordPortEnabled.load(); }
+    void setChordPortEnabled (bool shouldBeEnabled);
+    static bool isChordPortEnabledByDefault (juce::AudioProcessor::WrapperType);
+
     // Tamaño de la ventana (se guarda con el proyecto)
     float getEditorScale() const noexcept         { return editorScale.load(); }
     void  setEditorScale (float s) noexcept       { editorScale.store (juce::jlimit (0.6f, 2.0f, s)); }
@@ -145,6 +173,18 @@ private:
     void timerCallback() override;
     void updateEngineIfNeeded();
     void drainScreenNotes (juce::MidiBuffer& out);
+
+    void updateChordPort();
+    void disconnectChordPort();
+    double echoWindowMs (double nowMs) const noexcept;
+    double echoEarlyMs() const noexcept;
+    bool isPortEchoCandidate (int note, double arrivalMs) const noexcept;
+    void releaseSuspectTriggers() noexcept;
+    void updateEchoEvidence (double nowMs) noexcept;
+    bool isPortEchoNoteOn (int note, double arrivalMs) noexcept;
+    bool isPortEchoNoteOff (int note, double arrivalMs) noexcept;
+    void feedChordPort (const juce::MidiBuffer& out, int numSamples, double blockStartMs) noexcept;
+    void resetEchoState() noexcept;
 
     //==========================================================================
     juce::AudioProcessorValueTreeState apvts;
@@ -205,6 +245,30 @@ private:
 
     // Muestras del micrófono del sistema que se analizan en cada bloque (fijo)
     std::array<float, (size_t) smartkeys::SystemMicInput::kRingCapacity> systemMicScratch {};
+
+    // Teclado MIDI virtual "SmartKeys Chords" (se conecta en el hilo de mensajes)
+    smartkeys::ChordPortFeed portFeed;
+    std::unique_ptr<juce::SharedResourcePointer<smartkeys::ChordMidiPort>> chordPort;
+    std::atomic<bool> portFeedActive { false }, pluginInUse { false }, chordPortEnabled { true };
+    std::atomic<int>  chordPortState { ChordPortState::Waiting };
+    int  portRetryTicks = 0;
+    bool processedAnyBlock = false, bypassActive = false;
+
+    // Eco del teclado virtual (sólo hilo de audio). Ver isPortEchoNoteOn().
+    std::array<uint32_t, 128> echoOnMatched {}, echoOnAccounted {}, echoOffMatched {};
+    std::array<uint8_t, 128> echoSuppressed {};
+    std::array<bool, 128> midiKeyDown {}, suspectTrigger {};
+    int    echoedStreak = 0, unechoedStreak = 0;
+    bool   echoGroupInBlock = false;
+    double loopConfirmedUntilMs = -1.0e12, noLoopUntilMs = -1.0e12;
+    double maxBlockMs = 12.0;
+    double portClockMs = 0.0;            // hora (reloj de pared) del inicio del bloque, por muestras
+    bool   portClockValid = false;
+    std::atomic<bool> chordPortLooping { false };
+
+    static constexpr double kLoopEchoWindowMs = 600.0;   // con el bucle confirmado
+    static constexpr double kLoopMemoryMs = 10000.0;     // el bucle se da por confirmado 10 s (cada eco lo renueva)
+    static constexpr double kNoLoopMemoryMs = 60000.0;   // "sin bucle" vale 60 s
 
     // Declarado al final: se destruye PRIMERO (el dispositivo se cierra antes
     // que todo lo demás). Además el destructor lo apaga explícitamente.

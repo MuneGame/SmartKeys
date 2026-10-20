@@ -124,15 +124,19 @@ SmartKeysAudioProcessor::SmartKeysAudioProcessor()
     routedMidi.ensureSize (kMidiReserveBytes);
     expandedChordMidi.ensureSize (kMidiReserveBytes);
 
-    // Vigilancia del micrófono del sistema (hilo de mensajes, 4 veces por segundo)
+    chordPortEnabled.store (isChordPortEnabledByDefault (wrapperType));
+
+    // Vigilancia del micrófono del sistema y del teclado virtual (hilo de mensajes, 4 veces por segundo)
     startTimer (250);
 }
 
 SmartKeysAudioProcessor::~SmartKeysAudioProcessor()
 {
-    // 1) Ningún temporizador más; 2) el micrófono del sistema se cierra (el
-    //    IOProc de CoreAudio termina antes de destruir su búfer circular)
+    // 1) Ningún temporizador más; 2) el teclado virtual apaga lo que esta
+    //    instancia dejó sonando y la suelta; 3) el micrófono del sistema se
+    //    cierra (el IOProc de CoreAudio termina antes de destruir su búfer)
     stopTimer();
+    disconnectChordPort();
     systemMic.shutdown();
 
     apvts.removeParameterListener (ParamIDs::rootKey, this);
@@ -152,6 +156,317 @@ void SmartKeysAudioProcessor::timerCallback()
     const bool micOn = pMicOn->load() > 0.5f;
     const bool dawSendsVoice = now - lastPluginInputActiveMs < kInputHoldMs;
     systemMic.update (micOn && ! dawSendsVoice);
+
+    updateChordPort();
+}
+
+//==============================================================================
+// Teclado MIDI virtual "SmartKeys Chords": se crea en el hilo de mensajes en
+// cuanto el plugin procesa audio de verdad (nunca durante el escaneo de
+// plugins). Uno solo por proceso; si el nombre está en uso, se reintenta.
+bool SmartKeysAudioProcessor::isChordPortEnabledByDefault (juce::AudioProcessor::WrapperType type)
+{
+    // SMARTKEYS_CHORD_PORT=1 / 0 lo fuerza (pruebas automáticas)
+    const auto forced = juce::SystemStats::getEnvironmentVariable ("SMARTKEYS_CHORD_PORT", {});
+    if (forced == "1" || forced == "0")
+        return forced == "1";
+
+    // FL Studio sólo usa un teclado MIDI si lo activas en MIDI Settings y lo
+    // enganchas a un canal; la app, si lo eliges en sus ajustes. Otros DAW meten
+    // cualquier teclado nuevo en la grabación de la pista: ahí, apagado.
+    if (type == juce::AudioProcessor::wrapperType_Standalone || juce::PluginHostType().isFruityLoops())
+        return true;
+
+    // FL Studio para Mac es ".../FL Studio 20xx.app/Contents/MacOS/OsxFL" (y su puente, ilbridge)
+    const auto host = juce::File::getSpecialLocation (juce::File::hostApplicationPath).getFullPathName();
+    return host.containsIgnoreCase ("FL Studio") || host.containsIgnoreCase ("OsxFL") || host.containsIgnoreCase ("ilbridge");
+}
+
+void SmartKeysAudioProcessor::setChordPortEnabled (bool shouldBeEnabled)
+{
+    if (chordPortEnabled.exchange (shouldBeEnabled) == shouldBeEnabled)
+        return;
+
+    updateChordPort();   // conecta, o apaga lo que sonaba y suelta el teclado
+}
+
+void SmartKeysAudioProcessor::updateChordPort()
+{
+   #if JUCE_MAC || JUCE_LINUX || JUCE_BSD
+    if (! chordPortEnabled.load())
+    {
+        if (chordPort != nullptr)
+            disconnectChordPort();
+        chordPortState.store (ChordPortState::Off);
+        chordPortLooping.store (false, std::memory_order_relaxed);
+        return;
+    }
+
+    if (! pluginInUse.load())
+    {
+        chordPortState.store (ChordPortState::Waiting);
+        return;
+    }
+
+    if (chordPort == nullptr)
+    {
+        smartkeys::ChordMidiPort::setStandaloneProcess (wrapperType == wrapperType_Standalone);
+        chordPort = std::make_unique<juce::SharedResourcePointer<smartkeys::ChordMidiPort>>();
+        portRetryTicks = 0;
+    }
+
+    if (! portFeedActive.load())
+    {
+        auto& port = **chordPort;
+        const bool available = port.isAvailable() || (++portRetryTicks % 12 == 0 && port.retryOpen());   // cada 3 s
+        if (available)
+        {
+            port.addFeed (portFeed);
+            portFeedActive.store (true, std::memory_order_release);
+        }
+    }
+
+    chordPortState.store (portFeedActive.load() ? ChordPortState::Active : ChordPortState::Unavailable);
+   #else
+    chordPortState.store (ChordPortState::Unsupported);
+   #endif
+}
+
+void SmartKeysAudioProcessor::disconnectChordPort()
+{
+    portFeedActive.store (false, std::memory_order_release);
+    if (chordPort != nullptr)
+    {
+        (*chordPort)->removeFeed (portFeed);   // envía los NoteOff de lo que quedara sonando
+        chordPort.reset();                     // la última instancia cierra el teclado
+    }
+}
+
+void SmartKeysAudioProcessor::resetEchoState() noexcept
+{
+    // Lo que el teclado ya envió no espera eco
+    for (int n = 0; n < 128; ++n)
+    {
+        echoOnMatched[(size_t) n] = echoOnAccounted[(size_t) n] = portFeed.getNoteOnSerial (n);
+        echoOffMatched[(size_t) n] = portFeed.getNoteOffSerial (n);
+    }
+
+    echoSuppressed.fill (0);
+    midiKeyDown.fill (false);
+    suspectTrigger.fill (false);
+    echoedStreak = unechoedStreak = 0;
+    loopConfirmedUntilMs = noLoopUntilMs = -1.0e12;
+    chordPortLooping.store (false, std::memory_order_relaxed);
+    portClockValid = false;
+}
+
+//==============================================================================
+// ECO DEL TECLADO VIRTUAL (hilo de audio, sin memoria dinámica)
+//
+// Si el DAW devuelve "SmartKeys Chords" a SmartKeys (en FL Studio: el teclado
+// activado sin engancharlo a otro instrumento, con SmartKeys seleccionado),
+// cada nota de cada acorde volvería a entrar como una tecla y dispararía otro
+// acorde. Cómo se distingue un eco de una tecla de verdad:
+//
+//  1. Candidato: hay un NoteOn de esa nota enviado por el teclado que todavía
+//     no volvió (cada envío vuelve UNA vez) y se envió hace muy poco (unos
+//     pocos bloques). Si no, es una tecla de verdad: repetir rápido una tecla
+//     después de que volviera su eco nunca se confunde.
+//  2. Lo aprendido de los envíos anteriores (al empezar cada bloque se revisan
+//     los envíos cuyo plazo terminó):
+//       - Bucle confirmado (3 ecos seguidos, o una tecla que SIGUE pulsada y
+//         "se vuelve a pulsar", imposible en un teclado): candidato = eco.
+//       - Sin bucle (2 envíos seguidos que no volvieron; lo normal en FL con
+//         el teclado enganchado a FLEX/Serum): candidato = tecla de verdad,
+//         salvo que lleguen varios en el mismo bloque (un acorde que vuelve).
+//       - Sin datos recientes: por prudencia, candidato = eco.
+//  3. El NoteOff de un eco ignorado también se ignora (con su propio crédito);
+//     si no llega a tiempo, se deja de esperar.
+//  4. Si el bucle aparece de repente, las teclas que se tomaron por reales
+//     siendo ecos se sueltan al confirmarlo: nunca quedan notas colgadas.
+//==============================================================================
+double SmartKeysAudioProcessor::echoWindowMs (double nowMs) const noexcept
+{
+    return nowMs < loopConfirmedUntilMs ? kLoopEchoWindowMs
+                                        : juce::jlimit (100.0, 400.0, 4.0 * maxBlockMs + 50.0);
+}
+
+double SmartKeysAudioProcessor::echoEarlyMs() const noexcept
+{
+    return maxBlockMs + 10.0;   // los relojes del bloque y del envío difieren en hasta ~1 bloque
+}
+
+bool SmartKeysAudioProcessor::isPortEchoCandidate (int note, double arrivalMs) const noexcept
+{
+    const auto i = (size_t) note;
+    const uint32_t sentOn = portFeed.getNoteOnSerial (note);
+    if (sentOn == echoOnMatched[i])
+        return false;   // nada enviado pendiente de volver
+
+    const double since = arrivalMs - portFeed.getLastNoteOnSentMs (note);
+    return since >= -echoEarlyMs() && since <= echoWindowMs (arrivalMs);
+}
+
+void SmartKeysAudioProcessor::releaseSuspectTriggers() noexcept
+{
+    for (int n = 0; n < 128; ++n)
+    {
+        if (suspectTrigger[(size_t) n])
+        {
+            suspectTrigger[(size_t) n] = false;
+            midiKeyDown[(size_t) n] = false;
+            router.handleNoteOff (MidiOutputRouter::Source::Midi, n, 0, routedMidi);
+        }
+    }
+}
+
+void SmartKeysAudioProcessor::updateEchoEvidence (double nowMs) noexcept
+{
+    const bool wasLooping = nowMs < loopConfirmedUntilMs;
+    const double expiry = echoWindowMs (nowMs) + echoEarlyMs();
+    int echoed = 0, unechoed = 0;
+
+    for (int n = 0; n < 128; ++n)
+    {
+        const auto i = (size_t) n;
+
+        const uint32_t sentOn = portFeed.getNoteOnSerial (n);
+        if (sentOn != echoOnAccounted[i] && nowMs - portFeed.getLastNoteOnSentMs (n) > expiry)
+        {
+            if (echoOnMatched[i] == sentOn) ++echoed;
+            else                            ++unechoed;
+            echoOnAccounted[i] = echoOnMatched[i] = sentOn;
+        }
+
+        const uint32_t sentOff = portFeed.getNoteOffSerial (n);
+        if (sentOff != echoOffMatched[i] && nowMs - portFeed.getLastNoteOffSentMs (n) > expiry)
+        {
+            echoOffMatched[i] = sentOff;
+            echoSuppressed[i] = 0;   // su NoteOff no volvió: ya no hay eco que esperar
+        }
+    }
+
+    if (unechoed > 0)
+    {
+        echoedStreak = 0;
+        unechoedStreak += unechoed;
+    }
+    else if (echoed > 0)
+    {
+        unechoedStreak = 0;
+        echoedStreak += echoed;
+    }
+
+    if (unechoed > 0 && unechoedStreak >= 2)
+    {
+        // Lo que sale no vuelve: no hay bucle
+        noLoopUntilMs = nowMs + kNoLoopMemoryMs;
+        loopConfirmedUntilMs = -1.0e12;
+        suspectTrigger.fill (false);   // eran teclas de verdad
+    }
+    else if (echoed > 0 && echoedStreak >= 3)
+    {
+        loopConfirmedUntilMs = nowMs + kLoopMemoryMs;
+        noLoopUntilMs = -1.0e12;
+    }
+
+    const bool looping = nowMs < loopConfirmedUntilMs;
+    chordPortLooping.store (looping, std::memory_order_relaxed);
+
+    if (! looping)
+        return;
+
+    // Bucle confirmado: las teclas tomadas por reales siendo ecos se sueltan al
+    // confirmarlo y, después, en cuanto no queda ninguna tecla de verdad pulsada
+    bool anySuspect = false, anyRealKey = false;
+    for (int n = 0; n < 128; ++n)
+    {
+        anySuspect |= suspectTrigger[(size_t) n];
+        anyRealKey |= midiKeyDown[(size_t) n] && ! suspectTrigger[(size_t) n];
+    }
+
+    if (anySuspect && (! wasLooping || ! anyRealKey))
+        releaseSuspectTriggers();
+}
+
+// ¿Este NoteOn de la entrada MIDI es el eco de una nota del teclado virtual?
+bool SmartKeysAudioProcessor::isPortEchoNoteOn (int note, double arrivalMs) noexcept
+{
+    const auto i = (size_t) note;
+    if (! isPortEchoCandidate (note, arrivalMs))
+    {
+        suspectTrigger[i] = false;
+        return false;
+    }
+
+    ++echoOnMatched[i];   // un envío, un eco
+
+    if (midiKeyDown[i])
+    {
+        // La tecla sigue pulsada y "se vuelve a pulsar": sólo puede ser el eco
+        loopConfirmedUntilMs = arrivalMs + kLoopMemoryMs;
+        noLoopUntilMs = -1.0e12;
+        echoedStreak = juce::jmax (echoedStreak, 3);
+        unechoedStreak = 0;
+        return true;
+    }
+
+    if (arrivalMs < loopConfirmedUntilMs || echoGroupInBlock)
+        return true;
+
+    if (arrivalMs < noLoopUntilMs)
+    {
+        suspectTrigger[i] = true;   // casi seguro una tecla de verdad (sin bucle)
+        return false;
+    }
+
+    return true;   // sin datos recientes: prudencia
+}
+
+// El NoteOff de un eco ignorado llega poco después de que el teclado enviara su NoteOff
+bool SmartKeysAudioProcessor::isPortEchoNoteOff (int note, double arrivalMs) noexcept
+{
+    const auto i = (size_t) note;
+    if (echoSuppressed[i] == 0)
+        return false;
+
+    const uint32_t sentOff = portFeed.getNoteOffSerial (note);
+    if (sentOff == echoOffMatched[i])
+        return false;
+
+    const double since = arrivalMs - portFeed.getLastNoteOffSentMs (note);
+    if (since < -echoEarlyMs() || since > echoWindowMs (arrivalMs))
+        return false;
+
+    ++echoOffMatched[i];
+    --echoSuppressed[i];
+    return true;
+}
+
+// Hilo de audio: copia las notas de la salida final (con su STRUM) al FIFO del
+// teclado virtual, con su instante exacto (un bloque de margen)
+void SmartKeysAudioProcessor::feedChordPort (const juce::MidiBuffer& out, int numSamples, double blockStartMs) noexcept
+{
+    const double msPerSample = 1000.0 / juce::jmax (1.0, currentSampleRate);
+    const double base = blockStartMs + (double) numSamples * msPerSample;
+
+    for (const auto meta : out)
+    {
+        const auto* data = meta.data;
+        if (meta.numBytes != 3 || data == nullptr)
+            continue;
+
+        const auto type = (uint8_t) (data[0] & 0xF0);
+        if (type != 0x80 && type != 0x90)
+            continue;   // sólo las notas de los acordes (los CC podrían rebotar en bucle)
+
+        smartkeys::ChordPortEvent e;
+        e.dueMs = base + (double) meta.samplePosition * msPerSample;
+        e.status = data[0];
+        e.data1 = data[1];
+        e.data2 = data[2];
+        portFeed.push (e);
+    }
 }
 
 //==============================================================================
@@ -211,6 +526,12 @@ void SmartKeysAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     trackerRate = currentSampleRate;
     inputSilentSamples = 1 << 30;
 
+    // Teclado virtual: lo que quedara sonando se apaga (el router empieza de cero)
+    maxBlockMs = juce::jmax (5.0, 1000.0 * (double) juce::jmax (1, samplesPerBlock) / currentSampleRate);
+    resetEchoState();
+    portFeed.requestReleaseAll();
+    bypassActive = false;
+
     updateEngineIfNeeded();
 }
 
@@ -219,6 +540,7 @@ void SmartKeysAudioProcessor::releaseResources()
     voiceTracker.reset();
     pianoSynth.allNotesOff();
     strum.reset();
+    portFeed.requestReleaseAll();
 }
 
 bool SmartKeysAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -302,6 +624,21 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     {
         midiMessages.clear();
         return;
+    }
+
+    // Reloj del bloque (el teclado virtual programa sus notas con él)
+    const double blockStartMs = juce::Time::getMillisecondCounterHiRes();
+    const double msPerSample = 1000.0 / currentSampleRate;
+    maxBlockMs = juce::jmax (maxBlockMs, (double) numSamples * msPerSample);
+    if (! processedAnyBlock)
+    {
+        processedAnyBlock = true;
+        pluginInUse.store (true);   // el temporizador crea "SmartKeys Chords"
+    }
+    if (bypassActive)
+    {
+        bypassActive = false;
+        resetEchoState();   // tras el bypass todo empezó apagado
     }
 
     updateEngineIfNeeded();
@@ -437,6 +774,33 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     const auto midiEnd = midiMessages.cend();
     int voiceIdx = 0;
 
+    // Teclado virtual activo: hay que reconocer su eco si el DAW lo devuelve
+    const bool portActive = portFeedActive.load (std::memory_order_acquire);
+    echoGroupInBlock = false;
+    if (portActive)
+    {
+        updateEchoEvidence (blockStartMs);
+
+        // ¿Llegan en este bloque varias notas que el teclado acaba de enviar? Es
+        // un acorde que vuelve entero (una persona no pulsa así)
+        int candidates = 0;
+        uint64_t seen[2] = { 0, 0 };
+        for (const auto meta : midiMessages)
+        {
+            const auto* d = meta.data;
+            if (meta.numBytes < 3 || d == nullptr || (d[0] & 0xF0) != 0x90 || (d[2] & 0x7F) == 0)
+                continue;
+            const int n = d[1] & 0x7F;
+            const uint64_t bit = (uint64_t) 1 << (n & 63);
+            if ((seen[n >> 6] & bit) != 0)
+                continue;
+            seen[n >> 6] |= bit;
+            const double arrivalMs = blockStartMs + (double) juce::jlimit (0, lastSample, meta.samplePosition) * msPerSample;
+            candidates += isPortEchoCandidate (n, arrivalMs) ? 1 : 0;
+        }
+        echoGroupInBlock = candidates >= 2;
+    }
+
     while (midiIt != midiEnd || voiceIdx < routedVoiceEvents)
     {
         const bool takeMidi = (midiIt != midiEnd)
@@ -460,18 +824,41 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
             if (type == 0x90 && size >= 3 && velocity > 0)
             {
+                const double arrivalMs = blockStartMs + (double) pos * msPerSample;
+                if (portActive && isPortEchoNoteOn (note, arrivalMs))
+                {
+                    // El DAW devolvió "SmartKeys Chords" a SmartKeys: no es una tecla
+                    if (echoSuppressed[(size_t) note] < 255)
+                        ++echoSuppressed[(size_t) note];
+                    continue;
+                }
+
+                midiKeyDown[(size_t) note] = true;
                 router.handleNoteOn (MidiOutputRouter::Source::Midi, note, kMidiChannel,
                                      (juce::uint8) velocity, pos, engine, routedMidi);
             }
             else if ((type == 0x80 || type == 0x90) && size >= 3)
             {
+                const double arrivalMs = blockStartMs + (double) pos * msPerSample;
+                if (portActive && isPortEchoNoteOff (note, arrivalMs))
+                {
+                    --echoSuppressed[(size_t) note];
+                    continue;
+                }
+
+                midiKeyDown[(size_t) note] = false;
+                suspectTrigger[(size_t) note] = false;
                 router.handleNoteOff (MidiOutputRouter::Source::Midi, note, pos, routedMidi);
             }
             else if (status >= 0x80 && status < 0xF0 && size <= 3)
             {
                 // CC, sustain, pitch bend, aftertouch... al canal 1
                 if (type == 0xB0 && (note == 120 || note == 123))
+                {
                     router.releaseAll (pos, routedMidi);   // All Sound Off / All Notes Off del DAW
+                    midiKeyDown.fill (false);
+                    suspectTrigger.fill (false);
+                }
 
                 juce::uint8 remapped[3] = { (juce::uint8) (type | (kMidiChannel - 1)),
                                             (juce::uint8) (size >= 2 ? data[1] : 0),
@@ -501,6 +888,34 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     // PASO 5 — STRUM: entrada progresiva de las notas (ASC / DESC), por muestra
     //==========================================================================
     strum.process (routedMidi, expandedChordMidi, numSamples);
+
+    // Teclado virtual "SmartKeys Chords": las mismas notas, en su instante (sólo un
+    // FIFO lock-free; al exportar fuera de tiempo real no se envía nada).
+    // Reloj de muestras: cada bloque empieza donde terminó el anterior, aunque el
+    // DAW procese varios bloques seguidos de golpe (FL Studio parte su búfer); se
+    // acerca despacio al reloj real. Si se queda atrás (el audio se detuvo un
+    // momento) salta al reloj real: las notas nunca salen antes de su hora ni se
+    // amontonan; si va muy por delante (el DAW adelantó trabajo), también.
+    if (portActive && ! isNonRealtime())
+    {
+        const double drift = blockStartMs - portClockMs;   // > 0: el reloj de muestras va atrasado
+        if (! portClockValid || drift > 0.5 * maxBlockMs || -drift > juce::jmax (100.0, 4.0 * maxBlockMs))
+        {
+            portClockMs = blockStartMs;
+            portClockValid = true;
+        }
+        else
+        {
+            portClockMs += 0.01 * drift;
+        }
+
+        feedChordPort (expandedChordMidi, numSamples, portClockMs);
+        portClockMs += (double) numSamples * msPerSample;
+    }
+    else
+    {
+        portClockValid = false;
+    }
 
     //==========================================================================
     // PASO 6 — PIANO INTERNO (siempre; el volumen se ajusta con GAIN)
@@ -534,6 +949,44 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 }
 
 //==============================================================================
+// Bypass: silencio y, al entrar, se apaga todo lo que sonaba (salida MIDI,
+// piano y teclado virtual): ningún instrumento enganchado queda con notas colgadas.
+void SmartKeysAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+{
+    buffer.clear();
+    midiMessages.clear();
+
+    if (bypassActive)
+        return;
+    bypassActive = true;
+
+    routedMidi.clear();
+    expandedChordMidi.clear();
+    router.releaseAll (0, routedMidi);
+    voiceTracker.forceRelease (0);
+
+    const int numSamples = buffer.getNumSamples();
+    if (numSamples > 0)
+    {
+        strum.process (routedMidi, expandedChordMidi, numSamples);
+        midiMessages.swapWith (expandedChordMidi);
+    }
+    else
+    {
+        strum.reset();
+    }
+
+    pianoSynth.allNotesOff();
+    portFeed.requestReleaseAll();
+    midiKeyDown.fill (false);
+    suspectTrigger.fill (false);
+
+    for (auto& a : activeNotesBitmask)
+        a.store (0, std::memory_order_release);
+    voiceChordSounding.store (false);
+}
+
+//==============================================================================
 juce::AudioProcessorEditor* SmartKeysAudioProcessor::createEditor()
 {
     return new SmartKeysAudioProcessorEditor (*this);
@@ -545,6 +998,7 @@ void SmartKeysAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("stateVersion", 5, nullptr);
     state.setProperty ("customMask", (int) customMask.load(), nullptr);
     state.setProperty ("editorScale", (double) editorScale.load(), nullptr);
+    state.setProperty ("chordKeyboard", chordPortEnabled.load(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -583,6 +1037,16 @@ void SmartKeysAudioProcessor::setStateInformation (const void* data, int sizeInB
         customMask.store (ScaleChordEngine::getPitchClassMask ((int) pRootKey->load(), (int) pScale->load()));
 
     setEditorScale ((float) (double) tree.getProperty ("editorScale", 1.0));
+
+    // Teclado "SmartKeys Chords": lo que se guardó con el proyecto (1.6+)
+    if (tree.hasProperty ("chordKeyboard"))
+    {
+        const bool enabled = (bool) tree.getProperty ("chordKeyboard");
+        if (juce::MessageManager::existsAndIsCurrentThread())
+            setChordPortEnabled (enabled);
+        else
+            chordPortEnabled.store (enabled);   // el temporizador lo aplica
+    }
 }
 
 //==============================================================================

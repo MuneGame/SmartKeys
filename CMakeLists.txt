@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SmartKeys VERSION 1.5.0 LANGUAGES C CXX)
+project(SmartKeys VERSION 1.6.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,6 +55,9 @@ if(APPLE)
     list(APPEND SMARTKEYS_MIC_SOURCES Source/MicPermission_mac.mm)
 endif()
 
+# Teclado MIDI virtual "SmartKeys Chords" (CoreMIDI en macOS; ALSA o archivo de prueba en Linux)
+set(SMARTKEYS_PORT_SOURCES Source/ChordMidiPort.cpp)
+
 #-------------------------------------------------------------------------------
 # SmartKeys — un único plugin de instrumento (Channel Rack de FL Studio / pista
 # MIDI de Ableton). Fabricante: MIWN.
@@ -101,7 +104,8 @@ juce_add_plugin(SmartKeys
 target_sources(SmartKeys PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    ${SMARTKEYS_MIC_SOURCES})
+    ${SMARTKEYS_MIC_SOURCES}
+    ${SMARTKEYS_PORT_SOURCES})
 target_include_directories(SmartKeys PRIVATE Source)
 
 target_compile_definitions(SmartKeys PUBLIC
@@ -153,7 +157,7 @@ endif()
 #-------------------------------------------------------------------------------
 if(SMARTKEYS_BUILD_TESTS)
     juce_add_console_app(SmartKeysTests PRODUCT_NAME "SmartKeysTests")
-    target_sources(SmartKeysTests PRIVATE Tests/EngineTests.cpp ${SMARTKEYS_MIC_SOURCES})
+    target_sources(SmartKeysTests PRIVATE Tests/EngineTests.cpp ${SMARTKEYS_MIC_SOURCES} ${SMARTKEYS_PORT_SOURCES})
     target_include_directories(SmartKeysTests PRIVATE Source)
     target_compile_definitions(SmartKeysTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_STANDALONE_APPLICATION=1)
@@ -187,6 +191,7 @@ if(SMARTKEYS_BUILD_HOST_TESTS)
     target_link_libraries(SmartKeysHostTests
         PRIVATE
             juce::juce_audio_processors_headless
+            juce::juce_audio_devices
             juce::juce_events
         PUBLIC
             juce::juce_recommended_config_flags

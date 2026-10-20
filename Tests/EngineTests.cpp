@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <new>
+#include <set>
 #include "ScaleChordEngine.h"
 #include "VoicePitchTracker.h"
 #include "FlKeysPianoSynth.h"
@@ -16,6 +17,7 @@
 #include "StrumScheduler.h"
 #include "MicRingBuffer.h"
 #include "SystemMicInput.h"
+#include "ChordMidiPort.h"
 #include <thread>
 #include <chrono>
 
@@ -1203,6 +1205,121 @@ static void testSystemMicController()
 }
 
 //==============================================================================
+//==============================================================================
+// Teclado MIDI virtual "SmartKeys Chords": hilo de envío, orden y hora exacta,
+// lo que saben todas las instancias, notas colgadas. Linux: escribe en un archivo.
+#if JUCE_LINUX
+struct PortLine { double ms; int status, d1, d2; };
+
+static std::vector<PortLine> readPortFile (const juce::File& file)
+{
+    std::vector<PortLine> v;
+    if (auto* f = std::fopen (file.getFullPathName().toRawUTF8(), "r"))
+    {
+        PortLine l {};
+        while (std::fscanf (f, "%lf %d %d %d", &l.ms, &l.status, &l.d1, &l.d2) == 4)
+            v.push_back (l);
+        std::fclose (f);
+    }
+    return v;
+}
+#endif
+
+static void testChordPort()
+{
+   #if JUCE_LINUX
+    std::printf ("[20] Teclado MIDI virtual \"SmartKeys Chords\": orden, hora exacta y notas colgadas\n");
+
+    ChordMidiPort::setStandaloneProcess (true);
+    CHECK (ChordMidiPort::getDeviceName() == "SmartKeys Chords (App)", "la app Standalone usa otro nombre (sin choque con el DAW)");
+    ChordMidiPort::setStandaloneProcess (false);
+    CHECK (ChordMidiPort::getDeviceName() == "SmartKeys Chords", "en el DAW: \"SmartKeys Chords\"");
+
+    const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("smartkeys_port_unit.txt");
+    file.deleteFile();
+    setEnv ("SMARTKEYS_TEST_CHORD_PORT", file.getFullPathName().toRawUTF8());
+    {
+        ChordMidiPort port;
+        CHECK (port.isAvailable(), "el teclado se abre");
+
+        ChordPortFeed a, b, unconnected;
+        port.addFeed (a);
+        port.addFeed (b);
+
+        // A: Fa mayor con STRUM DESC (C4 ya, A3 +40 ms, F3 +90 ms), metido desordenado
+        const double t0 = juce::Time::getMillisecondCounterHiRes();
+        a.push ({ t0 + 90.0, 0x90, 53, 100 });
+        a.push ({ t0 + 5.0,  0x90, 60, 100 });
+        a.push ({ t0 + 40.0, 0x90, 57, 100 });
+        // Un NoteOn que llega con 1 s de retraso (sistema bloqueado): no sale, ni su NoteOff
+        a.push ({ t0 - 1000.0, 0x90, 70, 100 });
+        a.push ({ t0 + 20.0,   0x80, 70, 0 });
+        // B (otra instancia): una nota que queda sonando
+        b.push ({ t0 + 10.0, 0x90, 48, 90 });
+
+        std::this_thread::sleep_for (std::chrono::milliseconds (250));
+        auto lines = readPortFile (file);
+        std::vector<int> order;
+        bool timingOk = lines.size() == 4;
+        const double expected[] = { 5.0, 10.0, 40.0, 90.0 };
+        for (size_t i = 0; i < lines.size(); ++i)
+        {
+            order.push_back (lines[i].d1);
+            if (i < 4)
+                timingOk = timingOk && std::abs (lines[i].ms - t0 - expected[i]) < 6.0;
+        }
+        CHECK ((order == std::vector<int> { 60, 48, 57, 53 }), "salen en el orden de su hora (C4, la otra instancia, A3, F3), sin el NoteOn atrasado");
+        CHECK (timingOk, "cada nota sale a su hora (±6 ms): se conserva el STRUM");
+        CHECK (a.getNoteOnSerial (60) == 1 && b.getNoteOnSerial (60) == 1 && a.getNoteOnSerial (48) == 1,
+               "todas las instancias saben qué salió por el teclado (para reconocer el eco)");
+        CHECK (a.getNoteOnSerial (70) == 0 && a.getNoteOffSerial (70) == 0, "el NoteOn atrasado no cuenta y su NoteOff no sale");
+        CHECK (a.getNumSoundingNotes() == 3 && b.getNumSoundingNotes() == 1, "cuenta de notas sonando por instancia");
+        CHECK (std::abs (a.getLastNoteOnSentMs (53) - t0 - 90.0) < 6.0, "hora del último envío de cada nota");
+
+        // A se reinicia (bypass / prepareToPlay): sus 3 NoteOff, lo pendiente se tira; B sigue
+        a.push ({ t0 + 5000.0, 0x90, 65, 100 });
+        std::this_thread::sleep_for (std::chrono::milliseconds (20));
+        a.requestReleaseAll();
+        std::this_thread::sleep_for (std::chrono::milliseconds (40));
+        lines = readPortFile (file);
+        std::set<int> offs;
+        bool any65 = false, offsOnly = true;
+        for (size_t i = 4; i < lines.size(); ++i)
+        {
+            any65 = any65 || lines[i].d1 == 65;
+            offsOnly = offsOnly && (lines[i].status & 0xF0) == 0x80;
+            offs.insert (lines[i].d1);
+        }
+        CHECK ((offs == std::set<int> { 53, 57, 60 }) && offsOnly && ! any65,
+               "releaseAll: los NoteOff de A (F3 A3 C4) y nada de lo pendiente");
+        CHECK (a.getNumSoundingNotes() == 0 && b.getNumSoundingNotes() == 1 && b.getNoteOffSerial (57) == 1,
+               "B sigue sonando y también sabe que salieron esos NoteOff");
+
+        // B se desconecta (instancia cerrada): su nota se apaga
+        const size_t before = lines.size();
+        port.removeFeed (b);
+        lines = readPortFile (file);
+        CHECK (lines.size() == before + 1 && lines.back().d1 == 48 && (lines.back().status & 0xF0) == 0x80,
+               "al cerrar una instancia, su nota recibe el NoteOff");
+
+        // FIFO lleno (nadie lo vacía): push descarta sin bloquear ni pedir memoria
+        int accepted = 0;
+        {
+            AllocationGuard guard;
+            for (int i = 0; i < 5000; ++i)
+                accepted += unconnected.push ({ t0, 0x90, 60, 100 }) ? 1 : 0;
+            CHECK (guard.count() == 0, "push() (hilo de audio) no pide memoria");
+        }
+        CHECK (accepted == ChordPortFeed::kCapacity - 1, "FIFO lleno: descarta lo que no cabe");
+
+        port.removeFeed (a);
+    }
+    CHECK (readPortFile (file).size() == 8, "en total: 4 NoteOn y sus 4 NoteOff; nada más sale después de cerrar");
+    setEnv ("SMARTKEYS_TEST_CHORD_PORT", nullptr);
+    file.deleteFile();
+   #endif
+}
+
 static void testRealtimeAllocations()
 {
     std::printf ("[10] Camino de audio sin asignaciones de memoria\n");
@@ -1296,6 +1413,7 @@ int main()
     testRealtimeAllocations();
     testMicRingBuffer();
     testSystemMicController();
+    testChordPort();
 
     std::printf ("\n%d comprobaciones, %d fallos\n", gChecks, gFailures);
     return gFailures == 0 ? 0 : 1;

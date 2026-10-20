@@ -27,6 +27,15 @@ juce::Font makeFont (float height, bool bold)
    #endif
 }
 
+static float textWidth (const juce::Font& font, const juce::String& text)
+{
+   #if JUCE_MAJOR_VERSION >= 8
+    return juce::GlyphArrangement::getStringWidth (font, text);
+   #else
+    return font.getStringWidthFloat (text);
+   #endif
+}
+
 void drawGlowBox (juce::Graphics& g, juce::Rectangle<float> r, float corner, juce::Colour fill, bool glow)
 {
     if (glow)
@@ -41,6 +50,59 @@ void drawGlowBox (juce::Graphics& g, juce::Rectangle<float> r, float corner, juc
 
     g.setColour (fill);
     g.fillRoundedRectangle (r, corner);
+}
+
+//==============================================================================
+// Logotipo de MIWN. Diseño en una cuadrícula de 34 × 34:
+//   - placa redondeada (radio 9) con degradado rosa #FF3584 -> #D60C5C (acento
+//     #EC1368 en el centro) y un brillo rosa suave alrededor;
+//   - una onda armónica blanca que dibuja la "M" (cuatro curvas de Bézier);
+//   - cinco barras de nivel escalonadas (blanco al 75 %): el flujo del estudio.
+void drawMiwnLogo (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    const float size = juce::jmin (area.getWidth(), area.getHeight());
+    const float s = size / 34.0f;
+    const auto origin = area.withSizeKeepingCentre (size, size).getTopLeft();
+    const auto toArea = juce::AffineTransform::scale (s).translated (origin.x, origin.y);
+
+    // Brillo
+    for (int i = 3; i >= 1; --i)
+    {
+        const float grow = (float) i * 1.3f * s;
+        g.setColour (Colours::accent.withAlpha (0.055f * (float) (4 - i)));
+        g.fillRoundedRectangle (juce::Rectangle<float> (origin.x, origin.y + 1.0f * s, size, size).expanded (grow),
+                                9.0f * s + grow);
+    }
+
+    // Placa
+    juce::Path plate;
+    plate.addRoundedRectangle (0.0f, 0.0f, 34.0f, 34.0f, 9.0f);
+    plate.applyTransform (toArea);
+    const auto b = plate.getBounds();
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xFFFF3584), b.getTopLeft(),
+                                             juce::Colour (0xFFD60C5C), b.getBottomRight(), false));
+    g.fillPath (plate);
+
+    // Onda armónica en forma de "M"
+    juce::Path wave;
+    wave.startNewSubPath (6.5f, 22.0f);
+    wave.cubicTo (8.5f, 22.0f, 9.6f, 8.0f, 12.3f, 8.0f);
+    wave.cubicTo (15.0f, 8.0f, 15.6f, 17.5f, 17.0f, 17.5f);
+    wave.cubicTo (18.4f, 17.5f, 19.7f, 8.0f, 21.7f, 8.0f);
+    wave.cubicTo (23.7f, 8.0f, 25.5f, 22.0f, 27.5f, 22.0f);
+    wave.applyTransform (toArea);
+    g.setColour (Colours::white);
+    g.strokePath (wave, juce::PathStrokeType (2.8f * s, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // Barras de nivel escalonadas
+    constexpr float centres[] = { 10.5f, 14.2f, 17.0f, 19.8f, 23.5f };
+    constexpr float heights[] = { 2.6f, 3.8f, 5.0f, 3.8f, 2.6f };
+    juce::Path bars;
+    for (size_t i = 0; i < 5; ++i)
+        bars.addRoundedRectangle (centres[i] - 1.1f, 28.0f - heights[i], 2.2f, heights[i], 1.1f);
+    bars.applyTransform (toArea);
+    g.setColour (Colours::white.withAlpha (0.75f));
+    g.fillPath (bars);
 }
 
 //==============================================================================
@@ -854,6 +916,122 @@ void ChordDisplay::setText (const juce::String& main, const juce::String& detail
     }
 }
 
+//==============================================================================
+// "MIDI ● SmartKeys Chords" — estado del teclado MIDI virtual
+//==============================================================================
+ChordPortStatus::ChordPortStatus()
+{
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+void ChordPortStatus::mouseUp (const juce::MouseEvent& e)
+{
+    if (e.mouseWasClicked() && onClick != nullptr)
+        onClick();
+}
+
+bool ChordPortStatus::hitTest (int x, int)
+{
+    return state != State::Hidden && (float) x >= contentLeft - 4.0f;
+}
+
+void ChordPortStatus::setState (State newState, const juce::String& deviceName)
+{
+    if (newState == state && deviceName == name)
+        return;
+
+    state = newState;
+    name = deviceName;
+    setVisible (state != State::Hidden);
+
+    const auto quoted = "\"" + name + "\"";
+    const auto clickOff = u8 ("\n(Clic aquí: apagar el teclado)");
+    switch (state)
+    {
+        case State::Active:
+            setTooltip (u8 ("Teclado MIDI virtual de SmartKeys: por aquí salen los acordes completos (con su STRUM).\n"
+                            "Así otro instrumento los toca y FL Studio los graba en SU Piano Roll:\n"
+                            "1. Options › MIDI Settings › Input: selecciona ") + quoted
+                        + u8 (", actívalo (Enable) y ponle un Port libre, p. ej. 10 (si no aparece: Refresh device list).\n"
+                              "2. Clic derecho en FLEX, Serum… en el Channel Rack › Receive notes from › ") + quoted + ".\n"
+                        + u8 ("3. Deja SmartKeys seleccionado, pulsa grabar y toca: cada tecla entra como el acorde completo.")
+                        + clickOff);
+            break;
+        case State::Waiting:
+            setTooltip (u8 ("El teclado MIDI virtual ") + quoted
+                        + u8 (" aparece en cuanto el DAW pone a sonar SmartKeys (o al abrir esta ventana).") + clickOff);
+            break;
+        case State::Unavailable:
+            setTooltip (u8 ("Otra aplicación ya tiene un teclado ") + quoted
+                        + u8 (" (otra copia de FL Studio o la app SmartKeys). Se reintenta cada 3 s.") + clickOff);
+            break;
+        case State::Looping:
+            setTooltip (u8 ("FL Studio devuelve ") + quoted
+                        + u8 (" al propio SmartKeys: SmartKeys ignora ese eco, pero así ningún otro instrumento graba los acordes. "
+                              "Clic derecho en FLEX, Serum… › Receive notes from › ") + quoted + "." + clickOff);
+            break;
+        case State::Off:
+            setTooltip (u8 ("Teclado MIDI virtual ") + quoted
+                        + u8 (" apagado. Clic aquí para encenderlo: por él salen los acordes completos para que otro "
+                              "instrumento los toque y FL Studio los grabe en su Piano Roll."));
+            break;
+        case State::Hidden:
+            setTooltip ({});
+            break;
+    }
+
+    repaint();
+}
+
+void ChordPortStatus::paint (juce::Graphics& g)
+{
+    if (state == State::Hidden)
+        return;
+
+    const auto r = getLocalBounds().toFloat();
+    const auto small = makeFont (8.5f, true).withExtraKerningFactor (0.12f);
+    const auto main = makeFont (9.5f, true);
+
+    const bool problem = state == State::Unavailable || state == State::Looping;
+    juce::String suffix;
+    if (state == State::Unavailable)  suffix = u8 (" · en uso");
+    if (state == State::Looping)      suffix = u8 (" · eco");
+    if (state == State::Off)          suffix = u8 (" · OFF");
+
+    const float nameW = textWidth (main, name + suffix);
+    const float tagW = textWidth (small, "MIDI");
+    float x = r.getRight() - nameW;
+
+    g.setFont (main);
+    auto textColour = problem ? Colours::warning : (state == State::Active ? Colours::charcoal : Colours::label);
+    if (isMouseOver())
+        textColour = problem ? textColour.darker (0.3f) : Colours::accent;
+    g.setColour (textColour);
+    g.drawText (name + suffix, juce::Rectangle<float> (x, r.getY(), nameW + 2.0f, r.getHeight()), juce::Justification::centredLeft, false);
+
+    x -= 9.0f;
+    const float d = 5.0f;
+    const juce::Rectangle<float> dot (x, r.getCentreY() - d * 0.5f, d, d);
+    if (state == State::Active)
+    {
+        g.setColour (Colours::accent.withAlpha (0.25f));
+        g.fillEllipse (dot.expanded (1.5f));
+        g.setColour (Colours::accent);
+        g.fillEllipse (dot);
+    }
+    else
+    {
+        g.setColour (problem ? Colours::warning : Colours::label);
+        g.drawEllipse (dot.reduced (0.5f), 1.0f);
+    }
+
+    x -= tagW + 5.0f;
+    g.setFont (small);
+    g.setColour (Colours::label);
+    g.drawText ("MIDI", juce::Rectangle<float> (x, r.getY(), tagW + 2.0f, r.getHeight()), juce::Justification::centredLeft, false);
+    contentLeft = x;
+}
+
 void ChordDisplay::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
@@ -898,15 +1076,6 @@ void ChordDisplay::paint (juce::Graphics& g)
 //==============================================================================
 // VoiceReadout: "Mic: A3 -> Acorde: Am"
 //==============================================================================
-static float textWidth (const juce::Font& font, const juce::String& text)
-{
-   #if JUCE_MAJOR_VERSION >= 8
-    return juce::GlyphArrangement::getStringWidth (font, text);
-   #else
-    return font.getStringWidthFloat (text);
-   #endif
-}
-
 bool VoiceReadout::set (Kind k, const juce::String& a, const juce::String& b, const juce::String& c, bool warn)
 {
     if (k == kind && a == note && b == label && c == result && warn == warning)
@@ -1121,6 +1290,12 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
             holder->getMuteInputValue().setValue (false);
    #endif
 
+    // Teclado MIDI virtual: estado arriba a la derecha (clic: encender / apagar).
+    // Abrir la ventana ya crea el teclado (sin esperar a que el DAW ponga a sonar el plugin).
+    content.addChildComponent (portStatus);
+    portStatus.onClick = [this] { audioProcessor.setChordPortEnabled (! audioProcessor.isChordPortEnabled()); };
+    audioProcessor.markInUse();
+
     timerCallback();
     startTimerHz (60);
 
@@ -1174,12 +1349,16 @@ void SmartKeysAudioProcessorEditor::paintContent (juce::Graphics& g)
     g.setColour (Colours::border);
     g.fillRect (64, 0, kWidth - 64, 1);
 
-    // Título + punto de acento + "FROM MIWN"
+    // Logotipo de MIWN + título + punto de acento + "FROM MIWN"
+    drawMiwnLogo (g, { 16.0f, 11.0f, 34.0f, 34.0f });
+
+    const auto titleFont = makeFont (21.0f, true);
+    const float titleWidth = textWidth (titleFont, "SMARTKEYS");
     g.setColour (Colours::text);
-    g.setFont (makeFont (22.0f, true));
-    g.drawText ("SMARTKEYS", 18, 12, 140, 26, juce::Justification::centredLeft, false);
+    g.setFont (titleFont);
+    g.drawText ("SMARTKEYS", juce::Rectangle<float> (58.0f, 11.0f, titleWidth + 4.0f, 26.0f), juce::Justification::centredLeft, false);
     g.setColour (Colours::accent);
-    g.fillEllipse (150.0f, 22.0f, 7.0f, 7.0f);
+    g.fillEllipse (58.0f + titleWidth + 4.0f, 21.0f, 6.5f, 6.5f);
 
     {
         // Mayúsculas con un espaciado sutil: "FROM" en gris, la marca en grafito
@@ -1188,17 +1367,17 @@ void SmartKeysAudioProcessorEditor::paintContent (juce::Graphics& g)
         const float fromWidth = textWidth (from, "FROM");
         g.setFont (from);
         g.setColour (Colours::label);
-        g.drawText ("FROM", juce::Rectangle<float> (19.0f, 36.0f, fromWidth + 4.0f, 13.0f), juce::Justification::centredLeft, false);
+        g.drawText ("FROM", juce::Rectangle<float> (59.0f, 34.0f, fromWidth + 4.0f, 13.0f), juce::Justification::centredLeft, false);
         g.setFont (brand);
         g.setColour (Colours::charcoal);
-        g.drawText ("MIWN", juce::Rectangle<float> (19.0f + fromWidth + 6.0f, 36.0f, 80.0f, 13.0f),
+        g.drawText ("MIWN", juce::Rectangle<float> (59.0f + fromWidth + 6.0f, 34.0f, 80.0f, 13.0f),
                     juce::Justification::centredLeft, false);
     }
 
     // Rótulos de la fila superior
     g.setColour (Colours::label);
     g.setFont (makeFont (8.5f, true));
-    g.drawText ("M O D E", 194, 2, 120, 10, juce::Justification::centredLeft, false);
+    g.drawText ("M O D E", 216, 2, 120, 10, juce::Justification::centredLeft, false);
     g.setFont (makeFont (11.0f, true));
     g.drawText ("GAIN", 654, 12, 36, 34, juce::Justification::centredLeft, false);
 
@@ -1245,9 +1424,10 @@ void SmartKeysAudioProcessorEditor::resized()
 
 void SmartKeysAudioProcessorEditor::layoutContent()
 {
-    // Fila superior: título | SMART CHORDS · SINGLE NOTES · COMPLEX CHORDS | GAIN
-    modeSwitch.setBounds (190, 12, 444, 34);
+    // Fila superior: logo + título | SMART CHORDS · SINGLE NOTES · COMPLEX CHORDS | GAIN
+    modeSwitch.setBounds (212, 12, 422, 34);
     gainSlider.setBounds (692, 15, 142, 28);
+    portStatus.setBounds (560, 1, 274, 12);   // "MIDI ● SmartKeys Chords", alineado a la derecha
 
     // Tira MIC: MIC VOICE | medidor | GATE | Mic: A3 -> Acorde: Am
     micButton.setBounds (22, 64, 150, 28);
@@ -1275,6 +1455,20 @@ void SmartKeysAudioProcessorEditor::layoutContent()
 //==============================================================================
 void SmartKeysAudioProcessorEditor::timerCallback()
 {
+    {
+        using PortState = smartkeys::ui::ChordPortStatus::State;
+        auto state = PortState::Hidden;
+        switch (audioProcessor.getChordPortState())
+        {
+            case ChordPortState::Off:          state = PortState::Off; break;
+            case ChordPortState::Waiting:      state = PortState::Waiting; break;
+            case ChordPortState::Active:       state = audioProcessor.isChordPortLooping() ? PortState::Looping : PortState::Active; break;
+            case ChordPortState::Unavailable:  state = PortState::Unavailable; break;
+            default:                           break;
+        }
+        portStatus.setState (state, SmartKeysAudioProcessor::getChordPortName());
+    }
+
     const int root  = juce::jlimit (0, 11, (int) apvts.getRawParameterValue (ParamIDs::rootKey)->load());
     const int scale = juce::jlimit (0, smartkeys::kNumScales - 1, (int) apvts.getRawParameterValue (ParamIDs::scale)->load());
     const uint16_t mask = audioProcessor.getCustomMask();

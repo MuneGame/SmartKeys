@@ -16,6 +16,11 @@
 #  código real de CoreAudio que MIC VOICE lo lee SIN sidechain y sin cambiar la
 #  frecuencia ni el búfer del dispositivo.
 #
+#  Teclado MIDI virtual (macOS): en esa misma Mac, el VST3 crea "SmartKeys
+#  Chords" con CoreMIDI de verdad; la prueba lo abre como lo haría FL Studio y
+#  comprueba los acordes completos, el STRUM y el eco (el teclado devuelto al
+#  propio SmartKeys no dispara acordes ni deja notas colgadas).
+#
 #  Se ejecuta en cada push a main o manualmente desde la pestaña "Actions".
 #  Los instaladores se publican en la Release v<versión> y en la rama "installers".
 # ==============================================================================
@@ -30,7 +35,7 @@ permissions:
   contents: write
 
 env:
-  SK_VERSION: "1.5.0"
+  SK_VERSION: "1.6.0"
 
 jobs:
   macos:
@@ -214,7 +219,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   macos-mic:
-    name: macOS — MIC VOICE sin sidechain (CoreAudio real)
+    name: macOS — MIC VOICE (CoreAudio) y SmartKeys Chords (CoreMIDI) reales
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
@@ -282,6 +287,31 @@ jobs:
           echo "::notice title=MIC VOICE en el VST3::$(grep -E 'ok|FALLO|comprobaciones|->' host-mic.txt | tr '\n' ' ')"
           kill $(cat afplay.pid) 2>/dev/null || true
           exit $code
+
+      - name: SmartKeys (VST3) — teclado MIDI virtual "SmartKeys Chords" (CoreMIDI real)
+        env:
+          SMARTKEYS_PORT_DEBUG: "1"
+        run: |
+          set +e
+          ./build-mic/SmartKeysHostTests_artefacts/Release/SmartKeysHostTests \
+            build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 --port-only 2>&1 | tee host-port.txt
+          code=${PIPESTATUS[0]}
+          echo "::notice title=SmartKeys Chords (CoreMIDI)::$(grep -E 'ok|FALLO|comprobaciones|->|teclado:|trozos|ecos|disponible|SmartKeys Chords\]' host-port.txt | tr '\n' ' ')"
+          exit $code
+
+      - name: Guardar el registro de las pruebas (si algo falló)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          cp host-*.txt probe-*.txt "$RUNNER_TEMP/logs/" 2>/dev/null || true
+          cd "$RUNNER_TEMP/logs"
+          git init -q -b ci-logs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "Registro de pruebas macOS (${GITHUB_SHA::7})"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-logs || true
 
   publish:
     name: Publicar instaladores

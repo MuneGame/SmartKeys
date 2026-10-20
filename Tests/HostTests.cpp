@@ -23,19 +23,32 @@
          la entrada, manda la entrada.
       7. Bloques de 0 a 512 muestras (FL Studio), cero asignaciones de memoria
          en el processBlock real y concurrencia audio + estado + micrófono.
+      8. Teclado MIDI virtual "SmartKeys Chords" (lo que FL Studio graba en el
+         Piano Roll del instrumento enganchado): cada tecla sale como el acorde
+         completo, a la vez o con el desfase exacto del STRUM; repetir rápido
+         una tecla nunca se pierde; si el DAW devuelve el teclado a SmartKeys
+         (bucle), los ecos no disparan acordes ni dejan notas colgadas; bypass,
+         cerrar el plugin y exportar. En macOS se abre la fuente CoreMIDI de
+         verdad; en Linux el teclado escribe en un archivo.
 
-    Uso:  SmartKeysHostTests <SmartKeys.vst3> [--stress <segundos>] [--system-mic-only]
+    Uso:  SmartKeysHostTests <SmartKeys.vst3> [--stress <segundos>] [--system-mic-only] [--port-only]
 
   ==============================================================================
 */
 
 #include <juce_audio_processors_headless/juce_audio_processors_headless.h>
+#include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_events/juce_events.h>
 #include <iostream>
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include <set>
 #include <map>
 #include <vector>
 #include <thread>
+#include <chrono>
+#include <functional>
 #include <random>
 #include <cerrno>
 #include <cstdlib>
@@ -863,6 +876,16 @@ void testConcurrency (const String& path, double seconds)
             host.setText ("Master Gain", String (-(int) (rng() % 40)));
             if (rng() % 9 == 0)
                 host.setBool ("Mic Voice Controller", rng() % 2 == 0);   // abre / cierra el micrófono del sistema
+            if (rng() % 11 == 0)
+            {
+                // Enciende / apaga el teclado "SmartKeys Chords" (crea y destruye el teclado con el audio corriendo)
+                if (auto xml = host.getPluginStateXml())
+                {
+                    xml->setAttribute ("chordKeyboard", (int) (rng() % 2));
+                    host.setPluginStateXml (*xml);
+                    ++portToggles;
+                }
+            }
             if (Time::getMillisecondCounterHiRes() > endMs)
             {
                 stopTimer();
@@ -871,7 +894,7 @@ void testConcurrency (const String& path, double seconds)
         }
         Host& host;
         double endMs;
-        int iterations = 0;
+        int iterations = 0, portToggles = 0;
         MemoryBlock previous;
         std::mt19937 rng { 5 };
     };
@@ -883,7 +906,8 @@ void testConcurrency (const String& path, double seconds)
     audio.join();
 
     std::cout << "     " << blocks.load() << " bloques de audio, " << hammer.iterations
-              << " rondas de estado/parámetros en el hilo de mensajes" << std::endl;
+              << " rondas de estado/parámetros en el hilo de mensajes (" << hammer.portToggles
+              << " veces encendido/apagado el teclado SmartKeys Chords)" << std::endl;
     check (blocks.load() > 200 && hammer.iterations > 20, "los dos hilos trabajaron a la vez");
     check (host.eventsOutOfRange == 0, "con todo a la vez, ningún evento MIDI fuera de su bloque");
     host.unload();
@@ -971,23 +995,692 @@ void testSystemMic (const String& path)
     unsetenv ("SMARTKEYS_FAKE_MIC");
    #endif
 }
+//==============================================================================
+// Teclado MIDI virtual "SmartKeys Chords"
+//==============================================================================
+struct PortEvent
+{
+    double ms = 0.0;   // reloj de alta resolución (Time::getMillisecondCounterHiRes)
+    int status = 0, data1 = 0, data2 = 0;
+
+    bool isNoteOn() const  { return (status & 0xF0) == 0x90 && data2 > 0; }
+    bool isNoteOff() const { return (status & 0xF0) == 0x80 || ((status & 0xF0) == 0x90 && data2 == 0); }
+};
+
+// Lo que sale por el teclado. macOS: se abre como entrada MIDI (CoreMIDI de
+// verdad, como lo ve FL Studio). Linux: el archivo que escribe el teclado.
+class PortTap
+   #if JUCE_MAC
+    : private MidiInputCallback
+   #endif
+{
+public:
+    explicit PortTap (String fileForLinux) : file (std::move (fileForLinux)) {}
+
+    ~PortTap()
+    {
+       #if JUCE_MAC
+        if (input != nullptr)
+            input->stop();
+       #endif
+    }
+
+    bool connect (const String& deviceName)
+    {
+       #if JUCE_MAC
+        if (input != nullptr)
+            return true;
+        for (auto& d : MidiInput::getAvailableDevices())
+        {
+            if (d.name == deviceName)
+            {
+                input = MidiInput::openDevice (d.identifier, this);
+                if (input != nullptr)
+                    input->start();
+                return input != nullptr;
+            }
+        }
+        return false;
+       #else
+        ignoreUnused (deviceName);
+        return File (file).existsAsFile();
+       #endif
+    }
+
+    bool deviceListed (const String& deviceName) const
+    {
+       #if JUCE_MAC
+        for (auto& d : MidiInput::getAvailableDevices())
+            if (d.name == deviceName)
+                return true;
+        return false;
+       #else
+        ignoreUnused (deviceName);
+        return true;
+       #endif
+    }
+
+    // Lo que salió desde la última llamada
+    std::vector<PortEvent> poll()
+    {
+       #if JUCE_MAC
+        const ScopedLock sl (lock);
+        auto out = std::move (received);
+        received.clear();
+        return out;
+       #else
+        std::vector<PortEvent> out;
+        std::FILE* f = std::fopen (file.toRawUTF8(), "r");
+        if (f == nullptr)
+            return out;
+        std::fseek (f, offset, SEEK_SET);
+        char line[160];
+        while (std::fgets (line, sizeof (line), f) != nullptr)
+        {
+            const auto len = std::strlen (line);
+            if (len == 0 || line[len - 1] != '\n')
+                break;   // línea a medio escribir: la próxima vez
+            offset += (long) len;
+            PortEvent e;
+            if (std::sscanf (line, "%lf %d %d %d", &e.ms, &e.status, &e.data1, &e.data2) == 4)
+                out.push_back (e);
+        }
+        std::fclose (f);
+        return out;
+       #endif
+    }
+
+private:
+    String file;
+    long offset = 0;
+
+   #if JUCE_MAC
+    void handleIncomingMidiMessage (MidiInput*, const MidiMessage& m) override
+    {
+        if (m.getRawDataSize() != 3)
+            return;
+        const auto* d = m.getRawData();
+        // La hora del paquete CoreMIDI = cuándo lo envió el teclado (sin el retraso
+        // de entrega del servidor MIDI, que en una máquina virtual varía mucho)
+        const double sentMs = m.getTimeStamp() > 0.0 ? m.getTimeStamp() * 1000.0 : Time::getMillisecondCounterHiRes();
+        const ScopedLock sl (lock);
+        received.push_back ({ sentMs, d[0], d[1], d[2] });
+    }
+
+    std::unique_ptr<MidiInput> input;
+    CriticalSection lock;
+    std::vector<PortEvent> received;
+   #endif
+};
+
+struct UserEvent
+{
+    double atMs;   // desde el inicio del escenario
+    MidiMessage msg;
+};
+
+struct PortScenario
+{
+    BlockResult out;                 // salida MIDI del plugin (marcas en muestras, desde el inicio)
+    std::vector<PortEvent> port;     // lo que salió por el teclado
+    double t0 = 0.0;
+    int echoes = 0;                  // eventos devueltos al plugin (bucle simulado)
+};
+
+// Espera precisa hasta 'targetMs' (duerme y, el último milisegundo y medio, cede el procesador)
+void waitUntilMs (double targetMs)
+{
+    for (;;)
+    {
+        const double remaining = targetMs - Time::getMillisecondCounterHiRes();
+        if (remaining <= 0.0)
+            return;
+        if (remaining > 2.0)
+            std::this_thread::sleep_for (std::chrono::microseconds ((int64) ((remaining - 1.5) * 1000.0)));
+        else
+            std::this_thread::yield();
+    }
+}
+
+// Hilo de "audio" del DAW de prueba: como en un DAW de verdad, el processBlock va
+// en su propio hilo de tiempo real, a su ritmo, y el hilo de mensajes (el
+// temporizador del plugin, que crea el teclado) corre aparte.
+class AudioThread : public Thread
+{
+public:
+    explicit AudioThread (std::function<void()> fn) : Thread ("SmartKeysHostTests audio"), body (std::move (fn)) {}
+
+    void run() override
+    {
+        body();
+        finished = true;
+    }
+
+    std::atomic<bool> finished { false };
+
+private:
+    std::function<void()> body;
+};
+
+// Escenario a TIEMPO REAL: bloques de 512 muestras a su ritmo en el hilo de audio,
+// el hilo de mensajes corre a la vez (el Timer del plugin crea el teclado) y, con
+// 'loopback', todo lo que sale por el teclado vuelve a entrar por la entrada MIDI
+// del plugin en el bloque siguiente, como en FL Studio con el teclado devuelto.
+PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vector<UserEvent> user, bool loopback,
+                              int subBlocks = 1)
+{
+    std::stable_sort (user.begin(), user.end(), [] (const UserEvent& a, const UserEvent& b) { return a.atMs < b.atMs; });
+
+    PortScenario sc;
+    const double blockMs = 1000.0 * Host::blockSize / Host::sampleRate;
+    const int numBlocks = (int) std::floor (seconds * 1000.0 / blockMs) + 1;
+    double maxBlockLateMs = 0.0;
+
+    AudioThread audio ([&]
+    {
+        size_t nextUser = 0;
+        for (int k = 0; k < numBlocks; ++k)
+        {
+            const double blockStart = sc.t0 + (double) k * blockMs;
+            waitUntilMs (blockStart);
+            maxBlockLateMs = jmax (maxBlockLateMs, Time::getMillisecondCounterHiRes() - blockStart);
+
+            std::vector<std::pair<int, MidiMessage>> ev;
+            for (auto& e : tap.poll())
+            {
+                sc.port.push_back (e);
+                if (loopback)
+                {
+                    ev.push_back ({ 0, MidiMessage (e.status, e.data1, e.data2) });
+                    ++sc.echoes;
+                }
+            }
+
+            while (nextUser < user.size() && user[nextUser].atMs < (double) (k + 1) * blockMs)
+            {
+                const int pos = jlimit (0, Host::blockSize - 1,
+                                        (int) ((user[nextUser].atMs - (double) k * blockMs) * Host::sampleRate / 1000.0));
+                ev.push_back ({ pos, user[nextUser].msg });
+                ++nextUser;
+            }
+
+            if (subBlocks <= 1)
+            {
+                auto r = host.runAt (ev);
+                sc.out.midi.insert (sc.out.midi.end(), r.midi.begin(), r.midi.end());
+                sc.out.outputRms = jmax (sc.out.outputRms, r.outputRms);
+            }
+            else
+            {
+                // Como FL Studio: el búfer se procesa en trozos seguidos, sin esperar entre ellos
+                const int sub = Host::blockSize / subBlocks;
+                for (int b = 0; b < subBlocks; ++b)
+                {
+                    std::vector<std::pair<int, MidiMessage>> part;
+                    for (auto& e : ev)
+                        if (e.first / sub == b || (b == subBlocks - 1 && e.first >= sub * subBlocks))
+                            part.push_back ({ e.first - b * sub, e.second });
+                    auto r = host.runSized (b == subBlocks - 1 ? Host::blockSize - sub * b : sub, part);
+                    sc.out.midi.insert (sc.out.midi.end(), r.midi.begin(), r.midi.end());
+                    sc.out.outputRms = jmax (sc.out.outputRms, r.outputRms);
+                }
+            }
+        }
+
+        // El audio de un DAW es continuo: el escenario termina cuando acaba su último bloque
+        waitUntilMs (sc.t0 + (double) numBlocks * blockMs);
+    });
+
+    sc.t0 = Time::getMillisecondCounterHiRes() + 2.0;
+    if (! audio.startRealtimeThread (Thread::RealtimeOptions{}.withPeriodMs (blockMs).withMaximumProcessingTimeMs (blockMs * 0.8)))
+        audio.startThread (Thread::Priority::highest);
+
+    while (! audio.finished.load())
+        MessageManager::getInstance()->runDispatchLoopUntil (5);
+    audio.stopThread (2000);
+
+    for (auto& e : tap.poll())
+        sc.port.push_back (e);
+
+    if (SystemStats::getEnvironmentVariable ("SMARTKEYS_PORT_DEBUG", {}).isNotEmpty() && (! sc.out.midi.empty() || ! sc.port.empty()))
+        std::cout << "     [hilo de audio de la prueba] bloque más atrasado: " << String (maxBlockLateMs, 2) << " ms" << std::endl;
+
+    if (SystemStats::getEnvironmentVariable ("SK_PORT_DEBUG", {}).isNotEmpty() && (! sc.out.midi.empty() || ! sc.port.empty()))
+    {
+        std::cout << "     [debug] salida MIDI:";
+        for (auto& m : sc.out.midi)
+            if (m.isNoteOnOrOff())
+                std::cout << " " << (m.isNoteOn() ? "+" : "-") << m.getNoteNumber();
+        std::cout << std::endl << "     [debug] teclado (ms desde el inicio):";
+        for (auto& e : sc.port)
+            std::cout << " " << (e.isNoteOn() ? "+" : "-") << e.data1 << "@" << roundToInt (e.ms - sc.t0);
+        std::cout << std::endl;
+    }
+    return sc;
+}
+
+std::map<int, int> countNoteOns (const std::vector<MidiMessage>& midi)
+{
+    std::map<int, int> c;
+    for (auto& m : midi)
+        if (m.isNoteOn())
+            ++c[m.getNoteNumber()];
+    return c;
+}
+
+std::map<int, int> countPortNoteOns (const std::vector<PortEvent>& port)
+{
+    std::map<int, int> c;
+    for (auto& e : port)
+        if (e.isNoteOn())
+            ++c[e.data1];
+    return c;
+}
+
+// Notas que quedarían colgadas (NoteOn - NoteOff por nota)
+int hangingNotes (const std::vector<MidiMessage>& midi)
+{
+    std::map<int, int> balance;
+    for (auto& m : midi)
+    {
+        if (m.isNoteOn())  ++balance[m.getNoteNumber()];
+        if (m.isNoteOff()) --balance[m.getNoteNumber()];
+    }
+    int hanging = 0;
+    for (auto& [note, b] : balance)
+        hanging += std::abs (b);
+    return hanging;
+}
+
+int hangingPortNotes (const std::vector<PortEvent>& port)
+{
+    std::map<int, int> balance;
+    for (auto& e : port)
+    {
+        if (e.isNoteOn())  ++balance[e.data1];
+        if (e.isNoteOff()) --balance[e.data1];
+    }
+    int hanging = 0;
+    for (auto& [note, b] : balance)
+        hanging += std::abs (b);
+    return hanging;
+}
+
+// Retardo de la nota 'index' del STRUM (StrumScheduler: t_i = i · base · (1 + 0.15 · i))
+double strumMs (int index, double baseMs)
+{
+    const double i = (double) index;
+    return i * baseMs * (1.0 + 0.15 * i);
+}
+
+String describeCounts (const std::map<int, int>& c)
+{
+    String s;
+    for (auto& [note, n] : c)
+        s << (s.isEmpty() ? "" : " ") << MidiMessage::getMidiNoteName (note, true, true, 4) << "x" << n;
+    return "{" + s + "}";
+}
+
+void testChordPort (const String& path)
+{
+    std::cout << "\n=== Teclado MIDI virtual \"SmartKeys Chords\" (lo que FL Studio graba en el Piano Roll) ===" << std::endl;
+
+   #if JUCE_WINDOWS
+    std::cout << "  (Windows: un plugin no puede crear teclados MIDI virtuales; no aplica)" << std::endl;
+    ignoreUnused (path);
+   #else
+    const auto tapFile = File::getSpecialLocation (File::tempDirectory)
+                             .getChildFile ("smartkeys_chords_" + String (Time::currentTimeMillis()) + ".txt");
+   #if JUCE_LINUX
+    setenv ("SMARTKEYS_TEST_CHORD_PORT", tapFile.getFullPathName().toRawUTF8(), 1);
+   #endif
+    const String deviceName ("SmartKeys Chords");
+    const double blockMs = 1000.0 * Host::blockSize / Host::sampleRate;
+
+    auto tap = std::make_unique<PortTap> (tapFile.getFullPathName());
+    Host host;
+    if (! host.load (path)) { check (false, "cargar el plugin"); return; }
+
+    // Fa mayor, SMART CHORDS, tríadas, sin STRUM
+    host.setChoice ("Key", 5);
+    host.setChoice ("Scale", 0);
+    host.setChoice ("Mode", 0);
+    host.setChoice ("Chord Type", 0);
+    host.setBool ("Mic Voice Controller", false);
+    host.setText ("Strum Speed", "0");
+    host.setChoice ("Strum Direction", 0);
+
+    auto setChordKeyboard = [&host] (bool on)
+    {
+        if (auto xml = host.getPluginStateXml())
+        {
+            xml->setAttribute ("chordKeyboard", on ? 1 : 0);
+            host.setPluginStateXml (*xml);
+        }
+    };
+
+    std::cout << "\n-- P0. Fuera de FL Studio empieza apagado (Logic / Ableton grabarían ese teclado en la pista)" << std::endl;
+    {
+        runPortScenario (host, *tap, 0.8, {}, false);
+        const bool appeared = tap->connect (deviceName);
+        auto state = host.getPluginStateXml();
+        check (! appeared && state != nullptr && state->getIntAttribute ("chordKeyboard", -1) == 0,
+               "en un DAW que no es FL Studio, el teclado no se crea (y el proyecto lo guarda apagado)");
+    }
+
+    std::cout << "\n-- P1. Encendido (clic en la etiqueta o proyecto guardado así): aparece en cuanto el plugin suena" << std::endl;
+    setChordKeyboard (true);
+    bool connected = false;
+    double waitedMs = 0.0;
+    const double startWait = Time::getMillisecondCounterHiRes();
+    for (int i = 0; i < 60 && ! connected; ++i)
+    {
+        runPortScenario (host, *tap, 0.1, {}, false);
+        connected = tap->connect (deviceName);
+    }
+    waitedMs = Time::getMillisecondCounterHiRes() - startWait;
+    std::cout << "     \"" << deviceName << "\" disponible a los " << roundToInt (waitedMs) << " ms" << std::endl;
+    check (connected, "el plugin crea el teclado MIDI \"SmartKeys Chords\" (FL Studio lo ve como un teclado)");
+    {
+        auto state = host.getPluginStateXml();
+        check (state != nullptr && state->getIntAttribute ("chordKeyboard", -1) == 1, "el proyecto guarda el teclado encendido");
+    }
+    if (! connected)
+    {
+        host.unload();
+        return;
+    }
+    runPortScenario (host, *tap, 0.3, {}, false);   // descarta lo anterior
+
+    std::cout << "\n-- P2. Una tecla -> el acorde COMPLETO sale por el teclado, todas las notas a la vez" << std::endl;
+    {
+        auto sc = runPortScenario (host, *tap, 0.8, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                      { 400.0, MidiMessage::noteOff (1, 54) } }, false);
+        std::set<double> outSamples;
+        for (auto& m : sc.out.midi)
+            if (m.isNoteOn())
+                outSamples.insert (m.getTimeStamp());
+        std::map<int, double> onAt;
+        std::set<int> offs;
+        bool channelOne = true;
+        for (auto& e : sc.port)
+        {
+            if (e.isNoteOn())  onAt[e.data1] = e.ms;
+            if (e.isNoteOff()) offs.insert (e.data1);
+            channelOne = channelOne && (e.status & 0x0F) == 0;
+        }
+        std::set<int> onSet;
+        double first = 1.0e300, last = -1.0e300;
+        for (auto& [n, t] : onAt)
+        {
+            onSet.insert (n);
+            first = jmin (first, t);
+            last = jmax (last, t);
+        }
+        const double latency = first - (sc.t0 + 100.0);
+        std::cout << "     F#3 -> salida MIDI " << describe (sc.out.notesOn (1)) << "; teclado " << describe (onSet)
+                  << " en " << String (last - first, 2) << " ms, " << String (latency, 1) << " ms después de la tecla" << std::endl;
+        check (sc.out.notesOn (1) == std::set<int> { 53, 57, 60 } && outSamples.size() == 1,
+               "salida MIDI del plugin: F#3 en Fa mayor -> {F3 A3 C4} en la misma muestra");
+        check (onSet == std::set<int> { 53, 57, 60 } && channelOne,
+               "por el teclado salen las 3 notas del acorde (no sólo la tecla), canal 1");
+        check (last - first <= 2.0, "las 3 notas a la vez (±2 ms): FL las dibuja apiladas");
+        check (latency >= -1.0 && latency <= 3.0 * blockMs + 15.0, "con la latencia de ~1 bloque de audio");
+        check (offs == std::set<int> { 53, 57, 60 } && hangingPortNotes (sc.port) == 0, "al soltar, los 3 NoteOff");
+    }
+
+    std::cout << "\n-- P3. STRUM 41 ms DESC: el mismo desfase en la salida MIDI y en el teclado" << std::endl;
+    {
+        host.setText ("Strum Speed", "41");
+        host.setChoice ("Strum Direction", 1);
+        runPortScenario (host, *tap, 0.1, {}, false);
+        auto sc = runPortScenario (host, *tap, 1.1, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                      { 800.0, MidiMessage::noteOff (1, 54) } }, false);
+        std::map<int, double> outAt, portAt;
+        for (auto& m : sc.out.midi)
+            if (m.isNoteOn() && outAt.count (m.getNoteNumber()) == 0)
+                outAt[m.getNoteNumber()] = m.getTimeStamp();
+        for (auto& e : sc.port)
+            if (e.isNoteOn() && portAt.count (e.data1) == 0)
+                portAt[e.data1] = e.ms;
+
+        const double d1 = strumMs (1, 41.0), d2 = strumMs (2, 41.0);
+        const bool outOk = outAt.size() == 3
+                           && std::abs ((outAt[57] - outAt[60]) - d1 * Host::sampleRate / 1000.0) <= 2.0
+                           && std::abs ((outAt[53] - outAt[60]) - d2 * Host::sampleRate / 1000.0) <= 2.0;
+        const bool portOk = portAt.size() == 3
+                            && std::abs ((portAt[57] - portAt[60]) - d1) <= 5.0
+                            && std::abs ((portAt[53] - portAt[60]) - d2) <= 5.0;
+        std::cout << "     teclado: C4 +0, A3 +" << String (portAt[57] - portAt[60], 1) << " ms, F3 +"
+                  << String (portAt[53] - portAt[60], 1) << " ms (esperado +" << String (d1, 1) << " / +" << String (d2, 1) << ")" << std::endl;
+        check (outOk, "salida MIDI: C4 -> A3 -> F3 con el desfase exacto (±2 muestras)");
+        check (portOk, "teclado: el mismo desfase (±5 ms): FL graba el acorde rasgueado");
+        check (hangingPortNotes (sc.port) == 0, "al soltar, ninguna nota colgada");
+
+        // FL Studio parte su búfer y procesa los trozos de golpe: el desfase se conserva igual
+        auto fl = runPortScenario (host, *tap, 1.1, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                      { 800.0, MidiMessage::noteOff (1, 54) } }, false, 4);
+        std::map<int, double> flAt;
+        for (auto& e : fl.port)
+            if (e.isNoteOn() && flAt.count (e.data1) == 0)
+                flAt[e.data1] = e.ms;
+        std::cout << "     en 4 trozos de 128 muestras seguidos: A3 +" << String (flAt[57] - flAt[60], 1) << " ms, F3 +"
+                  << String (flAt[53] - flAt[60], 1) << " ms" << std::endl;
+        check (flAt.size() == 3 && std::abs ((flAt[57] - flAt[60]) - d1) <= 5.0 && std::abs ((flAt[53] - flAt[60]) - d2) <= 5.0
+                 && hangingPortNotes (fl.port) == 0,
+               "con el búfer partido en trozos (como FL Studio), el teclado conserva el desfase (±5 ms)");
+        host.setText ("Strum Speed", "0");
+        host.setChoice ("Strum Direction", 0);
+    }
+
+    std::cout << "\n-- P4. Sin bucle (FLEX enganchado al teclado): ninguna tecla se pierde" << std::endl;
+    {
+        std::vector<UserEvent> ev { { 50.0, MidiMessage::noteOn (1, 54, (uint8) 100) }, { 150.0, MidiMessage::noteOff (1, 54) } };
+        for (int k = 0; k < 8; ++k)
+        {
+            ev.push_back ({ 600.0 + 60.0 * k, MidiMessage::noteOn (1, 53, (uint8) 100) });
+            ev.push_back ({ 630.0 + 60.0 * k, MidiMessage::noteOff (1, 53) });
+        }
+        ev.push_back ({ 1200.0, MidiMessage::noteOn (1, 53, (uint8) 100) });
+        ev.push_back ({ 1220.0, MidiMessage::noteOn (1, 57, (uint8) 100) });
+        ev.push_back ({ 1500.0, MidiMessage::noteOff (1, 53) });
+        ev.push_back ({ 1500.0, MidiMessage::noteOff (1, 57) });
+        auto sc = runPortScenario (host, *tap, 1.9, ev, false);
+        auto counts = countNoteOns (sc.out.midi);
+        std::cout << "     NoteOn de salida: " << describeCounts (counts) << std::endl;
+        check (counts[53] == 10, "repetir F3 cada 60 ms: el acorde sale las 8 veces");
+        check (counts[64] == 1, "A3 20 ms después de F3 (nota del acorde anterior) también dispara su acorde (La menor)");
+        check (hangingNotes (sc.out.midi) == 0 && hangingPortNotes (sc.port) == 0, "nada queda colgado");
+    }
+
+    std::cout << "\n-- P5. Bucle: FL devuelve el teclado a SmartKeys -> los ecos no disparan acordes" << std::endl;
+    {
+        // Como FL al reiniciar el audio: SmartKeys no sabe nada todavía del bucle
+        host.instance().releaseResources();
+        host.instance().prepareToPlay (Host::sampleRate, Host::blockSize);
+        runPortScenario (host, *tap, 0.3, {}, false);
+
+        std::vector<UserEvent> ev {
+            { 100.0,  MidiMessage::noteOn (1, 54, (uint8) 100) }, { 700.0,  MidiMessage::noteOff (1, 54) },    // F
+            { 1000.0, MidiMessage::noteOn (1, 54, (uint8) 100) }, { 1200.0, MidiMessage::noteOn (1, 57, (uint8) 90) },
+            { 1400.0, MidiMessage::noteOff (1, 54) },             { 1700.0, MidiMessage::noteOff (1, 57) } };  // legato F -> Am
+        for (int k = 0; k < 6; ++k)
+        {
+            ev.push_back ({ 1900.0 + 80.0 * k, MidiMessage::noteOn (1, 53, (uint8) 100) });
+            ev.push_back ({ 1940.0 + 80.0 * k, MidiMessage::noteOff (1, 53) });
+        }
+        auto sc = runPortScenario (host, *tap, 3.0, ev, true);
+        auto counts = countNoteOns (sc.out.midi);
+        std::cout << "     " << sc.echoes << " ecos devueltos; NoteOn de salida: " << describeCounts (counts) << std::endl;
+        check (counts == std::map<int, int> { { 53, 8 }, { 57, 8 }, { 60, 8 }, { 64, 1 } },
+               "con el bucle: sólo los acordes de las teclas pulsadas (F, legato F -> Am, 6 repeticiones), ni uno más");
+        check (sc.echoes >= 40, "los ecos llegaron de verdad (NoteOn y NoteOff de cada acorde)");
+        check (hangingNotes (sc.out.midi) == 0 && hangingPortNotes (sc.port) == 0, "y nada queda colgado");
+
+        host.setText ("Strum Speed", "41");
+        host.setChoice ("Strum Direction", 1);
+        auto st = runPortScenario (host, *tap, 1.2, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                      { 700.0, MidiMessage::noteOff (1, 54) } }, true);
+        auto sCounts = countNoteOns (st.out.midi);
+        std::cout << "     STRUM 41 ms DESC con el bucle: " << describeCounts (sCounts) << std::endl;
+        check (sCounts == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } } && hangingNotes (st.out.midi) == 0
+                 && hangingPortNotes (st.port) == 0,
+               "con STRUM, los ecos que vuelven de uno en uno tampoco disparan nada");
+        host.setText ("Strum Speed", "0");
+        host.setChoice ("Strum Direction", 0);
+        runPortScenario (host, *tap, 0.3, {}, true);
+
+       #if SK_COUNT_ALLOCATIONS
+        // El processBlock real con el teclado activo, sus ecos y el STRUM: 0 asignaciones
+        host.setText ("Strum Speed", "30");
+        std::vector<UserEvent> busy;
+        for (int k = 0; k < 6; ++k)
+        {
+            busy.push_back ({ 50.0 + 160.0 * k, MidiMessage::noteOn (1, 53 + 2 * k, (uint8) 100) });
+            busy.push_back ({ 190.0 + 160.0 * k, MidiMessage::noteOff (1, 53 + 2 * k) });
+        }
+        runPortScenario (host, *tap, 1.2, busy, true);   // calentamiento
+        gProcessAllocations = 0;
+        auto counted = runPortScenario (host, *tap, 1.2, busy, true);
+        const long allocs = gProcessAllocations.load();
+        std::cout << "     " << counted.echoes << " ecos con STRUM: " << allocs << " asignaciones en el hilo de audio" << std::endl;
+        check (allocs == 0 && counted.echoes > 0, "con el teclado activo y sus ecos, processBlock no pide memoria");
+        host.setText ("Strum Speed", "0");
+        runPortScenario (host, *tap, 0.5, {}, true);
+       #endif
+    }
+
+    std::cout << "\n-- P6. El bucle aparece de repente (SmartKeys creía que no había)" << std::endl;
+    {
+        for (int strum : { 0, 41 })
+        {
+            host.setText ("Strum Speed", String (strum));
+            host.setChoice ("Strum Direction", 1);
+            // Sin bucle: SmartKeys aprende que lo que sale no vuelve
+            runPortScenario (host, *tap, 0.9, { { 50.0, MidiMessage::noteOn (1, 57, (uint8) 100) },
+                                                { 500.0, MidiMessage::noteOff (1, 57) } }, false);
+            // Y de pronto, el bucle
+            auto sc = runPortScenario (host, *tap, 2.0, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                          { 700.0, MidiMessage::noteOff (1, 54) } }, true);
+            auto counts = countNoteOns (sc.out.midi);
+            int extra = 0;
+            for (auto& [note, n] : counts)
+                extra += (note == 53 || note == 57 || note == 60) ? n - 1 : n;
+            std::cout << "     STRUM " << strum << " ms: " << describeCounts (counts) << "  (" << extra << " notas de más)" << std::endl;
+            if (strum == 0)
+                check (extra == 0, "sin STRUM, el acorde que vuelve entero se reconoce al instante");
+            check (hangingNotes (sc.out.midi) == 0 && hangingPortNotes (sc.port) == 0,
+                   strum == 0 ? "y nada queda colgado" : "con STRUM: tras soltar la tecla no queda ninguna nota colgada");
+        }
+        host.setText ("Strum Speed", "0");
+        host.setChoice ("Strum Direction", 0);
+        host.instance().releaseResources();
+        host.instance().prepareToPlay (Host::sampleRate, Host::blockSize);
+        runPortScenario (host, *tap, 0.3, {}, false);
+    }
+
+    std::cout << "\n-- P7. Bypass, exportar y cerrar el plugin con un acorde sonando" << std::endl;
+    {
+        if (auto* bypass = host.instance().getBypassParameter())
+        {
+            auto held = runPortScenario (host, *tap, 0.3, { { 50.0, MidiMessage::noteOn (1, 54, (uint8) 100) } }, false);
+            bypass->setValueNotifyingHost (1.0f);
+            auto during = runPortScenario (host, *tap, 0.4, {}, false);
+            std::set<int> offs;
+            for (auto& e : during.port)
+                if (e.isNoteOff())
+                    offs.insert (e.data1);
+            check (offs == std::set<int> { 53, 57, 60 } && during.out.notesOff (1) == std::set<int> { 53, 57, 60 },
+                   "bypass: el acorde que sonaba recibe sus NoteOff (salida MIDI y teclado)");
+            bypass->setValueNotifyingHost (0.0f);
+            auto after = runPortScenario (host, *tap, 0.5, { { 50.0, MidiMessage::noteOff (1, 54) },
+                                                             { 100.0, MidiMessage::noteOn (1, 57, (uint8) 100) },
+                                                             { 300.0, MidiMessage::noteOff (1, 57) } }, false);
+            check (countPortNoteOns (after.port) == std::map<int, int> { { 57, 1 }, { 60, 1 }, { 64, 1 } },
+                   "al quitar el bypass vuelve a funcionar (A3 -> La menor)");
+        }
+        else
+        {
+            check (false, "el VST3 tiene parámetro de bypass");
+        }
+
+        host.instance().setNonRealtime (true);
+        auto offline = runPortScenario (host, *tap, 0.4, { { 50.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                           { 250.0, MidiMessage::noteOff (1, 54) } }, false);
+        check (offline.out.notesOn (1) == std::set<int> { 53, 57, 60 } && offline.port.empty(),
+               "al exportar (fuera de tiempo real) los acordes salen por MIDI, pero no por el teclado");
+        host.instance().setNonRealtime (false);
+        runPortScenario (host, *tap, 0.2, {}, false);
+
+        // Apagarlo con un acorde sonando: sus NoteOff salen y el teclado desaparece
+        runPortScenario (host, *tap, 0.3, { { 50.0, MidiMessage::noteOn (1, 54, (uint8) 100) } }, false);
+        setChordKeyboard (false);
+        auto offRun = runPortScenario (host, *tap, 0.6, { { 300.0, MidiMessage::noteOff (1, 54) } }, false);
+        std::set<int> offsOff;
+        for (auto& e : offRun.port)
+            if (e.isNoteOff())
+                offsOff.insert (e.data1);
+        check (offsOff == std::set<int> { 53, 57, 60 } && countPortNoteOns (offRun.port).empty(),
+               "al apagarlo con un acorde sonando, salen sus NoteOff y nada más");
+       #if JUCE_MAC
+        check (! tap->deviceListed (deviceName), "y el teclado desaparece del sistema");
+       #endif
+        auto silent = runPortScenario (host, *tap, 0.4, { { 50.0, MidiMessage::noteOn (1, 57, (uint8) 100) },
+                                                          { 200.0, MidiMessage::noteOff (1, 57) } }, false);
+        check (silent.port.empty() && silent.out.notesOn (1) == std::set<int> { 57, 60, 64 },
+               "apagado: los acordes siguen saliendo por la salida MIDI, pero no por el teclado");
+
+        // Encendido otra vez y se cierra el plugin con un acorde pulsado
+        setChordKeyboard (true);
+        tap = std::make_unique<PortTap> (tapFile.getFullPathName());
+        bool reconnected = false;
+        for (int i = 0; i < 60 && ! reconnected; ++i)
+        {
+            runPortScenario (host, *tap, 0.1, {}, false);
+            reconnected = tap->connect (deviceName);
+        }
+        tap->poll();
+        check (reconnected, "se vuelve a encender");
+
+        runPortScenario (host, *tap, 0.3, { { 50.0, MidiMessage::noteOn (1, 54, (uint8) 100) } }, false);
+        host.unload();
+        MessageManager::getInstance()->runDispatchLoopUntil (100);
+        std::set<int> offs;
+        for (auto& e : tap->poll())
+            if (e.isNoteOff())
+                offs.insert (e.data1);
+        check (offs == std::set<int> { 53, 57, 60 }, "al cerrar el plugin con el acorde pulsado, sus NoteOff salen por el teclado");
+       #if JUCE_MAC
+        MessageManager::getInstance()->runDispatchLoopUntil (300);
+        check (! tap->deviceListed (deviceName), "y el teclado desaparece del sistema");
+       #endif
+    }
+
+    tap.reset();
+   #if JUCE_LINUX
+    unsetenv ("SMARTKEYS_TEST_CHORD_PORT");
+    tapFile.deleteFile();
+   #endif
+   #endif
+}
 } // namespace
 
 //==============================================================================
 int main (int argc, char* argv[])
 {
     ScopedJuceInitialiser_GUI juceInit;
+    ScopedLowPowerModeDisabler noAppNap;   // como un DAW: macOS no "duerme" el proceso
 
     if (argc < 2)
     {
-        std::cout << "Uso: SmartKeysHostTests <SmartKeys.vst3> [--stress <segundos>] [--system-mic-only]" << std::endl;
+        std::cout << "Uso: SmartKeysHostTests <SmartKeys.vst3> [--stress <segundos>] [--system-mic-only] [--port-only]" << std::endl;
         return 2;
     }
 
     // Rutas absolutas (juce::File no admite rutas relativas)
     const auto cwd = File::getCurrentWorkingDirectory();
     double stressSeconds = 4.0;
-    bool systemMicOnly = false;
+    bool systemMicOnly = false, portOnly = false;
     StringArray paths;
     for (int i = 1; i < argc; ++i)
     {
@@ -996,23 +1689,37 @@ int main (int argc, char* argv[])
             stressSeconds = String::fromUTF8 (argv[++i]).getDoubleValue();
         else if (arg == "--system-mic-only")
             systemMicOnly = true;
+        else if (arg == "--port-only")
+            portOnly = true;
         else
             paths.add (cwd.getChildFile (arg).getFullPathName());
     }
 
-    if (! systemMicOnly)
+    if (! systemMicOnly && ! portOnly)
         testInstrument (paths[0]);
 
-    testSystemMic (paths[0]);
+    if (! portOnly)
+        testSystemMic (paths[0]);
 
-    if (! systemMicOnly && stressSeconds > 0.0)
+    if (! systemMicOnly)
+        testChordPort (paths[0]);
+
+    if (! systemMicOnly && ! portOnly && stressSeconds > 0.0)
     {
        #if JUCE_LINUX
         setenv ("SMARTKEYS_FAKE_MIC", "sine:220:44100:0.3", 1);   // el micrófono también se abre y cierra
+        setenv ("SMARTKEYS_TEST_CHORD_PORT", "1", 1);             // y el teclado virtual (sin archivo)
+       #endif
+       #if ! JUCE_WINDOWS
+        setenv ("SMARTKEYS_CHORD_PORT", "1", 1);                  // encendido de entrada
        #endif
         testConcurrency (paths[0], stressSeconds);
+       #if ! JUCE_WINDOWS
+        unsetenv ("SMARTKEYS_CHORD_PORT");
+       #endif
        #if JUCE_LINUX
         unsetenv ("SMARTKEYS_FAKE_MIC");
+        unsetenv ("SMARTKEYS_TEST_CHORD_PORT");
        #endif
     }
 
