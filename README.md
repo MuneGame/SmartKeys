@@ -120,7 +120,7 @@ A tener en cuenta:
 - **Octavas:** FL numera una octava más arriba que SmartKeys. El Do central (MIDI 60) es C4 en SmartKeys y C5 en FL, así que el `F2 A2 C3` del display aparece como F3 A3 C4 en el Piano Roll de FL.
 - **App Standalone:** su teclado se llama *SmartKeys Chords (App)*, para no chocar con el del DAW.
 - **Otros DAW:** el teclado empieza apagado (clic en `MIDI · OFF` para encenderlo). Ableton graba directamente la salida MIDI de SmartKeys en otra pista (*MIDI From* = SmartKeys), así que ahí no hace falta.
-- **Windows:** un plugin no puede crear teclados MIDI virtuales. Ahí hace falta un cable MIDI virtual (loopMIDI): en el wrapper de SmartKeys, *Output port* → loopMIDI, y en FL, loopMIDI como entrada enganchada al instrumento.
+- **Windows:** un plugin no puede crear teclados MIDI virtuales. Ahí hace falta un cable MIDI virtual (loopMIDI): en *MIDI Settings → Output* activa loopMIDI con un Port (por ejemplo `11`) y pon ese número en el *Output port* del wrapper de SmartKeys; en *Input* activa loopMIDI con otro Port y engánchalo al instrumento con *Receive notes from* (pasos 3–5).
 
 ### STRUM SPEED (entrada progresiva de las notas)
 La perilla **STRUM SPEED** (debajo del display) va de `OFF` a 200 ms:
@@ -337,9 +337,10 @@ SmartKeys/
 
 ## Verificación realizada
 
-- **Teclado "SmartKeys Chords" en una Mac de verdad** (GitHub Actions, Mac Intel con macOS 15, CoreMIDI real). El VST3 compilado crea el teclado y la prueba lo abre como lo hace FL Studio, como una entrada MIDI:
-  - F#3 en Fa mayor sale como **F3 A3 C4 a la vez**.
-  - Con STRUM 41 ms DESC salen C4, A3 a +47 ms y F3 a +107 ms, igual que en la salida MIDI.
+- **Teclado "SmartKeys Chords" en una Mac de verdad** (GitHub Actions, Mac Intel con macOS 15, CoreMIDI real; 31 comprobaciones). El VST3 compilado crea el teclado y la prueba lo abre como lo hace FL Studio, como una entrada MIDI:
+  - F#3 en Fa mayor sale como **F3 A3 C4 a la vez** (las 3 notas en 0,05 ms), 10,7 ms después de la tecla (un bloque de audio).
+  - Con STRUM 41 ms DESC salen C4, A3 a +47,2 ms y F3 a +107,3 ms (esperado: +47,1 y +106,6), igual que en la salida MIDI; también con el búfer partido en trozos.
+  - Cada nota sale como mucho 1,5 ms después de su hora.
   - Repetir rápido una tecla no pierde ninguna.
   - Con el teclado devuelto al propio SmartKeys (bucle) no hay acordes de más ni notas colgadas.
   - Bypass, exportar, apagarlo y cerrar el plugin: los NoteOff salen y el teclado desaparece del sistema.
@@ -347,8 +348,8 @@ SmartKeys/
 - **MIC VOICE sin sidechain en una Mac de verdad** (GitHub Actions, Mac Intel con macOS 15). Se instala [BlackHole](https://github.com/ExistentialAudio/BlackHole) (un cable de audio virtual) como entrada y salida de macOS y se reproduce un La3 de 220 Hz:
   - **Sonda** (`Tests/MicProbe.cpp`, con el mismo código del plugin): abre y cierra la entrada 6 veces seguidas y después la lee 4 s. Recibe el 99 % de las muestras a 48 kHz y detecta **220,009 Hz (La3)**. La frecuencia de muestreo (48 kHz) y el búfer (512) del dispositivo son **los mismos antes y después**. En silencio llega −150 dBFS y no se detecta nada.
   - **El VST3 compilado**, cargado como en un DAW con su entrada en silencio digital: `MIC VOICE: ON` lee el micrófono de macOS y saca **La menor** por MIDI (canal 1) y por el piano. Si la entrada del plugin trae voz (Do4), usa esa; cuando vuelve el silencio, otra vez el micrófono de macOS. Al apagar `MIC VOICE` suelta las notas.
-- **pluginval nivel 10** (el máximo) con las pruebas de editor, en Mac Intel, en Windows y aquí: **SUCCESS**. Incluye el validador oficial de Steinberg, estado, automatización, seguridad de hilos, fuzzing y buses.
-- **pluginval nivel 10 sobre el VST3 compilado con AddressSanitizer + UBSan** (abre y cierra el editor una y otra vez; es la prueba que reproducía el cierre de FL Studio de la 1.2–1.3): **SUCCESS**, 0 errores de memoria.
+- **pluginval nivel 10** (el máximo) con las pruebas de editor, en Mac Intel, en Windows y aquí (con el teclado *SmartKeys Chords* encendido): **SUCCESS**. Incluye el validador oficial de Steinberg, estado, automatización, seguridad de hilos, fuzzing y buses.
+- **pluginval nivel 10 sobre el VST3 compilado con AddressSanitizer + UBSan**, con el teclado encendido (abre y cierra el editor una y otra vez; es la prueba que reproducía el cierre de FL Studio de la 1.2–1.3): **SUCCESS**, 0 errores de memoria.
 - **559 comprobaciones del núcleo:**
   - Escalas, acordes, voicings complejos, router MIDI, detector de voz y STRUM exacto a la muestra.
   - **Búfer circular del micrófono:** canal 1 de un bloque estéreo, 20 000 escrituras y lecturas irregulares, desbordamiento, latencia acotada y **dos hilos de verdad** a la vez (1,1 millones de muestras sin perder ni repetir una). Escribir y leer nunca asigna memoria.
@@ -365,6 +366,6 @@ SmartKeys/
   - **0 asignaciones** en 3000 llamadas al `processBlock` real, en 2,5 s leyendo el micrófono del sistema y con el teclado activo y sus ecos, medidas reemplazando `malloc`.
   - **Concurrencia:** un hilo de audio llama sin parar al `processBlock` mientras el hilo de mensajes guarda y carga el estado, cambia parámetros, enciende y apaga `MIC VOICE` (el micrófono se abre y se cierra) y enciende y apaga el teclado *SmartKeys Chords* (se crea y se destruye con el audio corriendo).
 - **AddressSanitizer + UBSan** y **ThreadSanitizer:**
-  - La prueba de integración completa, con el hilo del micrófono simulado, el de audio y el de mensajes a la vez y 20 s de concurrencia: **0 errores de memoria y 0 carreras de datos**.
-  - 1401 acciones al azar en la interfaz durante 5 minutos con el audio corriendo y el micrófono simulado: modos, escalas, barra ESCALA, teclado en pantalla y de la PC, STRUM, ASC/DESC, GAIN, GATE, `MIC VOICE` encendido y apagado y redimensionar: **0 errores**.
+  - La prueba de integración completa, con el hilo del micrófono simulado, el de audio, el de mensajes y el del teclado *SmartKeys Chords* a la vez (también con los ecos del bucle y 20 s de concurrencia encendiendo y apagando el teclado): **0 errores de memoria y 0 carreras de datos**.
+  - 1361 acciones al azar en la interfaz durante 5 minutos con el audio corriendo y el micrófono simulado: modos, escalas, barra ESCALA, teclado en pantalla y de la PC, STRUM, ASC/DESC, GAIN, GATE, `MIC VOICE` y el teclado *SmartKeys Chords* encendidos y apagados, y redimensionar: **0 errores**.
 - **Limpieza de versiones anteriores:** en cada compilación de GitHub se instala una versión vieja falsa (también **SmartKeys FX**, en `/Library` y `~/Library`, y en `Common Files\VST3`) en un Mac Intel y en un PC; el instalador nuevo la borra, deja intactos los demás plugins y no vuelve a instalar SmartKeys FX. Se comprueba que el plugin queda registrado como **MIWN** (`com.miwn.smartkeys`, `MIWN: SmartKeys`, `CompanyName = MIWN`) y con `NSMicrophoneUsageDescription`, y `auval` confirma que SmartKeys FX ya no existe.
