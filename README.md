@@ -255,7 +255,7 @@ En la 1.6.1 el teclado ya no usa App Nap: su hilo es de tiempo real y FL Studio,
 - **Por qué hace falta.** FL Studio graba en el Piano Roll las notas que llegan por un dispositivo MIDI de entrada. Lo que un plugin manda por su salida MIDI (el *Output port* del wrapper) hace sonar a otro plugin, pero no se graba. La salida MIDI de SmartKeys ya era el acorde completo, exacto a la muestra (las pruebas lo comprobaban); faltaba que llegara a FL como un teclado.
 - **Cuándo.** Encendido por defecto en FL Studio (`PluginHostType::isFruityLoops()`) y en la app Standalone, donde un teclado sólo se usa si lo activas tú. En otros DAW empieza apagado: Logic, Cubase o Ableton meten cualquier teclado nuevo en la entrada de la pista y grabarían los acordes junto a tus teclas. Un clic en la etiqueta lo cambia, y se guarda con el proyecto.
 - **Qué es.** `juce::MidiOutput::createNewDevice ("SmartKeys Chords")` crea una fuente CoreMIDI del sistema. Su identificador sale de `com.miwn.smartkeys` y el nombre, y es siempre el mismo, así que FL Studio recuerda su Port de una sesión a otra. Hay uno por proceso (`SharedResourcePointer`), compartido por todas las instancias. La app Standalone usa `SmartKeys Chords (App)` para no chocar con el del DAW. Se crea en el hilo de mensajes cuando el plugin se usa de verdad (el DAW lo pone a sonar o se abre su ventana), nunca durante el escaneo de plugins. Si otra aplicación ya lo tiene, se reintenta cada 3 s.
-- **Tiempo real.** El hilo de audio sólo copia los NoteOn/NoteOff de la salida final (ya con el STRUM) a un FIFO lock-free de tamaño fijo, con su hora: inicio del bloque + un bloque + su posición. Un hilo propio vacía el FIFO cada ~1 ms y envía cada nota a su hora, así el teclado lleva el mismo desfase que la salida MIDI. Ni candados, ni memoria dinámica, ni CoreMIDI en el hilo de audio.
+- **Tiempo real.** El hilo de audio sólo copia los NoteOn/NoteOff del camino del teclado (ya con el STRUM) a un FIFO lock-free de tamaño fijo, con su hora: inicio del bloque + un bloque + su posición. Un hilo propio vacía el FIFO cada ~1 ms y envía cada nota a su hora, así el teclado lleva el mismo desfase que la salida MIDI. Ni candados, ni memoria dinámica, ni CoreMIDI en el hilo de audio.
 - **Ninguna nota colgada ni doble.** El teclado lleva la cuenta de lo que cada instancia dejó sonando. Al poner el bypass, reiniciar el audio o cerrar el plugin, envía sus NoteOff. Si dos instancias tocan la misma nota, sale una sola vez y se apaga cuando la suelta la última.
 - **Grabación en bucle.** El teclado tiene su propio router y su propio STRUM, a los que sólo llegan las teclas que deben salir por él. Mientras el DAW graba, SmartKeys anota en qué posición (en negras) salió cada tecla y en qué vuelta del bucle. Si FL repite una tecla en la misma posición (±1/8 de negra) que en una vuelta anterior de la misma toma, está tocando lo que ya grabó en el patrón de SmartKeys, y ese acorde no sale otra vez: el instrumento enganchado ya lo tiene grabado. La salida MIDI y el piano de SmartKeys siguen tocándolo todo.
 - **Exportar.** Fuera de tiempo real (render) no envía nada: el disco va más rápido que el reloj.
@@ -272,17 +272,17 @@ En la 1.6.1 el teclado ya no usa App Nap: su hilo es de tiempo real y FL Studio,
 4. `buffer.clear()`: la voz cruda nunca sale.
 5. Expande cada nota de entrada (MIDI, Piano Roll, teclado en pantalla y voz) al acorde completo, en orden de muestra. El MIDI se lee como bytes crudos: nunca se construye un `juce::MidiMessage`, que con un SysEx pediría memoria.
 6. STRUM: reparte las notas de cada acorde en el tiempo con una cola por muestra. Cada evento queda en `0 ≤ posición < numSamples`.
-7. Copia esas mismas notas al FIFO del teclado *SmartKeys Chords*, con su hora (no al exportar).
+7. El teclado *SmartKeys Chords* tiene su propio camino: las mismas teclas pasan por su router y su STRUM (menos las que FL repite al grabar en bucle) y sus notas se copian al FIFO del teclado, con su hora (no al exportar).
 8. Renderiza el piano interno y aplica `GAIN`.
 9. `midiMessages.swapWith (...)`: la salida MIDI son siempre los acordes completos, con su STRUM.
 
 Antes del paso 5, si el teclado está activo, se reconocen los ecos (ver arriba): una nota que vuelve del teclado no dispara ningún acorde.
 
-El plugin no lee el transporte del DAW (`getPlayHead()`): ya no lo necesita.
+El plugin lee el transporte del DAW (`getPlayHead()`) sólo para la grabación en bucle: si está grabando y en qué posición (en negras) empieza cada bloque. Sin transporte (la app, o el DAW parado o sin grabar), todo sale por el teclado como siempre.
 
 ### Tiempo real
 `processBlock` no asigna memoria, no bloquea y no llama al hilo de mensajes:
-- Arrays de tamaño fijo: las notas de cada tecla (`ChordSlot`), la cola del STRUM, los FIFO lock-free (`AbstractFifo`) del teclado en pantalla y del teclado *SmartKeys Chords*, y el búfer circular del micrófono. Ningún `std::vector` en el camino de audio.
+- Arrays de tamaño fijo: las notas de cada tecla (`ChordSlot`), las colas del STRUM, la tabla de la grabación en bucle (64 posiciones por nota), los FIFO lock-free (`AbstractFifo`) del teclado en pantalla y del teclado *SmartKeys Chords*, y el búfer circular del micrófono. Ningún `std::vector` en el camino de audio.
 - `MidiBuffer` con capacidad reservada.
 - Atómicos para la interfaz: el acorde, las notas encendidas, el nivel del micrófono. La ventana los lee con un temporizador; nada en el audio toca componentes ni el `MessageManager`.
 - Los controles leen los parámetros por sondeo (30 veces por segundo) en lugar de escucharlos. Con los `ParameterAttachment` de JUCE, la automatización del host avisaba a la interfaz desde el hilo de audio.
@@ -337,6 +337,7 @@ SmartKeys/
 ├── Tests/
 │   ├── EngineTests.cpp            Comprobaciones del núcleo DSP, del búfer y del control del micrófono
 │   ├── HostTests.cpp              Carga el VST3 compilado como un DAW y comprueba su salida
+│   ├── MacActivity.h/.mm          Evita App Nap en el host de pruebas (macOS), con la actividad retenida
 │   └── MicProbe.cpp               Sonda del micrófono del sistema para una Mac real (CI con BlackHole)
 └── Installer/
     ├── install_mac.sh             Borra la versión vieja + compila + instala (macOS)
@@ -351,14 +352,17 @@ SmartKeys/
 
 ## Verificación realizada
 
-- **Teclado "SmartKeys Chords" en una Mac de verdad** (GitHub Actions, Mac Intel con macOS 15, CoreMIDI real; 31 comprobaciones). El VST3 compilado crea el teclado y la prueba lo abre como lo hace FL Studio, como una entrada MIDI:
-  - F#3 en Fa mayor sale como **F3 A3 C4 a la vez** (las 3 notas en 0,05 ms), 10,7 ms después de la tecla (un bloque de audio).
-  - Con STRUM 41 ms DESC salen C4, A3 a +47,2 ms y F3 a +107,3 ms (esperado: +47,1 y +106,6), igual que en la salida MIDI; también con el búfer partido en trozos.
-  - Cada nota sale como mucho 1,5 ms después de su hora.
+- **Teclado "SmartKeys Chords" en una Mac de verdad** (GitHub Actions, Mac Intel con macOS 15, CoreMIDI real; 36 comprobaciones). El VST3 compilado crea el teclado y la prueba lo abre como lo hace FL Studio, como una entrada MIDI:
+  - F#3 en Fa mayor sale como **F3 A3 C4 a la vez** (las 3 notas en 0,04 ms), 7,9 ms después de la tecla (un bloque de audio).
+  - Con STRUM 41 ms DESC salen C4, A3 a +46,7 ms y F3 a +107,0 ms (esperado: +47,1 y +106,6), igual que en la salida MIDI; también con el búfer partido en trozos.
+  - Cada nota sale como mucho 2,1 ms después de su hora (de media, menos de 1 ms).
   - Repetir rápido una tecla no pierde ninguna.
   - Con el teclado devuelto al propio SmartKeys (bucle) no hay acordes de más ni notas colgadas.
+  - **Grabación en bucle** (un compás que se repite: en la vuelta 1 tocas Fa mayor; en la vuelta 2, FL lo repite y tú añades La menor): la salida MIDI toca las dos vueltas ({F3×2 A3×3 C4×3 E4×1}) y por el teclado sólo sale lo nuevo ({F3×1 A3×2 C4×2 E4×1}), así que FL no graba Fa mayor dos veces. Al reproducir sin grabar, o en una toma nueva, vuelve a salir.
+  - **Dos SmartKeys** tocando la misma tecla: el teclado manda F3 A3 C4 una sola vez y los apaga cuando los suelta la última.
   - Bypass, exportar, apagarlo y cerrar el plugin: los NoteOff salen y el teclado desaparece del sistema.
   - Fuera de FL Studio empieza apagado.
+  - Todo con `NSZombieEnabled`: un mensaje a un objeto ya liberado (el cierre de FL Studio de la 1.6.0) hace fallar la prueba en el acto.
 - **MIC VOICE sin sidechain en una Mac de verdad** (GitHub Actions, Mac Intel con macOS 15). Se instala [BlackHole](https://github.com/ExistentialAudio/BlackHole) (un cable de audio virtual) como entrada y salida de macOS y se reproduce un La3 de 220 Hz:
   - **Sonda** (`Tests/MicProbe.cpp`, con el mismo código del plugin): abre y cierra la entrada 6 veces seguidas y después la lee 4 s. Recibe el 99 % de las muestras a 48 kHz y detecta **220,009 Hz (La3)**. La frecuencia de muestreo (48 kHz) y el búfer (512) del dispositivo son **los mismos antes y después**. En silencio llega −150 dBFS y no se detecta nada.
   - **El VST3 compilado**, cargado como en un DAW con su entrada en silencio digital: `MIC VOICE: ON` lee el micrófono de macOS y saca **La menor** por MIDI (canal 1) y por el piano. Si la entrada del plugin trae voz (Do4), usa esa; cuando vuelve el silencio, otra vez el micrófono de macOS. Al apagar `MIC VOICE` suelta las notas.
