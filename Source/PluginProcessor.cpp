@@ -893,17 +893,20 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     // FIFO lock-free; al exportar fuera de tiempo real no se envía nada).
     // Reloj de muestras: cada bloque empieza donde terminó el anterior, aunque el
     // DAW procese varios bloques seguidos de golpe (FL Studio parte su búfer); se
-    // acerca despacio al reloj real y se reajusta si el audio se detuvo.
+    // acerca despacio al reloj real. Si se queda atrás (el audio se detuvo un
+    // momento) salta al reloj real: las notas nunca salen antes de su hora ni se
+    // amontonan; si va muy por delante (el DAW adelantó trabajo), también.
     if (portActive && ! isNonRealtime())
     {
-        if (! portClockValid || std::abs (portClockMs - blockStartMs) > juce::jmax (100.0, 4.0 * maxBlockMs))
+        const double drift = blockStartMs - portClockMs;   // > 0: el reloj de muestras va atrasado
+        if (! portClockValid || drift > 0.5 * maxBlockMs || -drift > juce::jmax (100.0, 4.0 * maxBlockMs))
         {
             portClockMs = blockStartMs;
             portClockValid = true;
         }
         else
         {
-            portClockMs += 0.01 * (blockStartMs - portClockMs);
+            portClockMs += 0.01 * drift;
         }
 
         feedChordPort (expandedChordMidi, numSamples, portClockMs);

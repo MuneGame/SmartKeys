@@ -47,6 +47,8 @@
 #include <map>
 #include <vector>
 #include <thread>
+#include <chrono>
+#include <functional>
 #include <random>
 #include <cerrno>
 #include <cstdlib>
@@ -1125,8 +1127,43 @@ struct PortScenario
     int echoes = 0;                  // eventos devueltos al plugin (bucle simulado)
 };
 
-// Escenario a TIEMPO REAL: bloques de 512 muestras a su ritmo, el hilo de mensajes
-// corre entre bloque y bloque (el Timer del plugin crea el teclado) y, con
+// Espera precisa hasta 'targetMs' (duerme y, el último milisegundo y medio, cede el procesador)
+void waitUntilMs (double targetMs)
+{
+    for (;;)
+    {
+        const double remaining = targetMs - Time::getMillisecondCounterHiRes();
+        if (remaining <= 0.0)
+            return;
+        if (remaining > 2.0)
+            std::this_thread::sleep_for (std::chrono::microseconds ((int64) ((remaining - 1.5) * 1000.0)));
+        else
+            std::this_thread::yield();
+    }
+}
+
+// Hilo de "audio" del DAW de prueba: como en un DAW de verdad, el processBlock va
+// en su propio hilo de tiempo real, a su ritmo, y el hilo de mensajes (el
+// temporizador del plugin, que crea el teclado) corre aparte.
+class AudioThread : public Thread
+{
+public:
+    explicit AudioThread (std::function<void()> fn) : Thread ("SmartKeysHostTests audio"), body (std::move (fn)) {}
+
+    void run() override
+    {
+        body();
+        finished = true;
+    }
+
+    std::atomic<bool> finished { false };
+
+private:
+    std::function<void()> body;
+};
+
+// Escenario a TIEMPO REAL: bloques de 512 muestras a su ritmo en el hilo de audio,
+// el hilo de mensajes corre a la vez (el Timer del plugin crea el teclado) y, con
 // 'loopback', todo lo que sale por el teclado vuelve a entrar por la entrada MIDI
 // del plugin en el bloque siguiente, como en FL Studio con el teclado devuelto.
 PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vector<UserEvent> user, bool loopback,
@@ -1136,81 +1173,81 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
 
     PortScenario sc;
     const double blockMs = 1000.0 * Host::blockSize / Host::sampleRate;
-    sc.t0 = Time::getMillisecondCounterHiRes();
-    size_t nextUser = 0;
+    const int numBlocks = (int) std::floor (seconds * 1000.0 / blockMs) + 1;
+    double maxBlockLateMs = 0.0;
 
-    for (int k = 0; (double) k * blockMs <= seconds * 1000.0; ++k)
+    AudioThread audio ([&]
     {
-        const double blockStart = sc.t0 + (double) k * blockMs;
-        for (;;)
+        size_t nextUser = 0;
+        for (int k = 0; k < numBlocks; ++k)
         {
-            const int wait = (int) (blockStart - Time::getMillisecondCounterHiRes());
-            if (wait <= 0)
-                break;
-            MessageManager::getInstance()->runDispatchLoopUntil (wait);
-        }
+            const double blockStart = sc.t0 + (double) k * blockMs;
+            waitUntilMs (blockStart);
+            maxBlockLateMs = jmax (maxBlockLateMs, Time::getMillisecondCounterHiRes() - blockStart);
 
-        std::vector<std::pair<int, MidiMessage>> ev;
-        auto fresh = tap.poll();
-        for (auto& e : fresh)
-        {
-            sc.port.push_back (e);
-            if (loopback)
+            std::vector<std::pair<int, MidiMessage>> ev;
+            for (auto& e : tap.poll())
             {
-                ev.push_back ({ 0, MidiMessage (e.status, e.data1, e.data2) });
-                ++sc.echoes;
+                sc.port.push_back (e);
+                if (loopback)
+                {
+                    ev.push_back ({ 0, MidiMessage (e.status, e.data1, e.data2) });
+                    ++sc.echoes;
+                }
             }
-        }
 
-        while (nextUser < user.size() && user[nextUser].atMs < (double) (k + 1) * blockMs)
-        {
-            const int pos = jlimit (0, Host::blockSize - 1,
-                                    (int) ((user[nextUser].atMs - (double) k * blockMs) * Host::sampleRate / 1000.0));
-            ev.push_back ({ pos, user[nextUser].msg });
-            ++nextUser;
-        }
-
-        if (subBlocks <= 1)
-        {
-            auto r = host.runAt (ev);
-            sc.out.midi.insert (sc.out.midi.end(), r.midi.begin(), r.midi.end());
-            sc.out.outputRms = jmax (sc.out.outputRms, r.outputRms);
-        }
-        else
-        {
-            // Como FL Studio: el búfer se procesa en trozos seguidos, sin esperar entre ellos
-            const int sub = Host::blockSize / subBlocks;
-            for (int b = 0; b < subBlocks; ++b)
+            while (nextUser < user.size() && user[nextUser].atMs < (double) (k + 1) * blockMs)
             {
-                std::vector<std::pair<int, MidiMessage>> part;
-                for (auto& e : ev)
-                    if (e.first / sub == b || (b == subBlocks - 1 && e.first >= sub * subBlocks))
-                        part.push_back ({ e.first - b * sub, e.second });
-                auto r = host.runSized (b == subBlocks - 1 ? Host::blockSize - sub * b : sub, part);
+                const int pos = jlimit (0, Host::blockSize - 1,
+                                        (int) ((user[nextUser].atMs - (double) k * blockMs) * Host::sampleRate / 1000.0));
+                ev.push_back ({ pos, user[nextUser].msg });
+                ++nextUser;
+            }
+
+            if (subBlocks <= 1)
+            {
+                auto r = host.runAt (ev);
                 sc.out.midi.insert (sc.out.midi.end(), r.midi.begin(), r.midi.end());
                 sc.out.outputRms = jmax (sc.out.outputRms, r.outputRms);
             }
+            else
+            {
+                // Como FL Studio: el búfer se procesa en trozos seguidos, sin esperar entre ellos
+                const int sub = Host::blockSize / subBlocks;
+                for (int b = 0; b < subBlocks; ++b)
+                {
+                    std::vector<std::pair<int, MidiMessage>> part;
+                    for (auto& e : ev)
+                        if (e.first / sub == b || (b == subBlocks - 1 && e.first >= sub * subBlocks))
+                            part.push_back ({ e.first - b * sub, e.second });
+                    auto r = host.runSized (b == subBlocks - 1 ? Host::blockSize - sub * b : sub, part);
+                    sc.out.midi.insert (sc.out.midi.end(), r.midi.begin(), r.midi.end());
+                    sc.out.outputRms = jmax (sc.out.outputRms, r.outputRms);
+                }
+            }
         }
-    }
 
-    // El audio de un DAW es continuo: el escenario termina cuando acaba su último bloque
-    const double end = sc.t0 + (std::floor (seconds * 1000.0 / blockMs) + 1.0) * blockMs;
-    for (;;)
-    {
-        const int wait = (int) (end - Time::getMillisecondCounterHiRes());
-        if (wait <= 0)
-            break;
-        MessageManager::getInstance()->runDispatchLoopUntil (wait);
-    }
+        // El audio de un DAW es continuo: el escenario termina cuando acaba su último bloque
+        waitUntilMs (sc.t0 + (double) numBlocks * blockMs);
+    });
+
+    sc.t0 = Time::getMillisecondCounterHiRes() + 2.0;
+    if (! audio.startRealtimeThread (Thread::RealtimeOptions{}.withPeriodMs (blockMs).withMaximumProcessingTimeMs (blockMs * 0.8)))
+        audio.startThread (Thread::Priority::highest);
+
+    while (! audio.finished.load())
+        MessageManager::getInstance()->runDispatchLoopUntil (5);
+    audio.stopThread (2000);
 
     for (auto& e : tap.poll())
         sc.port.push_back (e);
 
+    if (SystemStats::getEnvironmentVariable ("SMARTKEYS_PORT_DEBUG", {}).isNotEmpty() && (! sc.out.midi.empty() || ! sc.port.empty()))
+        std::cout << "     [hilo de audio de la prueba] bloque más atrasado: " << String (maxBlockLateMs, 2) << " ms" << std::endl;
+
     if (SystemStats::getEnvironmentVariable ("SK_PORT_DEBUG", {}).isNotEmpty() && (! sc.out.midi.empty() || ! sc.port.empty()))
     {
-        std::cout << "     [debug] salida MIDI (ms):";
-        const double t0Samples = sc.out.midi.empty() ? 0.0 : sc.out.midi.front().getTimeStamp();
-        ignoreUnused (t0Samples);
+        std::cout << "     [debug] salida MIDI:";
         for (auto& m : sc.out.midi)
             if (m.isNoteOnOrOff())
                 std::cout << " " << (m.isNoteOn() ? "+" : "-") << m.getNoteNumber();
