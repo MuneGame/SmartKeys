@@ -53,6 +53,10 @@
 #include <cerrno>
 #include <cstdlib>
 
+#if JUCE_MAC
+ #include "MacActivity.h"
+#endif
+
 using namespace juce;
 
 //==============================================================================
@@ -184,6 +188,7 @@ struct Transport : public AudioPlayHead
 {
     bool playing = false, recording = false;
     double ppq = 0.0, bpm = 120.0, sampleRate = 48000.0;
+    double loopBeats = 0.0;   // > 0: el patrón vuelve al principio cada tantas negras (FL en modo patrón)
 
     Optional<PositionInfo> getPosition() const override
     {
@@ -386,7 +391,11 @@ public:
 
         sampleClock += numSamples;
         if (transport.playing || transport.recording)
+        {
             transport.ppq += (double) numSamples * transport.bpm / (60.0 * sampleRate);
+            if (transport.loopBeats > 0.0 && transport.ppq >= transport.loopBeats)
+                transport.ppq -= transport.loopBeats;
+        }
         return r;
     }
 
@@ -1167,9 +1176,10 @@ private:
 // 'loopback', todo lo que sale por el teclado vuelve a entrar por la entrada MIDI
 // del plugin en el bloque siguiente, como en FL Studio con el teclado devuelto.
 PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vector<UserEvent> user, bool loopback,
-                              int subBlocks = 1)
+                              int subBlocks = 1, Host* second = nullptr, std::vector<UserEvent> secondUser = {})
 {
     std::stable_sort (user.begin(), user.end(), [] (const UserEvent& a, const UserEvent& b) { return a.atMs < b.atMs; });
+    std::stable_sort (secondUser.begin(), secondUser.end(), [] (const UserEvent& a, const UserEvent& b) { return a.atMs < b.atMs; });
 
     PortScenario sc;
     const double blockMs = 1000.0 * Host::blockSize / Host::sampleRate;
@@ -1178,7 +1188,7 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
 
     AudioThread audio ([&]
     {
-        size_t nextUser = 0;
+        size_t nextUser = 0, nextSecond = 0;
         for (int k = 0; k < numBlocks; ++k)
         {
             const double blockStart = sc.t0 + (double) k * blockMs;
@@ -1202,6 +1212,20 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
                                         (int) ((user[nextUser].atMs - (double) k * blockMs) * Host::sampleRate / 1000.0));
                 ev.push_back ({ pos, user[nextUser].msg });
                 ++nextUser;
+            }
+
+            if (second != nullptr)
+            {
+                // Otra instancia de SmartKeys en el mismo DAW, con sus propias teclas
+                std::vector<std::pair<int, MidiMessage>> ev2;
+                while (nextSecond < secondUser.size() && secondUser[nextSecond].atMs < (double) (k + 1) * blockMs)
+                {
+                    const int pos = jlimit (0, Host::blockSize - 1,
+                                            (int) ((secondUser[nextSecond].atMs - (double) k * blockMs) * Host::sampleRate / 1000.0));
+                    ev2.push_back ({ pos, secondUser[nextSecond].msg });
+                    ++nextSecond;
+                }
+                second->runAt (ev2);
             }
 
             if (subBlocks <= 1)
@@ -1579,6 +1603,95 @@ void testChordPort (const String& path)
         runPortScenario (host, *tap, 0.3, {}, false);
     }
 
+    std::cout << "\n-- P8. Grabación en bucle: lo que FL repite en cada vuelta no sale otra vez (sin notas dobles)" << std::endl;
+    {
+        // FL en modo patrón, grabando: un compás de 4 negras a 120 BPM (2 s) que se repite.
+        // Vuelta 1: F#3 en vivo en la negra 1. Vuelta 2: FL repite esa tecla (ya grabada en el
+        // patrón de SmartKeys) en la misma negra, y se toca una tecla nueva (A3 en la negra 2,4).
+        host.transport.bpm = 120.0;
+        host.transport.loopBeats = 4.0;
+        host.transport.ppq = 0.0;
+        host.transport.playing = true;
+        host.transport.recording = true;
+        auto sc = runPortScenario (host, *tap, 4.3, { { 500.0,  MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                      { 900.0,  MidiMessage::noteOff (1, 54) },
+                                                      { 2500.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                      { 2900.0, MidiMessage::noteOff (1, 54) },
+                                                      { 3200.0, MidiMessage::noteOn (1, 57, (uint8) 100) },
+                                                      { 3500.0, MidiMessage::noteOff (1, 57) } }, false);
+        auto outCounts = countNoteOns (sc.out.midi);
+        auto portCounts = countPortNoteOns (sc.port);
+        std::cout << "     salida MIDI: " << describeCounts (outCounts) << "   teclado: " << describeCounts (portCounts) << std::endl;
+        check (outCounts == std::map<int, int> { { 53, 2 }, { 57, 3 }, { 60, 3 }, { 64, 1 } },
+               "la salida MIDI y el piano tocan las dos vueltas (F, F otra vez y La menor)");
+        check (portCounts == std::map<int, int> { { 53, 1 }, { 57, 2 }, { 60, 2 }, { 64, 1 } } && hangingPortNotes (sc.port) == 0,
+               "por el teclado, el acorde que FL repite en la vuelta 2 no sale otra vez; la tecla nueva sí (nada se graba doble)");
+
+        // Sin grabar (sólo reproduciendo), lo que suena en el patrón sí sale: FLEX lo toca en vivo
+        host.transport.recording = false;
+        host.transport.ppq = 0.0;
+        auto play = runPortScenario (host, *tap, 1.2, { { 500.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                        { 900.0, MidiMessage::noteOff (1, 54) } }, false);
+        check (countPortNoteOns (play.port) == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } },
+               "al reproducir sin grabar, el acorde sale por el teclado");
+
+        // Una toma nueva empieza de cero
+        host.transport.recording = true;
+        host.transport.ppq = 0.0;
+        auto take2 = runPortScenario (host, *tap, 1.2, { { 500.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                         { 900.0, MidiMessage::noteOff (1, 54) } }, false);
+        check (countPortNoteOns (take2.port) == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } },
+               "en una toma nueva, la primera vuelta vuelve a salir entera");
+
+        host.transport.playing = host.transport.recording = false;
+        host.transport.loopBeats = 0.0;
+        host.transport.ppq = 0.0;
+        runPortScenario (host, *tap, 0.2, {}, false);
+    }
+
+    std::cout << "\n-- P9. Dos SmartKeys a la vez (dos canales seleccionados en FL): cada nota sale una sola vez" << std::endl;
+    {
+        Host other;
+        if (other.load (path))
+        {
+            other.setChoice ("Key", 5);
+            other.setChoice ("Scale", 0);
+            other.setChoice ("Mode", 0);
+            other.setChoice ("Chord Type", 0);
+            other.setBool ("Mic Voice Controller", false);
+            other.setText ("Strum Speed", "0");
+            if (auto xml = other.getPluginStateXml())
+            {
+                xml->setAttribute ("chordKeyboard", 1);
+                other.setPluginStateXml (*xml);
+            }
+            runPortScenario (host, *tap, 0.6, {}, false, 1, &other, {});
+
+            // Las dos instancias tocan F#3 a la vez; la segunda la suelta más tarde
+            auto sc = runPortScenario (host, *tap, 1.2,
+                                       { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) }, { 400.0, MidiMessage::noteOff (1, 54) } },
+                                       false, 1, &other,
+                                       { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) }, { 800.0, MidiMessage::noteOff (1, 54) } });
+            auto portCounts = countPortNoteOns (sc.port);
+            double firstOff = 1.0e300;
+            for (auto& e : sc.port)
+                if (e.isNoteOff())
+                    firstOff = jmin (firstOff, e.ms - sc.t0);
+            std::cout << "     teclado: " << describeCounts (portCounts) << ", primer NoteOff a los "
+                      << roundToInt (firstOff) << " ms" << std::endl;
+            check (portCounts == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } },
+                   "el acorde que tocan las dos instancias sale una sola vez (FL no recibe notas dobles)");
+            check (firstOff >= 790.0 && hangingPortNotes (sc.port) == 0,
+                   "y se apaga cuando lo suelta la última que lo tocaba");
+            other.unload();
+            MessageManager::getInstance()->runDispatchLoopUntil (100);
+        }
+        else
+        {
+            check (false, "cargar una segunda instancia");
+        }
+    }
+
     std::cout << "\n-- P7. Bypass, exportar y cerrar el plugin con un acorde sonando" << std::endl;
     {
         if (auto* bypass = host.instance().getBypassParameter())
@@ -1669,7 +1782,15 @@ void testChordPort (const String& path)
 int main (int argc, char* argv[])
 {
     ScopedJuceInitialiser_GUI juceInit;
-    ScopedLowPowerModeDisabler noAppNap;   // como un DAW: macOS no "duerme" el proceso
+
+   #if JUCE_MAC
+    // Como un DAW: macOS no "duerme" el proceso de pruebas (ver MacActivity.h)
+    struct NoAppNap
+    {
+        void* token = smartkeysBeginLatencyCriticalActivity();
+        ~NoAppNap() { smartkeysEndActivity (token); }
+    } noAppNap;
+   #endif
 
     if (argc < 2)
     {

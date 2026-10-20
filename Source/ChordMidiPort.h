@@ -161,6 +161,7 @@ private:
     void sendDue (double now);
     void send (const Pending& p);
     void deliver (uint8_t status, uint8_t data1, uint8_t data2);
+    void releaseOnDevice (int channel, int note);
     void recordSent (bool noteOn, int note);
     void dropPending (ChordPortFeed& feed);
     void releaseNotes (ChordPortFeed& feed);
@@ -177,9 +178,9 @@ private:
     bool testSink = false;                       // pruebas en Linux sin MIDI del sistema
     std::FILE* testFile = nullptr;
 
-    // macOS: mientras exista el teclado, el sistema no "duerme" el proceso (App Nap
-    // agruparía los temporizadores y las notas saldrían tarde)
-    std::unique_ptr<juce::ScopedLowPowerModeDisabler> keepAwake;
+    // Notas encendidas en el teclado sumando TODAS las instancias: cada nota sale
+    // una sola vez aunque dos SmartKeys toquen la misma (FL no recibe notas dobles)
+    std::array<uint8_t, 16 * 128> deviceOnCount {};
 
     // Diagnóstico (SMARTKEYS_PORT_DEBUG=1): con qué retraso salen las notas
     bool debug = false, realtime = false;

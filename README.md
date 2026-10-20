@@ -14,6 +14,11 @@
 
 ---
 
+## Novedades de la versión 1.6.1
+
+- **Corregido el cierre de FL Studio** (`EAccessViolation` en el hilo principal) al quitar o reemplazar el canal de SmartKeys, cerrar el proyecto o apagar el teclado *SmartKeys Chords* en la 1.6.0. Ver [por qué se cerraba](#por-qué-se-cerraba-fl-studio-160).
+- **Sin notas dobles en el Piano Roll.** Al grabar en bucle, FL vuelve a tocar en cada vuelta lo que ya grabó en el patrón de SmartKeys. Esos acordes salían otra vez por el teclado y FL los grababa encima de los de la vuelta anterior. Ahora una tecla que se repite en la misma posición que en una vuelta anterior de la toma ya no sale por el teclado; lo nuevo que toques, sí. Y si dos SmartKeys tocan la misma nota a la vez, sale una sola vez.
+
 ## Novedades de la versión 1.6.0
 
 **Los acordes completos, en el Piano Roll.** Al grabar con SmartKeys en FL Studio, el Piano Roll guardaba sólo las teclas que pulsabas (F#4, G#4…), aunque la salida MIDI de SmartKeys ya fuera el acorde completo. La causa: **FL Studio graba en el Piano Roll lo que entra por un teclado MIDI, nunca lo que un plugin manda por su salida MIDI** (por eso Scaler o Cthulhu piden un cable MIDI virtual como loopMIDI o IAC). La 1.6 lo resuelve sin apps externas: **SmartKeys es también un teclado MIDI**, *SmartKeys Chords*. Cada tecla (teclado MIDI, teclado de la PC, voz o las notas del Piano Roll de SmartKeys) sale por él como el **acorde completo**, con el desfase del STRUM. El instrumento que enganches a ese teclado (FLEX, Serum, Kontakt…) suena con los acordes y, al grabar, FL los dibuja **apilados en su Piano Roll**. Ver [Grabar los acordes completos en el Piano Roll](#grabar-los-acordes-completos-en-el-piano-roll-fl-studio).
@@ -30,10 +35,10 @@ La 1.5.0 trajo `MIC VOICE` sin sidechain (SmartKeys lee él mismo el micrófono 
 
 ## Descargar los instaladores (sin compilar nada)
 
-GitHub compila y prueba SmartKeys en cada cambio y publica los instaladores en la página **Releases** de este repositorio (**SmartKeys 1.6.0**):
+GitHub compila y prueba SmartKeys en cada cambio y publica los instaladores en la página **Releases** de este repositorio (**SmartKeys 1.6.1**):
 
-- **Mac:** `SmartKeys-1.6.0-macOS.pkg`. Funciona en Mac con chip Apple e Intel. Instala SmartKeys (VST3, AU y app).
-- **Windows:** `SmartKeys-1.6.0-Windows-Setup.exe`. Instala SmartKeys (VST3 y app).
+- **Mac:** `SmartKeys-1.6.1-macOS.pkg`. Funciona en Mac con chip Apple e Intel. Instala SmartKeys (VST3, AU y app).
+- **Windows:** `SmartKeys-1.6.1-Windows-Setup.exe`. Instala SmartKeys (VST3 y app).
 
 **Los dos instaladores eliminan automáticamente la versión anterior** (y la vieja SmartKeys FX) antes de copiar la nueva. No hace falta borrar nada a mano. El registro de lo que se borró en Mac queda en `/tmp/smartkeys-install.log`.
 
@@ -51,7 +56,7 @@ bash Installer/install_mac.sh
 
 1. Comprueba las Command Line Tools de Apple y CMake (si falta CMake, lo instala con Homebrew o solo para tu usuario).
 2. Borra SmartKeys y la vieja SmartKeys FX (`.vst3`, `.component`, `.app`) de `/Library`, de `~/Library` de cada usuario y de `/Applications`. También borra la caché de Audio Units y la ficha de FL Studio.
-3. Compila en `Release` el binario Universal y genera `Installer/Output/SmartKeys-1.6.0-macOS.pkg`.
+3. Compila en `Release` el binario Universal y genera `Installer/Output/SmartKeys-1.6.1-macOS.pkg`.
 4. Instala el `.pkg` y reinicia `AudioComponentRegistrar` para que FL Studio y Ableton vean el binario nuevo.
 
 Te pide la contraseña de administrador en los pasos 2 y 4. Para desinstalar todo: `bash Installer/uninstall_mac.sh`.
@@ -62,7 +67,7 @@ Te pide la contraseña de administrador en los pasos 2 y 4. Para desinstalar tod
 Installer\build_windows.bat
 ```
 
-Compila, genera `SmartKeys-1.6.0-Windows-Setup.exe` y lo ejecuta. El instalador borra antes la versión anterior. Requisitos: Visual Studio 2022 con "Desarrollo para escritorio con C++", CMake 3.22+, Git e [Inno Setup 6.3+](https://jrsoftware.org/isdl.php). Añade `noinstall` para solo generar el `.exe`.
+Compila, genera `SmartKeys-1.6.1-Windows-Setup.exe` y lo ejecuta. El instalador borra antes la versión anterior. Requisitos: Visual Studio 2022 con "Desarrollo para escritorio con C++", CMake 3.22+, Git e [Inno Setup 6.3+](https://jrsoftware.org/isdl.php). Añade `noinstall` para solo generar el `.exe`.
 
 ### Para desarrolladores: copiar al compilar
 
@@ -111,7 +116,7 @@ FL Studio graba en el Piano Roll lo que llega por un **teclado MIDI**. Por eso S
 
 A tener en cuenta:
 
-- **El Piano Roll de SmartKeys guarda tus teclas sueltas**, que son lo que entró por tu teclado. Después de grabar, bórralas o silencia ese patrón; si no, al reproducir, el instrumento enganchado recibe cada acorde dos veces.
+- **El Piano Roll de SmartKeys guarda tus teclas sueltas**, que son lo que entró por tu teclado. **Grabando en bucle no pasa nada:** lo que FL repite en cada vuelta no vuelve a salir por el teclado, así que no se graba doble. **Al reproducir sin grabar**, esas teclas sí vuelven a tocar el acorde en el instrumento enganchado (que ya lo tiene grabado) y lo oirías dos veces: después de grabar, borra las teclas de SmartKeys o silencia su patrón. En una toma nueva, haz lo mismo antes de grabar.
 - **Convertir en acordes las notas sueltas que ya tienes** en el Piano Roll de SmartKeys: engancha el instrumento (pasos 2–3), pon FL a grabar y dale ▶. SmartKeys toca esas notas como acordes y FL los graba en el instrumento enganchado.
 - **Una sola vía hacia cada instrumento:** este teclado **o** el *Output port* del wrapper. Con las dos, el acorde le llega dos veces. El Port del paso 2 no debe coincidir con el *Input port* del wrapper de SmartKeys.
 - **Si te saltas el paso 3** (teclado activado y SmartKeys seleccionado), FL devuelve los acordes al propio SmartKeys. SmartKeys los reconoce como **eco** y los ignora (la etiqueta dice `· eco`), pero así ningún otro instrumento los graba.
@@ -237,13 +242,22 @@ El instrumento de FL Studio no recibe el micrófono por su entrada sin un ruteo 
 - **Vigilancia.** Un temporizador del procesador (4 veces por segundo, hilo de mensajes) reabre el micrófono si cambias la entrada en Ajustes, si se desconecta la interfaz o si deja de entregar audio, y lo cierra antes de destruir el plugin.
 - **Windows:** sin lectura directa; la voz entra por la entrada sidechain del plugin.
 
+### Por qué se cerraba FL Studio (1.6.0)
+
+El informe de FL (`EAccessViolation`, hilo principal, `libobjc` ← `Foundation` ← `SmartKeys` ← `Fruity Wrapper`) se tradujo con el binario 1.6.0 exacto: `~JuceVST3Component` → `~SmartKeysAudioProcessor` → `~ChordMidiPort` → `[[NSProcessInfo processInfo] endActivity: …]`.
+
+En la 1.6.0, el teclado *SmartKeys Chords* pedía a macOS que no pusiera el proceso en App Nap con `juce::ScopedLowPowerModeDisabler`. Esa clase de JUCE guarda la "actividad" de `NSProcessInfo` sin retenerla. macOS la libera al terminar la vuelta del bucle de mensajes, y al destruir el teclado (último SmartKeys quitado o reemplazado, proyecto cerrado o teclado apagado) se enviaba `endActivity:` a un objeto ya liberado.
+
+En la 1.6.1 el teclado ya no usa App Nap: su hilo es de tiempo real y FL Studio, que está reproduciendo audio, no entra en App Nap. Las pruebas de la Mac de la CI corren ahora con `NSZombieEnabled`, que hace fallar en el acto cualquier mensaje a un objeto liberado, y pluginval crea y destruye el plugin una y otra vez con el teclado encendido.
+
 ### Teclado MIDI virtual "SmartKeys Chords" (`ChordMidiPort`)
 
 - **Por qué hace falta.** FL Studio graba en el Piano Roll las notas que llegan por un dispositivo MIDI de entrada. Lo que un plugin manda por su salida MIDI (el *Output port* del wrapper) hace sonar a otro plugin, pero no se graba. La salida MIDI de SmartKeys ya era el acorde completo, exacto a la muestra (las pruebas lo comprobaban); faltaba que llegara a FL como un teclado.
 - **Cuándo.** Encendido por defecto en FL Studio (`PluginHostType::isFruityLoops()`) y en la app Standalone, donde un teclado sólo se usa si lo activas tú. En otros DAW empieza apagado: Logic, Cubase o Ableton meten cualquier teclado nuevo en la entrada de la pista y grabarían los acordes junto a tus teclas. Un clic en la etiqueta lo cambia, y se guarda con el proyecto.
 - **Qué es.** `juce::MidiOutput::createNewDevice ("SmartKeys Chords")` crea una fuente CoreMIDI del sistema. Su identificador sale de `com.miwn.smartkeys` y el nombre, y es siempre el mismo, así que FL Studio recuerda su Port de una sesión a otra. Hay uno por proceso (`SharedResourcePointer`), compartido por todas las instancias. La app Standalone usa `SmartKeys Chords (App)` para no chocar con el del DAW. Se crea en el hilo de mensajes cuando el plugin se usa de verdad (el DAW lo pone a sonar o se abre su ventana), nunca durante el escaneo de plugins. Si otra aplicación ya lo tiene, se reintenta cada 3 s.
 - **Tiempo real.** El hilo de audio sólo copia los NoteOn/NoteOff de la salida final (ya con el STRUM) a un FIFO lock-free de tamaño fijo, con su hora: inicio del bloque + un bloque + su posición. Un hilo propio vacía el FIFO cada ~1 ms y envía cada nota a su hora, así el teclado lleva el mismo desfase que la salida MIDI. Ni candados, ni memoria dinámica, ni CoreMIDI en el hilo de audio.
-- **Ninguna nota colgada.** El teclado lleva la cuenta de lo que cada instancia dejó sonando. Al poner el bypass, reiniciar el audio o cerrar el plugin, envía sus NoteOff.
+- **Ninguna nota colgada ni doble.** El teclado lleva la cuenta de lo que cada instancia dejó sonando. Al poner el bypass, reiniciar el audio o cerrar el plugin, envía sus NoteOff. Si dos instancias tocan la misma nota, sale una sola vez y se apaga cuando la suelta la última.
+- **Grabación en bucle.** El teclado tiene su propio router y su propio STRUM, a los que sólo llegan las teclas que deben salir por él. Mientras el DAW graba, SmartKeys anota en qué posición (en negras) salió cada tecla y en qué vuelta del bucle. Si FL repite una tecla en la misma posición (±1/8 de negra) que en una vuelta anterior de la misma toma, está tocando lo que ya grabó en el patrón de SmartKeys, y ese acorde no sale otra vez: el instrumento enganchado ya lo tiene grabado. La salida MIDI y el piano de SmartKeys siguen tocándolo todo.
 - **Exportar.** Fuera de tiempo real (render) no envía nada: el disco va más rápido que el reloj.
 - **Eco.** Si FL devuelve el teclado al propio SmartKeys, cada nota del acorde volvería a entrar como una tecla y dispararía otro acorde. SmartKeys sabe qué notas envió el teclado y cuándo (de todas sus instancias):
   - Un NoteOn es candidato a eco si esa nota salió por el teclado hace muy poco (unos pocos bloques) y su eco todavía no llegó. Cada envío vuelve una sola vez, así que repetir rápido una tecla nunca se confunde con un eco.
@@ -350,19 +364,19 @@ SmartKeys/
   - **El VST3 compilado**, cargado como en un DAW con su entrada en silencio digital: `MIC VOICE: ON` lee el micrófono de macOS y saca **La menor** por MIDI (canal 1) y por el piano. Si la entrada del plugin trae voz (Do4), usa esa; cuando vuelve el silencio, otra vez el micrófono de macOS. Al apagar `MIC VOICE` suelta las notas.
 - **pluginval nivel 10** (el máximo) con las pruebas de editor, en Mac Intel, en Windows y aquí (con el teclado *SmartKeys Chords* encendido): **SUCCESS**. Incluye el validador oficial de Steinberg, estado, automatización, seguridad de hilos, fuzzing y buses.
 - **pluginval nivel 10 sobre el VST3 compilado con AddressSanitizer + UBSan**, con el teclado encendido (abre y cierra el editor una y otra vez; es la prueba que reproducía el cierre de FL Studio de la 1.2–1.3): **SUCCESS**, 0 errores de memoria.
-- **559 comprobaciones del núcleo:**
+- **561 comprobaciones del núcleo:**
   - Escalas, acordes, voicings complejos, router MIDI, detector de voz y STRUM exacto a la muestra.
   - **Búfer circular del micrófono:** canal 1 de un bloque estéreo, 20 000 escrituras y lecturas irregulares, desbordamiento, latencia acotada y **dos hilos de verdad** a la vez (1,1 millones de muestras sin perder ni repetir una). Escribir y leer nunca asigna memoria.
   - **Control del micrófono** (simulado): se abre a la frecuencia del dispositivo, se reabre si cambia la entrada o deja de entregar audio, avisa si falla, no abre Bluetooth, respeta el permiso (pendiente → abre al permitirlo; denegado; programa sin `NSMicrophoneUsageDescription`).
-  - **Teclado SmartKeys Chords:** cada nota sale en el orden de su hora y a su hora (±6 ms, se conserva el STRUM); un NoteOn que llega con 1 s de retraso no sale, ni su NoteOff; todas las instancias saben qué salió (para reconocer el eco); al reiniciar o cerrar una instancia salen sus NoteOff; con el FIFO lleno descarta sin bloquear ni pedir memoria.
+  - **Teclado SmartKeys Chords:** cada nota sale en el orden de su hora y a su hora (±6 ms, se conserva el STRUM); un NoteOn que llega con 1 s de retraso no sale, ni su NoteOff; todas las instancias saben qué salió (para reconocer el eco); la misma nota de dos instancias sale una sola vez y se apaga con la última; al reiniciar o cerrar una instancia salen sus NoteOff; con el FIFO lleno descarta sin bloquear ni pedir memoria.
   - 0 asignaciones en todo el camino de audio.
-- **Prueba de integración** (`HostTests.cpp`, 71 comprobaciones). Carga el VST3 compilado como un DAW y comprueba:
+- **Prueba de integración** (`HostTests.cpp`, 77 comprobaciones). Carga el VST3 compilado como un DAW y comprueba:
   - Cada tecla sale como acorde completo por MIDI, **siempre por el canal 1** (aunque entre por otro), mientras suena el piano interno; `GAIN` baja el piano sin tocar el MIDI.
   - Ya no existen `MIDI CH`, `OUTPUT MODE`, `A4` ni `MICROTUNING`; un proyecto de la 1.3 / 1.4 con `MIDI CH 5` se abre sin restos y sale por el canal 1.
   - El STRUM a 100 ms: +5520 y +12480 muestras a 48 kHz, en ASC y en DESC. COMPLEX CHORDS de 5 a 7 notas.
   - La voz por la entrada del DAW (sidechain) y **MIC VOICE sin sidechain** con un micrófono simulado a 44,1 kHz mientras el DAW va a 48 kHz: La3 → La menor, cambio a la entrada del DAW y vuelta, frases que disparan y sueltan el acorde.
   - **4000 bloques de 0 a 512 muestras** (como los manda FL Studio): ningún evento MIDI fuera de su bloque.
-  - **Teclado SmartKeys Chords**, a tiempo real (30 comprobaciones): el acorde completo a la vez; el STRUM con el mismo desfase, también con el búfer partido en trozos procesados de golpe (como FL Studio); repeticiones cada 60 ms y una segunda tecla 20 ms después sin perder ninguna; **bucle simulado** (todo lo que sale vuelve a entrar en el bloque siguiente, 50 ecos): sólo los acordes de las teclas pulsadas, con legato y repeticiones, también con STRUM; el bucle que aparece de repente: ninguna nota colgada; bypass, exportar, apagar y cerrar.
+  - **Teclado SmartKeys Chords**, a tiempo real (36 comprobaciones): el acorde completo a la vez; el STRUM con el mismo desfase, también con el búfer partido en trozos procesados de golpe (como FL Studio); repeticiones cada 60 ms y una segunda tecla 20 ms después sin perder ninguna; **bucle simulado** (todo lo que sale vuelve a entrar en el bloque siguiente, 50 ecos): sólo los acordes de las teclas pulsadas, con legato y repeticiones, también con STRUM; el bucle que aparece de repente: ninguna nota colgada; **grabación en bucle** (un compás que se repite: lo que FL repite en la vuelta 2 no sale otra vez por el teclado, lo nuevo sí, y al reproducir sin grabar o en una toma nueva vuelve a salir); **dos instancias** tocando la misma tecla: cada nota sale una vez y se apaga con la última; bypass, exportar, apagar y cerrar.
   - **0 asignaciones** en 3000 llamadas al `processBlock` real, en 2,5 s leyendo el micrófono del sistema y con el teclado activo y sus ecos, medidas reemplazando `malloc`.
   - **Concurrencia:** un hilo de audio llama sin parar al `processBlock` mientras el hilo de mensajes guarda y carga el estado, cambia parámetros, enciende y apaga `MIC VOICE` (el micrófono se abre y se cierra) y enciende y apaga el teclado *SmartKeys Chords* (se crea y se destruye con el audio corriendo).
 - **AddressSanitizer + UBSan** y **ThreadSanitizer:**

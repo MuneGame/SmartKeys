@@ -172,7 +172,16 @@ private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void timerCallback() override;
     void updateEngineIfNeeded();
-    void drainScreenNotes (juce::MidiBuffer& out);
+    void drainScreenNotes();
+
+    // Cada tecla va a los dos routers (salida MIDI + piano, y teclado virtual)
+    void routeNoteOn (smartkeys::MidiOutputRouter::Source source, int trigger, juce::uint8 velocity, int pos, bool toPort);
+    void routeNoteOff (smartkeys::MidiOutputRouter::Source source, int trigger, int pos);
+    void routeReleaseAll (int pos);
+
+    // Grabación en bucle: ¿esta tecla ya salió por el teclado en esta misma posición
+    // musical en una vuelta anterior? (FL está repitiendo lo que grabó)
+    bool isRecordedRepeat (int note, double ppq) noexcept;
 
     void updateChordPort();
     void disconnectChordPort();
@@ -205,6 +214,11 @@ private:
     smartkeys::FlKeysPianoSynth  pianoSynth;
     smartkeys::MidiOutputRouter  router;
     smartkeys::StrumScheduler    strum;
+
+    // Teclado "SmartKeys Chords": su propio router y STRUM, con sólo las teclas que
+    // deben salir por él (en una grabación en bucle, lo que FL ya grabó no se repite)
+    smartkeys::MidiOutputRouter  portRouter;
+    smartkeys::StrumScheduler    portStrum;
 
     // Personalización de las 12 notas (bit 0 = C)
     std::atomic<uint16_t> customMask { 0b101010110101 };
@@ -239,6 +253,7 @@ private:
 
     juce::MidiBuffer routedMidi;                  // acordes completos (antes del STRUM)
     juce::MidiBuffer expandedChordMidi;           // salida final (con STRUM)
+    juce::MidiBuffer portRoutedMidi, portExpandedMidi;   // lo mismo para el teclado virtual
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> gainSmoothed;
 
     static constexpr size_t kMidiReserveBytes = 16384;
@@ -264,6 +279,17 @@ private:
     double maxBlockMs = 12.0;
     double portClockMs = 0.0;            // hora (reloj de pared) del inicio del bloque, por muestras
     bool   portClockValid = false;
+
+    // Grabación en bucle (sólo hilo de audio): dónde (en negras) salió cada tecla
+    // por el teclado en esta toma, y en qué vuelta del bucle
+    struct RecordedTrigger { double ppq = 0.0; int pass = 0; };
+    static constexpr int kRecordedPerNote = 64;
+    std::array<std::array<RecordedTrigger, (size_t) kRecordedPerNote>, 128> recordedTriggers {};
+    std::array<uint8_t, 128> recordedCount {}, recordedNext {};
+    bool   recordingTake = false;
+    int    recordingPass = 0;
+    double lastBlockEndPpq = 0.0;
+    static constexpr double kRepeatToleranceBeats = 0.125;
     std::atomic<bool> chordPortLooping { false };
 
     static constexpr double kLoopEchoWindowMs = 600.0;   // con el bucle confirmado

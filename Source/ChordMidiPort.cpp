@@ -89,11 +89,6 @@ void ChordMidiPort::open()
     if (! isAvailable() || isThreadRunning())
         return;
 
-   #if JUCE_MAC
-    if (keepAwake == nullptr)
-        keepAwake = std::make_unique<juce::ScopedLowPowerModeDisabler>();
-   #endif
-
     // Hilo de tiempo real (como el de un reloj MIDI): se despierta a su hora aunque
     // el sistema agrupe temporizadores. Si el sistema no lo permite, prioridad alta.
     realtime = startRealtimeThread (juce::Thread::RealtimeOptions{}.withPeriodMs (1.0).withMaximumProcessingTimeMs (1.0));
@@ -255,13 +250,21 @@ void ChordMidiPort::send (const Pending& p)
     const int note = p.data1;
     auto& count = feed.onCount[(size_t) (channel * 128 + note)];
 
+    auto& onDevice = deviceOnCount[(size_t) (channel * 128 + note)];
+
     if (isNoteOnStatus (p.status, p.data2))
     {
-        if (count < 255)
-            ++count;
+        if (count == 255 || onDevice == 255)
+            return;
+        ++count;
         feed.soundingNotes.fetch_add (1, std::memory_order_relaxed);
-        recordSent (true, note);
-        deliver ((uint8_t) (0x90 | channel), (uint8_t) note, (uint8_t) juce::jlimit (1, 127, (int) p.data2));
+
+        // Si otra instancia ya tiene esta nota sonando, no se repite
+        if (onDevice++ == 0)
+        {
+            recordSent (true, note);
+            deliver ((uint8_t) (0x90 | channel), (uint8_t) note, (uint8_t) juce::jlimit (1, 127, (int) p.data2));
+        }
     }
     else if (isNoteOffStatus (p.status, p.data2))
     {
@@ -269,9 +272,19 @@ void ChordMidiPort::send (const Pending& p)
             return;   // su NoteOn nunca salió (llegó tarde o el teclado se conectó con la nota ya sonando)
         --count;
         feed.soundingNotes.fetch_sub (1, std::memory_order_relaxed);
-        recordSent (false, note);
-        deliver ((uint8_t) (0x80 | channel), (uint8_t) note, 0);
+        releaseOnDevice (channel, note);
     }
+}
+
+// La nota se apaga en el teclado cuando ya no la tiene ninguna instancia
+void ChordMidiPort::releaseOnDevice (int channel, int note)
+{
+    auto& onDevice = deviceOnCount[(size_t) (channel * 128 + note)];
+    if (onDevice == 0 || --onDevice > 0)
+        return;
+
+    recordSent (false, note);
+    deliver ((uint8_t) (0x80 | channel), (uint8_t) note, 0);
 }
 
 // Lo que sale por el teclado lo conocen TODAS las instancias: si el DAW lo devuelve
@@ -295,16 +308,16 @@ void ChordMidiPort::recordSent (bool noteOn, int note)
     }
 }
 
-// Apaga en el DAW todo lo que esta instancia dejó encendido
+// Apaga en el DAW todo lo que esta instancia dejó encendido (lo que otra
+// instancia siga tocando continúa sonando)
 void ChordMidiPort::releaseNotes (ChordPortFeed& feed)
 {
     for (int i = 0; i < 16 * 128; ++i)
     {
-        if (feed.onCount[(size_t) i] > 0)
+        while (feed.onCount[(size_t) i] > 0)
         {
-            feed.onCount[(size_t) i] = 0;
-            recordSent (false, i % 128);
-            deliver ((uint8_t) (0x80 | (i / 128)), (uint8_t) (i % 128), 0);
+            --feed.onCount[(size_t) i];
+            releaseOnDevice (i / 128, i % 128);
         }
     }
     feed.soundingNotes.store (0, std::memory_order_relaxed);

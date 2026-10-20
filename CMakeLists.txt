@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SmartKeys VERSION 1.6.0 LANGUAGES C CXX)
+project(SmartKeys VERSION 1.6.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -198,6 +198,10 @@ if(SMARTKEYS_BUILD_HOST_TESTS)
             juce::juce_recommended_warning_flags)
     if(APPLE)
         # Como un DAW: declara el uso del micrófono (Info.plist dentro del ejecutable)
+        # y no entra en App Nap mientras prueba el audio y el MIDI a tiempo real
+        target_sources(SmartKeysHostTests PRIVATE Tests/MacActivity.mm)
+        target_include_directories(SmartKeysHostTests PRIVATE Tests)
+        target_link_libraries(SmartKeysHostTests PRIVATE "-framework Foundation")
         target_link_options(SmartKeysHostTests PRIVATE
             "LINKER:-sectcreate,__TEXT,__info_plist,${CMAKE_CURRENT_SOURCE_DIR}/Tests/HostApp-Info.plist")
     endif()

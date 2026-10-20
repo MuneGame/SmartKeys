@@ -123,6 +123,8 @@ SmartKeysAudioProcessor::SmartKeysAudioProcessor()
 
     routedMidi.ensureSize (kMidiReserveBytes);
     expandedChordMidi.ensureSize (kMidiReserveBytes);
+    portRoutedMidi.ensureSize (kMidiReserveBytes);
+    portExpandedMidi.ensureSize (kMidiReserveBytes);
 
     chordPortEnabled.store (isChordPortEnabledByDefault (wrapperType));
 
@@ -315,7 +317,7 @@ void SmartKeysAudioProcessor::releaseSuspectTriggers() noexcept
         {
             suspectTrigger[(size_t) n] = false;
             midiKeyDown[(size_t) n] = false;
-            router.handleNoteOff (MidiOutputRouter::Source::Midi, n, 0, routedMidi);
+            routeNoteOff (MidiOutputRouter::Source::Midi, n, 0);
         }
     }
 }
@@ -517,6 +519,14 @@ void SmartKeysAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     expandedChordMidi.ensureSize (kMidiReserveBytes);
     expandedChordMidi.clear();
 
+    portRouter.reset();
+    portStrum.prepare (currentSampleRate);
+    portRoutedMidi.ensureSize (kMidiReserveBytes);
+    portRoutedMidi.clear();
+    portExpandedMidi.ensureSize (kMidiReserveBytes);
+    portExpandedMidi.clear();
+    recordingTake = false;
+
     gainSmoothed.reset (currentSampleRate, 0.03);
     gainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (pMasterGain->load()));
 
@@ -540,6 +550,7 @@ void SmartKeysAudioProcessor::releaseResources()
     voiceTracker.reset();
     pianoSynth.allNotesOff();
     strum.reset();
+    portStrum.reset();
     portFeed.requestReleaseAll();
 }
 
@@ -587,7 +598,56 @@ void SmartKeysAudioProcessor::updateEngineIfNeeded()
     appliedMode = mode;   appliedExt = ext;     appliedVar = var;
 }
 
-void SmartKeysAudioProcessor::drainScreenNotes (juce::MidiBuffer& out)
+//==============================================================================
+// Hilo de audio. Cada tecla va a los dos caminos: la salida MIDI + el piano
+// (router) y el teclado "SmartKeys Chords" (portRouter), que puede saltársela.
+void SmartKeysAudioProcessor::routeNoteOn (MidiOutputRouter::Source source, int trigger, juce::uint8 velocity,
+                                           int pos, bool toPort)
+{
+    router.handleNoteOn (source, trigger, kMidiChannel, velocity, pos, engine, routedMidi);
+
+    if (toPort)
+        portRouter.handleNoteOn (source, trigger, kMidiChannel, velocity, pos, engine, portRoutedMidi);
+    else
+        portRouter.handleNoteOff (source, trigger, pos, portRoutedMidi);   // como el router: lo anterior de esa tecla se suelta
+}
+
+void SmartKeysAudioProcessor::routeNoteOff (MidiOutputRouter::Source source, int trigger, int pos)
+{
+    router.handleNoteOff (source, trigger, pos, routedMidi);
+    portRouter.handleNoteOff (source, trigger, pos, portRoutedMidi);
+}
+
+void SmartKeysAudioProcessor::routeReleaseAll (int pos)
+{
+    router.releaseAll (pos, routedMidi);
+    portRouter.releaseAll (pos, portRoutedMidi);
+}
+
+// Grabación en bucle: FL vuelve a tocar en cada vuelta lo que ya grabó en el
+// patrón de SmartKeys; si esos acordes salieran otra vez por el teclado, FL los
+// grabaría encima de los de la vuelta anterior (notas dobles). Una tecla que
+// vuelve a sonar en la misma posición (±1/8 de negra) que en una vuelta
+// ANTERIOR de esta toma no sale por el teclado; lo nuevo sí.
+bool SmartKeysAudioProcessor::isRecordedRepeat (int note, double ppq) noexcept
+{
+    const auto n = (size_t) note;
+    for (int i = 0; i < (int) recordedCount[n]; ++i)
+    {
+        const auto& r = recordedTriggers[n][(size_t) i];
+        if (r.pass < recordingPass && std::abs (r.ppq - ppq) <= kRepeatToleranceBeats)
+            return true;
+    }
+
+    auto& slot = recordedTriggers[n][(size_t) recordedNext[n]];
+    slot.ppq = ppq;
+    slot.pass = recordingPass;
+    recordedNext[n] = (uint8_t) ((recordedNext[n] + 1) % kRecordedPerNote);
+    recordedCount[n] = (uint8_t) juce::jmin (kRecordedPerNote, recordedCount[n] + 1);
+    return false;
+}
+
+void SmartKeysAudioProcessor::drainScreenNotes()
 {
     const int ready = screenFifo.getNumReady();
     if (ready <= 0)
@@ -600,10 +660,9 @@ void SmartKeysAudioProcessor::drainScreenNotes (juce::MidiBuffer& out)
         {
             const auto& e = screenEvents[(size_t) (start + i)];
             if (e.on)
-                router.handleNoteOn (MidiOutputRouter::Source::Screen, e.note, kMidiChannel, (juce::uint8) e.velocity,
-                                     0, engine, out);
+                routeNoteOn (MidiOutputRouter::Source::Screen, e.note, (juce::uint8) e.velocity, 0, true);
             else
-                router.handleNoteOff (MidiOutputRouter::Source::Screen, e.note, 0, out);
+                routeNoteOff (MidiOutputRouter::Source::Screen, e.note, 0);
         }
     };
     handle (scope.startIndex1, scope.blockSize1);
@@ -643,13 +702,52 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     updateEngineIfNeeded();
     voiceTracker.setGateThresholdDb (pMicGate->load());
-    strum.setStrum ((double) pStrumMs->load(), juce::roundToInt (pStrumDir->load()) == StrumDir::Descending);
+    const double strumMs = (double) pStrumMs->load();
+    const bool strumDown = juce::roundToInt (pStrumDir->load()) == StrumDir::Descending;
+    strum.setStrum (strumMs, strumDown);
+    portStrum.setStrum (strumMs, strumDown);
 
     // Capacidad reservada: tras el primer bloque no hay asignaciones
     routedMidi.clear();
     routedMidi.ensureSize (kMidiReserveBytes);
     expandedChordMidi.clear();
     expandedChordMidi.ensureSize (kMidiReserveBytes);
+    portRoutedMidi.clear();
+    portRoutedMidi.ensureSize (kMidiReserveBytes);
+    portExpandedMidi.clear();
+    portExpandedMidi.ensureSize (kMidiReserveBytes);
+
+    // Transporte del DAW: ¿se está grabando? (posición en negras de este bloque)
+    bool recordingNow = false;
+    double blockPpq = 0.0, ppqPerSample = 0.0;
+    if (auto* transport = getPlayHead())
+    {
+        if (const auto position = transport->getPosition())
+        {
+            const auto ppq = position->getPpqPosition();
+            const auto bpm = position->getBpm();
+            if (position->getIsPlaying() && position->getIsRecording() && ppq.hasValue() && bpm.hasValue() && *bpm > 0.0)
+            {
+                recordingNow = true;
+                blockPpq = *ppq;
+                ppqPerSample = *bpm / (60.0 * currentSampleRate);
+            }
+        }
+    }
+
+    if (recordingNow && ! recordingTake)
+    {
+        recordedCount.fill (0);   // toma nueva
+        recordedNext.fill (0);
+        recordingPass = 0;
+    }
+    else if (recordingNow && blockPpq < lastBlockEndPpq - 0.25)
+    {
+        ++recordingPass;          // el bucle volvió atrás: otra vuelta de la misma toma
+    }
+    recordingTake = recordingNow;
+    if (recordingNow)
+        lastBlockEndPpq = blockPpq + (double) numSamples * ppqPerSample;
 
     //==========================================================================
     // PASO 1 — ELEGIR DE DÓNDE LLEGA LA VOZ (antes de tocar el buffer)
@@ -661,7 +759,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     const bool micOn = pMicOn->load() > 0.5f;
 
     if (! micOn && micWasOn)
-        router.handleNoteOff (MidiOutputRouter::Source::Voice, 0, 0, routedMidi);
+        routeNoteOff (MidiOutputRouter::Source::Voice, 0, 0);
     if (micOn && ! micWasOn)
         voiceTracker.forceRelease (0);   // al encender, la siguiente nota estable dispara su acorde
     micWasOn = micOn;
@@ -712,7 +810,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
           || (source == VoiceSource::SystemMic && micGeneration != trackerGeneration))
     {
         if (router.isVoiceSlotActive())
-            router.handleNoteOff (MidiOutputRouter::Source::Voice, 0, 0, routedMidi);
+            routeNoteOff (MidiOutputRouter::Source::Voice, 0, 0);
         voiceTracker.prepare (sourceRate > 1000.0 ? sourceRate : currentSampleRate);
         if (source == VoiceSource::SystemMic)
             systemMic.discardAll();   // sólo audio nuevo y continuo
@@ -757,7 +855,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     // PASO 4 — EXPANDIR CADA NOTA DE ENTRADA AL ACORDE COMPLETO
     //          (MIDI / Piano Roll, teclado en pantalla / PC y voz, en orden de muestra)
     //==========================================================================
-    drainScreenNotes (routedMidi);
+    drainScreenNotes();
 
     const int routedVoiceEvents = micOn ? numVoiceEvents : 0;
     const int lastSample = numSamples - 1;
@@ -834,8 +932,8 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                 }
 
                 midiKeyDown[(size_t) note] = true;
-                router.handleNoteOn (MidiOutputRouter::Source::Midi, note, kMidiChannel,
-                                     (juce::uint8) velocity, pos, engine, routedMidi);
+                const bool toPort = ! recordingNow || ! isRecordedRepeat (note, blockPpq + (double) pos * ppqPerSample);
+                routeNoteOn (MidiOutputRouter::Source::Midi, note, (juce::uint8) velocity, pos, toPort);
             }
             else if ((type == 0x80 || type == 0x90) && size >= 3)
             {
@@ -848,14 +946,14 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
                 midiKeyDown[(size_t) note] = false;
                 suspectTrigger[(size_t) note] = false;
-                router.handleNoteOff (MidiOutputRouter::Source::Midi, note, pos, routedMidi);
+                routeNoteOff (MidiOutputRouter::Source::Midi, note, pos);
             }
             else if (status >= 0x80 && status < 0xF0 && size <= 3)
             {
                 // CC, sustain, pitch bend, aftertouch... al canal 1
                 if (type == 0xB0 && (note == 120 || note == 123))
                 {
-                    router.releaseAll (pos, routedMidi);   // All Sound Off / All Notes Off del DAW
+                    routeReleaseAll (pos);   // All Sound Off / All Notes Off del DAW
                     midiKeyDown.fill (false);
                     suspectTrigger.fill (false);
                 }
@@ -876,10 +974,9 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             const int pos = voicePosition (voiceIdx);
 
             if (e.isNoteOn)
-                router.handleNoteOn (MidiOutputRouter::Source::Voice, e.note, kMidiChannel, (juce::uint8) e.velocity,
-                                     pos, engine, routedMidi);
+                routeNoteOn (MidiOutputRouter::Source::Voice, e.note, (juce::uint8) e.velocity, pos, true);
             else
-                router.handleNoteOff (MidiOutputRouter::Source::Voice, e.note, pos, routedMidi);
+                routeNoteOff (MidiOutputRouter::Source::Voice, e.note, pos);
             ++voiceIdx;
         }
     }
@@ -888,6 +985,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     // PASO 5 — STRUM: entrada progresiva de las notas (ASC / DESC), por muestra
     //==========================================================================
     strum.process (routedMidi, expandedChordMidi, numSamples);
+    portStrum.process (portRoutedMidi, portExpandedMidi, numSamples);
 
     // Teclado virtual "SmartKeys Chords": las mismas notas, en su instante (sólo un
     // FIFO lock-free; al exportar fuera de tiempo real no se envía nada).
@@ -909,7 +1007,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             portClockMs += 0.01 * drift;
         }
 
-        feedChordPort (expandedChordMidi, numSamples, portClockMs);
+        feedChordPort (portExpandedMidi, numSamples, portClockMs);
         portClockMs += (double) numSamples * msPerSample;
     }
     else
@@ -962,7 +1060,9 @@ void SmartKeysAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& bu
 
     routedMidi.clear();
     expandedChordMidi.clear();
-    router.releaseAll (0, routedMidi);
+    routeReleaseAll (0);
+    portRoutedMidi.clear();   // el teclado lo apaga requestReleaseAll()
+    portStrum.reset();
     voiceTracker.forceRelease (0);
 
     const int numSamples = buffer.getNumSamples();

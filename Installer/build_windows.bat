@@ -10,7 +10,7 @@ REM       (anade "noinstall" para generar el .exe sin instalarlo)
 REM ============================================================================
 setlocal
 cd /d "%~dp0\.."
-set "VERSION=1.6.0"
+set "VERSION=1.6.1"
 set "SETUP=Installer\Output\SmartKeys-%VERSION%-Windows-Setup.exe"
 
 echo.

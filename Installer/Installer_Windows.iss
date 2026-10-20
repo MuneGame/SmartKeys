@@ -7,7 +7,7 @@
 ;    3) "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Installer\Installer_Windows.iss
 ;       (o simplemente ejecutar Installer\build_windows.bat)
 ;
-;  Resultado: Installer\Output\SmartKeys-1.6.0-Windows-Setup.exe
+;  Resultado: Installer\Output\SmartKeys-1.6.1-Windows-Setup.exe
 ;  - VST3       -> C:\Program Files\Common Files\VST3\SmartKeys.vst3         ({commoncf64}\VST3)
 ;  - Standalone -> C:\Program Files\SmartKeys\SmartKeys.exe                  (opcional)
 ;
@@ -18,7 +18,7 @@
 ; ==============================================================================
 
 #define AppName      "SmartKeys"
-#define AppVersion   "1.6.0"
+#define AppVersion   "1.6.1"
 #define AppPublisher "MIWN"
 #define BuildDir     "..\build\SmartKeys_artefacts\Release"
 #define FlDatabase   "{userdocs}\Image-Line\FL Studio\Presets\Plugin database\Installed"

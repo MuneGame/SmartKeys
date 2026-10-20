@@ -1302,6 +1302,30 @@ static void testChordPort()
         CHECK (lines.size() == before + 1 && lines.back().d1 == 48 && (lines.back().status & 0xF0) == 0x80,
                "al cerrar una instancia, su nota recibe el NoteOff");
 
+        // Dos instancias tocan la misma nota: sale UNA vez y se apaga con la última
+        {
+            ChordPortFeed c, d;
+            port.addFeed (c);
+            port.addFeed (d);
+            const size_t start = readPortFile (file).size();
+            const double t1 = juce::Time::getMillisecondCounterHiRes();
+            c.push ({ t1, 0x90, 72, 100 });
+            d.push ({ t1, 0x90, 72, 100 });
+            std::this_thread::sleep_for (std::chrono::milliseconds (30));
+            const size_t afterOn = readPortFile (file).size();
+            d.push ({ t1 + 30.0, 0x80, 72, 0 });
+            std::this_thread::sleep_for (std::chrono::milliseconds (30));
+            const size_t afterFirstOff = readPortFile (file).size();
+            c.push ({ t1 + 60.0, 0x80, 72, 0 });
+            std::this_thread::sleep_for (std::chrono::milliseconds (30));
+            auto all = readPortFile (file);
+            CHECK (afterOn == start + 1 && afterFirstOff == start + 1, "la misma nota de dos instancias sale una sola vez y sigue sonando mientras una la tenga");
+            CHECK (all.size() == start + 2 && (all.back().status & 0xF0) == 0x80 && all.back().d1 == 72,
+                   "se apaga cuando la suelta la última instancia");
+            port.removeFeed (c);
+            port.removeFeed (d);
+        }
+
         // FIFO lleno (nadie lo vacía): push descarta sin bloquear ni pedir memoria
         int accepted = 0;
         {
@@ -1314,7 +1338,7 @@ static void testChordPort()
 
         port.removeFeed (a);
     }
-    CHECK (readPortFile (file).size() == 8, "en total: 4 NoteOn y sus 4 NoteOff; nada más sale después de cerrar");
+    CHECK (readPortFile (file).size() == 10, "en total: 5 NoteOn y sus 5 NoteOff; nada más sale después de cerrar");
     setEnv ("SMARTKEYS_TEST_CHORD_PORT", nullptr);
     file.deleteFile();
    #endif

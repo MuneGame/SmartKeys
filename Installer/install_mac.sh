@@ -17,7 +17,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="1.6.0"
+VERSION="1.6.1"
 PKG="$ROOT/Installer/Output/SmartKeys-$VERSION-macOS.pkg"
 
 echo "==> [1/4] Comprobando herramientas"
