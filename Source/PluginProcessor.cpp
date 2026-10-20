@@ -526,6 +526,7 @@ void SmartKeysAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     portExpandedMidi.ensureSize (kMidiReserveBytes);
     portExpandedMidi.clear();
     recordingTake = false;
+    hostRecording.store (false);
 
     gainSmoothed.reset (currentSampleRate, 0.03);
     gainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (pMasterGain->load()));
@@ -626,25 +627,54 @@ void SmartKeysAudioProcessor::routeReleaseAll (int pos)
 
 // Grabación en bucle: FL vuelve a tocar en cada vuelta lo que ya grabó en el
 // patrón de SmartKeys; si esos acordes salieran otra vez por el teclado, FL los
-// grabaría encima de los de la vuelta anterior (notas dobles). Una tecla que
-// vuelve a sonar en la misma posición (±1/8 de negra) que en una vuelta
-// ANTERIOR de esta toma no sale por el teclado; lo nuevo sí.
-bool SmartKeysAudioProcessor::isRecordedRepeat (int note, double ppq) noexcept
+// grabaría encima de los de la vuelta anterior (notas dobles). Mientras el DAW
+// graba, una tecla que vuelve a sonar en la misma posición (±1 semicorchea) que en
+// una vuelta ANTERIOR de esta toma no sale por el teclado; lo nuevo sí. Sin grabar
+// no se filtra nada: al tocar en vivo sobre un bucle, cada vuelta sale entera.
+bool SmartKeysAudioProcessor::isLoopRepeat (int note, double ppq) noexcept
+{
+    // Si el bloque cruza el final del bucle, una nota a partir de ese punto ya es de
+    // la vuelta siguiente: su posición real es ppq - longitud del bucle. Entre
+    // loopSeamPpq y loopSeamMaxPpq no se sabe exactamente: se miran las dos. Justo
+    // antes del final también (±1 semicorchea): esa nota está al lado de la primera
+    // del bucle, que FL ya tiene.
+    const bool loopKnown  = loopLengthBeats >= 1.0;
+    const bool maybeNext  = loopKnown && ppq >= loopSeamPpq - kRepeatToleranceBeats;
+    const bool surelyNext = loopKnown && ppq >= loopSeamMaxPpq;
+    const double wrapped  = ppq - loopLengthBeats;
+
+    bool repeat = ! surelyNext && matchesEarlierPass (note, ppq, loopPass);
+    if (! repeat && maybeNext)
+        repeat = matchesEarlierPass (note, wrapped, loopPass + 1);
+
+    if (! repeat)
+    {
+        if (! surelyNext) rememberLoopTrigger (note, ppq, loopPass);
+        if (maybeNext)    rememberLoopTrigger (note, wrapped, loopPass + 1);
+    }
+    return repeat;
+}
+
+bool SmartKeysAudioProcessor::matchesEarlierPass (int note, double ppq, int pass) const noexcept
 {
     const auto n = (size_t) note;
-    for (int i = 0; i < (int) recordedCount[n]; ++i)
+    for (int i = 0; i < (int) loopTriggerCount[n]; ++i)
     {
-        const auto& r = recordedTriggers[n][(size_t) i];
-        if (r.pass < recordingPass && std::abs (r.ppq - ppq) <= kRepeatToleranceBeats)
+        const auto& r = loopTriggers[n][(size_t) i];
+        if (r.pass < pass && std::abs (r.ppq - ppq) <= kRepeatToleranceBeats)
             return true;
     }
-
-    auto& slot = recordedTriggers[n][(size_t) recordedNext[n]];
-    slot.ppq = ppq;
-    slot.pass = recordingPass;
-    recordedNext[n] = (uint8_t) ((recordedNext[n] + 1) % kRecordedPerNote);
-    recordedCount[n] = (uint8_t) juce::jmin (kRecordedPerNote, recordedCount[n] + 1);
     return false;
+}
+
+void SmartKeysAudioProcessor::rememberLoopTrigger (int note, double ppq, int pass) noexcept
+{
+    const auto n = (size_t) note;
+    auto& slot = loopTriggers[n][(size_t) loopTriggerNext[n]];
+    slot.ppq = ppq;
+    slot.pass = pass;
+    loopTriggerNext[n] = (uint8_t) ((loopTriggerNext[n] + 1) % kLoopTriggersPerNote);
+    loopTriggerCount[n] = (uint8_t) juce::jmin (kLoopTriggersPerNote, loopTriggerCount[n] + 1);
 }
 
 void SmartKeysAudioProcessor::drainScreenNotes()
@@ -717,9 +747,9 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     portExpandedMidi.clear();
     portExpandedMidi.ensureSize (kMidiReserveBytes);
 
-    // Transporte del DAW: ¿se está grabando? (posición en negras de este bloque)
-    bool recordingNow = false;
-    double blockPpq = 0.0, ppqPerSample = 0.0;
+    // Transporte del DAW: ¿está grabando? (posición en negras de este bloque)
+    bool recordingNow = false, hostLoop = false;
+    double blockPpq = 0.0, ppqPerSample = 0.0, hostLoopStart = 0.0, hostLoopEnd = 0.0;
     if (auto* transport = getPlayHead())
     {
         if (const auto position = transport->getPosition())
@@ -731,23 +761,65 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                 recordingNow = true;
                 blockPpq = *ppq;
                 ppqPerSample = *bpm / (60.0 * currentSampleRate);
+
+                // Si el DAW dice dónde está su bucle, el final se sabe desde la primera vuelta
+                if (position->getIsLooping())
+                    if (const auto loop = position->getLoopPoints())
+                        if (loop->ppqEnd - loop->ppqStart >= 1.0
+                             && blockPpq >= loop->ppqStart - 0.25 && blockPpq < loop->ppqEnd + 0.25)
+                        {
+                            hostLoop = true;
+                            hostLoopStart = loop->ppqStart;
+                            hostLoopEnd = loop->ppqEnd;
+                        }
             }
         }
     }
 
+    hostRecording.store (recordingNow, std::memory_order_relaxed);   // "· REC" en la ventana
+
     if (recordingNow && ! recordingTake)
     {
-        recordedCount.fill (0);   // toma nueva
-        recordedNext.fill (0);
-        recordingPass = 0;
+        loopTriggerCount.fill (0);   // toma nueva: la primera vuelta sale entera
+        loopTriggerNext.fill (0);
+        loopPass = 0;
+        loopLengthBeats = 0.0;
     }
     else if (recordingNow && blockPpq < lastBlockEndPpq - 0.25)
     {
-        ++recordingPass;          // el bucle volvió atrás: otra vuelta de la misma toma
+        ++loopPass;                  // el patrón volvió a empezar (o el cursor fue hacia atrás)
+
+        // El final del bucle estaba dentro del bloque anterior; vuelta a vuelta se acota
+        const double jump = lastBlockEndPpq - blockPpq;
+        if (loopLengthBeats > 0.0 && std::abs (jump - loopLengthBeats) <= 0.01)
+        {
+            loopSeamPpq    = juce::jmax (loopSeamPpq, lastBlockStartPpq);
+            loopSeamMaxPpq = juce::jmin (loopSeamMaxPpq, lastBlockEndPpq);
+        }
+        else
+        {
+            loopLengthBeats = jump;
+            loopSeamPpq     = lastBlockStartPpq;
+            loopSeamMaxPpq  = lastBlockEndPpq;
+        }
     }
+    else if (recordingNow && loopLengthBeats > 0.0 && blockPpq >= loopSeamMaxPpq)
+    {
+        loopLengthBeats = 0.0;       // siguió más allá: no era un bucle (se movió el cursor)
+    }
+
+    if (hostLoop)
+    {
+        loopLengthBeats = hostLoopEnd - hostLoopStart;
+        loopSeamPpq = loopSeamMaxPpq = hostLoopEnd;
+    }
+
     recordingTake = recordingNow;
     if (recordingNow)
+    {
+        lastBlockStartPpq = blockPpq;
         lastBlockEndPpq = blockPpq + (double) numSamples * ppqPerSample;
+    }
 
     //==========================================================================
     // PASO 1 — ELEGIR DE DÓNDE LLEGA LA VOZ (antes de tocar el buffer)
@@ -932,7 +1004,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                 }
 
                 midiKeyDown[(size_t) note] = true;
-                const bool toPort = ! recordingNow || ! isRecordedRepeat (note, blockPpq + (double) pos * ppqPerSample);
+                const bool toPort = ! recordingNow || ! isLoopRepeat (note, blockPpq + (double) pos * ppqPerSample);
                 routeNoteOn (MidiOutputRouter::Source::Midi, note, (juce::uint8) velocity, pos, toPort);
             }
             else if ((type == 0x80 || type == 0x90) && size >= 3)

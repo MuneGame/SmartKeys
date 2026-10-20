@@ -171,7 +171,7 @@ class ChordPortStatus : public juce::Component,
                         public juce::SettableTooltipClient
 {
 public:
-    enum class State { Hidden, Off, Waiting, Active, Unavailable, Looping };
+    enum class State { Hidden, Off, Waiting, Active, Recording, Unavailable, Looping };
 
     ChordPortStatus();
     void paint (juce::Graphics&) override;

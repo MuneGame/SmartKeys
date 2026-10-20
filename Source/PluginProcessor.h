@@ -144,6 +144,8 @@ public:
     int getChordPortState() const noexcept        { return chordPortState.load(); }
     static juce::String getChordPortName()        { return smartkeys::ChordMidiPort::getDeviceName(); }
     bool isChordPortLooping() const noexcept      { return chordPortLooping.load (std::memory_order_relaxed); }
+    // El DAW avisa a SmartKeys de que está grabando: lo que FL repite en cada vuelta no sale otra vez
+    bool isHostRecording() const noexcept         { return hostRecording.load (std::memory_order_relaxed); }
     void markInUse() noexcept                     { pluginInUse.store (true); }   // la ventana se abrió
 
     // Encendido / apagado (hilo de mensajes; se guarda con el proyecto). Por
@@ -179,9 +181,11 @@ private:
     void routeNoteOff (smartkeys::MidiOutputRouter::Source source, int trigger, int pos);
     void routeReleaseAll (int pos);
 
-    // Grabación en bucle: ¿esta tecla ya salió por el teclado en esta misma posición
-    // musical en una vuelta anterior? (FL está repitiendo lo que grabó)
-    bool isRecordedRepeat (int note, double ppq) noexcept;
+    // Grabación en bucle: ¿esta tecla ya salió por el teclado en esta misma
+    // posición musical en una vuelta anterior? (FL está repitiendo lo que grabó)
+    bool isLoopRepeat (int note, double ppq) noexcept;
+    bool matchesEarlierPass (int note, double ppq, int pass) const noexcept;
+    void rememberLoopTrigger (int note, double ppq, int pass) noexcept;
 
     void updateChordPort();
     void disconnectChordPort();
@@ -216,7 +220,7 @@ private:
     smartkeys::StrumScheduler    strum;
 
     // Teclado "SmartKeys Chords": su propio router y STRUM, con sólo las teclas que
-    // deben salir por él (en una grabación en bucle, lo que FL ya grabó no se repite)
+    // deben salir por él (al grabar en bucle, lo que FL repite de una vuelta anterior no sale)
     smartkeys::MidiOutputRouter  portRouter;
     smartkeys::StrumScheduler    portStrum;
 
@@ -282,15 +286,21 @@ private:
 
     // Grabación en bucle (sólo hilo de audio): dónde (en negras) salió cada tecla
     // por el teclado en esta toma, y en qué vuelta del bucle
-    struct RecordedTrigger { double ppq = 0.0; int pass = 0; };
-    static constexpr int kRecordedPerNote = 64;
-    std::array<std::array<RecordedTrigger, (size_t) kRecordedPerNote>, 128> recordedTriggers {};
-    std::array<uint8_t, 128> recordedCount {}, recordedNext {};
+    struct LoopTrigger { double ppq = 0.0; int pass = 0; };
+    static constexpr int kLoopTriggersPerNote = 64;
+    std::array<std::array<LoopTrigger, (size_t) kLoopTriggersPerNote>, 128> loopTriggers {};
+    std::array<uint8_t, 128> loopTriggerCount {}, loopTriggerNext {};
     bool   recordingTake = false;
-    int    recordingPass = 0;
-    double lastBlockEndPpq = 0.0;
-    static constexpr double kRepeatToleranceBeats = 0.125;
+    int    loopPass = 0;
+    double lastBlockStartPpq = 0.0, lastBlockEndPpq = 0.0;
+    // Final del bucle: si el DAW no corta el bloque justo ahí, la primera nota de la
+    // vuelta siguiente llega en un bloque que empezó antes del final (con una posición
+    // "de más"). Se aprende en cada vuelta (o lo dice el DAW con sus puntos de bucle).
+    double loopLengthBeats = 0.0;                 // 0: todavía no se sabe
+    double loopSeamPpq = 0.0, loopSeamMaxPpq = 0.0;   // el final está en [loopSeamPpq, loopSeamMaxPpq]
+    static constexpr double kRepeatToleranceBeats = 0.25;   // una semicorchea (cubre la cuantización al grabar)
     std::atomic<bool> chordPortLooping { false };
+    std::atomic<bool> hostRecording { false };   // el DAW avisa de que graba (la ventana muestra "· REC")
 
     static constexpr double kLoopEchoWindowMs = 600.0;   // con el bucle confirmado
     static constexpr double kLoopMemoryMs = 10000.0;     // el bucle se da por confirmado 10 s (cada eco lo renueva)

@@ -189,6 +189,8 @@ struct Transport : public AudioPlayHead
     bool playing = false, recording = false;
     double ppq = 0.0, bpm = 120.0, sampleRate = 48000.0;
     double loopBeats = 0.0;   // > 0: el patrón vuelve al principio cada tantas negras (FL en modo patrón)
+    bool reportLoop = false;  // el DAW dice dónde está su bucle (puntos de bucle)
+                              // Ojo: el bloque NO se corta en el final del bucle (se vuelve al principio después)
 
     Optional<PositionInfo> getPosition() const override
     {
@@ -200,6 +202,11 @@ struct Transport : public AudioPlayHead
         info.setIsRecording (recording);
         info.setPpqPosition (ppq);
         info.setTimeInSeconds (ppq * 60.0 / bpm);
+        if (reportLoop && loopBeats > 0.0)
+        {
+            info.setIsLooping (true);
+            info.setLoopPoints (LoopPoints { 0.0, loopBeats });
+        }
         return info;
     }
 };
@@ -1605,48 +1612,98 @@ void testChordPort (const String& path)
 
     std::cout << "\n-- P8. Grabación en bucle: lo que FL repite en cada vuelta no sale otra vez (sin notas dobles)" << std::endl;
     {
-        // FL en modo patrón, grabando: un compás de 4 negras a 120 BPM (2 s) que se repite.
+        // FL en modo patrón: un compás de 4 negras a 120 BPM (2 s) que se repite.
         // Vuelta 1: F#3 en vivo en la negra 1. Vuelta 2: FL repite esa tecla (ya grabada en el
         // patrón de SmartKeys) en la misma negra, y se toca una tecla nueva (A3 en la negra 2,4).
+        const std::vector<UserEvent> twoPasses { { 500.0,  MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                 { 900.0,  MidiMessage::noteOff (1, 54) },
+                                                 { 2500.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                 { 2900.0, MidiMessage::noteOff (1, 54) },
+                                                 { 3200.0, MidiMessage::noteOn (1, 57, (uint8) 100) },
+                                                 { 3500.0, MidiMessage::noteOff (1, 57) } };
+        const std::map<int, int> outBoth { { 53, 2 }, { 57, 3 }, { 60, 3 }, { 64, 1 } };
+        const std::map<int, int> portOnce { { 53, 1 }, { 57, 2 }, { 60, 2 }, { 64, 1 } };
+        auto stopTransport = [&]
+        {
+            host.transport.playing = host.transport.recording = false;
+            runPortScenario (host, *tap, 0.2, {}, false);
+            host.transport.ppq = 0.0;
+        };
+
+        // a) Grabando
         host.transport.bpm = 120.0;
         host.transport.loopBeats = 4.0;
         host.transport.ppq = 0.0;
         host.transport.playing = true;
         host.transport.recording = true;
-        auto sc = runPortScenario (host, *tap, 4.3, { { 500.0,  MidiMessage::noteOn (1, 54, (uint8) 100) },
-                                                      { 900.0,  MidiMessage::noteOff (1, 54) },
-                                                      { 2500.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
-                                                      { 2900.0, MidiMessage::noteOff (1, 54) },
-                                                      { 3200.0, MidiMessage::noteOn (1, 57, (uint8) 100) },
-                                                      { 3500.0, MidiMessage::noteOff (1, 57) } }, false);
+        auto sc = runPortScenario (host, *tap, 4.3, twoPasses, false);
         auto outCounts = countNoteOns (sc.out.midi);
         auto portCounts = countPortNoteOns (sc.port);
         std::cout << "     salida MIDI: " << describeCounts (outCounts) << "   teclado: " << describeCounts (portCounts) << std::endl;
-        check (outCounts == std::map<int, int> { { 53, 2 }, { 57, 3 }, { 60, 3 }, { 64, 1 } },
+        check (outCounts == outBoth,
                "la salida MIDI y el piano tocan las dos vueltas (F, F otra vez y La menor)");
-        check (portCounts == std::map<int, int> { { 53, 1 }, { 57, 2 }, { 60, 2 }, { 64, 1 } } && hangingPortNotes (sc.port) == 0,
+        check (portCounts == portOnce && hangingPortNotes (sc.port) == 0,
                "por el teclado, el acorde que FL repite en la vuelta 2 no sale otra vez; la tecla nueva sí (nada se graba doble)");
 
-        // Sin grabar (sólo reproduciendo), lo que suena en el patrón sí sale: FLEX lo toca en vivo
-        host.transport.recording = false;
-        host.transport.ppq = 0.0;
-        auto play = runPortScenario (host, *tap, 1.2, { { 500.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
-                                                        { 900.0, MidiMessage::noteOff (1, 54) } }, false);
-        check (countPortNoteOns (play.port) == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } },
-               "al reproducir sin grabar, el acorde sale por el teclado");
+        // b) Sin grabar (tocando en vivo sobre el bucle), cada vuelta sale entera por el teclado
+        stopTransport();
+        host.transport.playing = true;
+        auto jam = runPortScenario (host, *tap, 4.3, twoPasses, false);
+        auto jamPort = countPortNoteOns (jam.port);
+        std::cout << "     sin grabar: salida MIDI " << describeCounts (countNoteOns (jam.out.midi))
+                  << "   teclado " << describeCounts (jamPort) << std::endl;
+        check (countNoteOns (jam.out.midi) == outBoth && jamPort == outBoth && hangingPortNotes (jam.port) == 0,
+               "sin grabar (tocando en vivo sobre el bucle), lo que se repite en cada vuelta sale entero por el teclado");
 
-        // Una toma nueva empieza de cero
+        // c) En una toma nueva, la primera vuelta sale entera
+        stopTransport();
+        host.transport.playing = true;
         host.transport.recording = true;
-        host.transport.ppq = 0.0;
         auto take2 = runPortScenario (host, *tap, 1.2, { { 500.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
                                                          { 900.0, MidiMessage::noteOff (1, 54) } }, false);
         check (countPortNoteOns (take2.port) == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } },
                "en una toma nueva, la primera vuelta vuelve a salir entera");
 
-        host.transport.playing = host.transport.recording = false;
+        // d) Un acorde en la negra 1 (el primero del compás): la vuelta siguiente llega en
+        //    un bloque que empezó antes del final del bucle (este "DAW" no corta el bloque
+        //    ahí). Sin puntos de bucle, SmartKeys aprende el final en la primera vuelta.
+        const std::vector<UserEvent> downbeats { {    0.0, MidiMessage::noteOn (1, 54, (uint8) 100) }, {  400.0, MidiMessage::noteOff (1, 54) },
+                                                 { 2000.0, MidiMessage::noteOn (1, 54, (uint8) 100) }, { 2400.0, MidiMessage::noteOff (1, 54) },
+                                                 { 4000.0, MidiMessage::noteOn (1, 54, (uint8) 100) }, { 4400.0, MidiMessage::noteOff (1, 54) },
+                                                 { 6000.0, MidiMessage::noteOn (1, 54, (uint8) 100) }, { 6400.0, MidiMessage::noteOff (1, 54) } };
+        stopTransport();
+        host.transport.playing = host.transport.recording = true;
+        auto seam = runPortScenario (host, *tap, 6.6, downbeats, false);
+        const auto seamPort = countPortNoteOns (seam.port);
+        std::cout << "     negra 1, 4 vueltas, sin puntos de bucle: salida MIDI " << describeCounts (countNoteOns (seam.out.midi))
+                  << "   teclado " << describeCounts (seamPort) << std::endl;
+        check (countNoteOns (seam.out.midi) == std::map<int, int> { { 53, 4 }, { 57, 4 }, { 60, 4 } }
+                 && seamPort.size() == 3 && seamPort.at (53) <= 2 && seamPort.at (57) == seamPort.at (53) && seamPort.at (60) == seamPort.at (53)
+                 && hangingPortNotes (seam.port) == 0,
+               "acorde en la negra 1: tras aprender el final del bucle (1.ª vuelta), las vueltas 3 y 4 no lo repiten aunque el bloque cruce el final");
+
+        // e) Con los puntos de bucle del DAW, ni siquiera la primera vuelta lo repite
+        stopTransport();
+        host.transport.reportLoop = true;
+        host.transport.playing = host.transport.recording = true;
+        auto seamLoop = runPortScenario (host, *tap, 4.6, { downbeats.begin(), downbeats.begin() + 6 }, false);
+        const auto seamLoopPort = countPortNoteOns (seamLoop.port);
+        std::cout << "     negra 1, 3 vueltas, con puntos de bucle: teclado " << describeCounts (seamLoopPort) << std::endl;
+        check (seamLoopPort == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } } && hangingPortNotes (seamLoop.port) == 0,
+               "con los puntos de bucle del DAW, el acorde de la negra 1 sale una sola vez en todas las vueltas");
+        host.transport.reportLoop = false;
+
+        // f) Sin transporte (tocando en vivo con FL parado), cada tecla sale siempre
+        stopTransport();
+        auto live = runPortScenario (host, *tap, 1.2, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                        { 300.0, MidiMessage::noteOff (1, 54) },
+                                                        { 600.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                        { 800.0, MidiMessage::noteOff (1, 54) } }, false);
+        check (countPortNoteOns (live.port) == std::map<int, int> { { 53, 2 }, { 57, 2 }, { 60, 2 } },
+               "con FL parado, repetir una tecla la manda otra vez por el teclado");
+
         host.transport.loopBeats = 0.0;
-        host.transport.ppq = 0.0;
-        runPortScenario (host, *tap, 0.2, {}, false);
+        stopTransport();
     }
 
     std::cout << "\n-- P9. Dos SmartKeys a la vez (dos canales seleccionados en FL): cada nota sale una sola vez" << std::endl;

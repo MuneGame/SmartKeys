@@ -957,6 +957,11 @@ void ChordPortStatus::setState (State newState, const juce::String& deviceName)
                         + u8 ("3. Deja SmartKeys seleccionado, pulsa grabar y toca: cada tecla entra como el acorde completo.")
                         + clickOff);
             break;
+        case State::Recording:
+            setTooltip (u8 ("FL Studio está grabando y se lo dice a SmartKeys: en cada vuelta del bucle, lo que FL "
+                            "vuelve a tocar del patrón de SmartKeys no sale otra vez por ") + quoted
+                        + u8 (", así que no se graba doble. Lo nuevo que toques, sí.") + clickOff);
+            break;
         case State::Waiting:
             setTooltip (u8 ("El teclado MIDI virtual ") + quoted
                         + u8 (" aparece en cuanto el DAW pone a sonar SmartKeys (o al abrir esta ventana).") + clickOff);
@@ -997,22 +1002,26 @@ void ChordPortStatus::paint (juce::Graphics& g)
     if (state == State::Unavailable)  suffix = u8 (" · en uso");
     if (state == State::Looping)      suffix = u8 (" · eco");
     if (state == State::Off)          suffix = u8 (" · OFF");
+    if (state == State::Recording)    suffix = u8 (" · REC");
+    const bool on = state == State::Active || state == State::Recording;
 
     const float nameW = textWidth (main, name + suffix);
     const float tagW = textWidth (small, "MIDI");
     float x = r.getRight() - nameW;
 
     g.setFont (main);
-    auto textColour = problem ? Colours::warning : (state == State::Active ? Colours::charcoal : Colours::label);
+    auto textColour = problem ? Colours::warning
+                    : state == State::Recording ? Colours::accent
+                    : (on ? Colours::charcoal : Colours::label);
     if (isMouseOver())
-        textColour = problem ? textColour.darker (0.3f) : Colours::accent;
+        textColour = problem || state == State::Recording ? textColour.darker (0.3f) : Colours::accent;
     g.setColour (textColour);
     g.drawText (name + suffix, juce::Rectangle<float> (x, r.getY(), nameW + 2.0f, r.getHeight()), juce::Justification::centredLeft, false);
 
     x -= 9.0f;
     const float d = 5.0f;
     const juce::Rectangle<float> dot (x, r.getCentreY() - d * 0.5f, d, d);
-    if (state == State::Active)
+    if (on)
     {
         g.setColour (Colours::accent.withAlpha (0.25f));
         g.fillEllipse (dot.expanded (1.5f));
@@ -1462,7 +1471,9 @@ void SmartKeysAudioProcessorEditor::timerCallback()
         {
             case ChordPortState::Off:          state = PortState::Off; break;
             case ChordPortState::Waiting:      state = PortState::Waiting; break;
-            case ChordPortState::Active:       state = audioProcessor.isChordPortLooping() ? PortState::Looping : PortState::Active; break;
+            case ChordPortState::Active:       state = audioProcessor.isChordPortLooping() ? PortState::Looping
+                                                      : audioProcessor.isHostRecording()     ? PortState::Recording
+                                                                                             : PortState::Active; break;
             case ChordPortState::Unavailable:  state = PortState::Unavailable; break;
             default:                           break;
         }
