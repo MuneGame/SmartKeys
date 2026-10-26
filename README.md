@@ -380,7 +380,7 @@ SmartKeys/
 
 ## Verificación realizada
 
-- **Teclado "SmartKeys Chords" en una Mac de verdad** (GitHub Actions, Mac Intel con macOS 15, CoreMIDI real; 39 comprobaciones). El VST3 compilado crea el teclado y la prueba lo abre como lo hace FL Studio, como una entrada MIDI:
+- **Teclado "SmartKeys Chords" en una Mac de verdad** (GitHub Actions, Mac Intel con macOS 15, CoreMIDI real; 47 comprobaciones). El VST3 compilado crea el teclado y la prueba lo abre como lo hace FL Studio, como una entrada MIDI:
   - F#3 en Fa mayor sale como **F3 A3 C4 a la vez** (las 3 notas en 0,02 ms), 10,4 ms después de la tecla (un bloque de audio).
   - Con STRUM 41 ms DESC salen C4, A3 a +47,3 ms y F3 a +107,2 ms (esperado: +47,1 y +106,6), igual que en la salida MIDI; también con el búfer partido en trozos.
   - Cada nota sale de media menos de 1 ms después de su hora (en una tanda, con la Mac virtual de GitHub atascada, alguna hasta 24 ms).
@@ -388,6 +388,7 @@ SmartKeys/
   - Con el teclado devuelto al propio SmartKeys (bucle) no hay acordes de más ni notas colgadas.
   - **Grabación en bucle** (un compás que se repite: en la vuelta 1 tocas Fa mayor; en la vuelta 2, FL lo repite y tú añades La menor): la salida MIDI toca las dos vueltas ({F3×2 A3×3 C4×3 E4×1}) y por el teclado sólo sale lo nuevo ({F3×1 A3×2 C4×2 E4×1}), así que FL no graba Fa mayor dos veces. Sin grabar, las dos vueltas salen enteras; en una toma nueva, la primera vuelta sale entera. El acorde de la negra 1 tampoco se repite aunque el bloque de audio cruce el final del bucle.
   - **Dos SmartKeys** tocando la misma tecla: el teclado manda F3 A3 C4 una sola vez y los apaga cuando los suelta la última.
+  - **Acordes al Piano Roll de SmartKeys**, con el teclado devuelto a SmartKeys como hace FL: cantar La3 manda La menor una sola vez por el teclado y su eco no vuelve a sonar; las notas del Piano Roll (A3 C4 E4) suenan tal cual y no salen por el teclado; grabando en bucle, el acorde sale una sola vez aunque las dos vueltas suenen.
   - Bypass, exportar, apagarlo y cerrar el plugin: los NoteOff salen y el teclado desaparece del sistema.
   - Fuera de FL Studio empieza apagado.
   - Todo con `NSZombieEnabled`: un mensaje a un objeto ya liberado (el cierre de FL Studio de la 1.6.0) hace fallar la prueba en el acto.
@@ -413,5 +414,5 @@ SmartKeys/
   - **Concurrencia:** un hilo de audio llama sin parar al `processBlock` mientras el hilo de mensajes guarda y carga el estado, cambia parámetros, enciende y apaga `MIC VOICE` (el micrófono se abre y se cierra) y enciende y apaga el teclado *SmartKeys Chords* (se crea y se destruye con el audio corriendo).
 - **AddressSanitizer + UBSan** y **ThreadSanitizer:**
   - La prueba de integración completa, con el hilo del micrófono simulado, el de audio, el de mensajes y el del teclado *SmartKeys Chords* a la vez (también con los ecos del bucle y 20 s de concurrencia encendiendo y apagando el teclado): **0 errores de memoria y 0 carreras de datos**.
-  - 1361 acciones al azar en la interfaz durante 5 minutos con el audio corriendo y el micrófono simulado: modos, escalas, barra ESCALA, teclado en pantalla y de la PC, STRUM, ASC/DESC, GAIN, GATE, `MIC VOICE` y el teclado *SmartKeys Chords* encendidos y apagados, y redimensionar: **0 errores**.
+  - 1322 acciones al azar en la interfaz durante 5 minutos con el audio corriendo y el micrófono simulado: modos, escalas, barra ESCALA, teclado en pantalla y de la PC, STRUM, ASC/DESC, GAIN, GATE, `MIC VOICE` encendido y apagado, el menú del teclado *SmartKeys Chords* (acordes al Piano Roll de SmartKeys, a otro instrumento, apagado), y redimensionar: **0 errores**.
 - **Limpieza de versiones anteriores:** en cada compilación de GitHub se instala una versión vieja falsa (también **SmartKeys FX**, en `/Library` y `~/Library`, y en `Common Files\VST3`) en un Mac Intel y en un PC; el instalador nuevo la borra, deja intactos los demás plugins y no vuelve a instalar SmartKeys FX. Se comprueba que el plugin queda registrado como **MIWN** (`com.miwn.smartkeys`, `MIWN: SmartKeys`, `CompanyName = MIWN`) y con `NSMicrophoneUsageDescription`, y `auval` confirma que SmartKeys FX ya no existe.
