@@ -35,7 +35,7 @@ permissions:
   contents: write
 
 env:
-  SK_VERSION: "1.6.2"
+  SK_VERSION: "1.7.0"
 
 jobs:
   macos:

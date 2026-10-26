@@ -20,6 +20,13 @@
     Roll al grabar. Si el DAW devuelve ese teclado al propio SmartKeys, el eco
     se reconoce y se ignora.
 
+    ACORDES AL PIANO ROLL (1.7): FL graba en el Piano Roll de SmartKeys el
+    acorde completo que le llega por "SmartKeys Chords", no la tecla. Los
+    acordes salen de las teclas de SmartKeys (pantalla y teclado de la Mac con
+    su ventana delante) y de la voz, que FL no graba; lo que llega del DAW (el
+    Piano Roll al reproducir) suena tal cual: ni se vuelve a convertir en
+    acorde ni sale otra vez por el teclado, así que nunca se graba doble.
+
     El hilo de audio sólo usa memoria fija y atómicos, y nunca llama a la
     interfaz ni al hilo de mensajes.
 
@@ -155,6 +162,16 @@ public:
     void setChordPortEnabled (bool shouldBeEnabled);
     static bool isChordPortEnabledByDefault (juce::AudioProcessor::WrapperType);
 
+    // "ACORDES AL PIANO ROLL" (hilo de mensajes; se guarda con el proyecto; enciende el teclado)
+    bool isPianoRollChords() const noexcept       { return pianoRollChords.load(); }
+    void setPianoRollChords (bool shouldBeOn);
+    // En la app no hay Piano Roll (SMARTKEYS_TEST_PIANO_ROLL=1 lo permite para las capturas de prueba)
+    bool canUsePianoRollChords() const noexcept   { return wrapperType != wrapperType_Standalone || testPianoRollInApp; }
+    // Lo que sale por el teclado no vuelve: FL no lo está recibiendo (en ese modo debería)
+    bool isChordPortNotReturning() const noexcept { return chordPortNoLoop.load (std::memory_order_relaxed); }
+    // Cuenta las notas que llegan del DAW con el transporte parado en ese modo (se toca con el teclado de FL)
+    uint32_t getDawLiveNoteCount() const noexcept { return dawLiveNotes.load (std::memory_order_relaxed); }
+
     // Tamaño de la ventana (se guarda con el proyecto)
     float getEditorScale() const noexcept         { return editorScale.load(); }
     void  setEditorScale (float s) noexcept       { editorScale.store (juce::jlimit (0.6f, 2.0f, s)); }
@@ -186,6 +203,11 @@ private:
     bool isLoopRepeat (int note, double ppq) noexcept;
     bool matchesEarlierPass (int note, double ppq, int pass) const noexcept;
     void rememberLoopTrigger (int note, double ppq, int pass) noexcept;
+
+    // ACORDES AL PIANO ROLL: notas del DAW que suenan tal cual (piano + salida MIDI)
+    void playPlainNoteOn (int note, int velocity, int pos) noexcept;
+    void playPlainNoteOff (int note, int pos) noexcept;
+    void releasePlainNotes (int pos, juce::MidiBuffer& out) noexcept;
 
     void updateChordPort();
     void disconnectChordPort();
@@ -258,6 +280,7 @@ private:
     juce::MidiBuffer routedMidi;                  // acordes completos (antes del STRUM)
     juce::MidiBuffer expandedChordMidi;           // salida final (con STRUM)
     juce::MidiBuffer portRoutedMidi, portExpandedMidi;   // lo mismo para el teclado virtual
+    juce::MidiBuffer plainMidi;                   // notas del DAW tal cual (ACORDES AL PIANO ROLL)
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> gainSmoothed;
 
     static constexpr size_t kMidiReserveBytes = 16384;
@@ -301,6 +324,14 @@ private:
     static constexpr double kRepeatToleranceBeats = 0.25;   // una semicorchea (cubre la cuantización al grabar)
     std::atomic<bool> chordPortLooping { false };
     std::atomic<bool> hostRecording { false };   // el DAW avisa de que graba (la ventana muestra "· REC")
+
+    // ACORDES AL PIANO ROLL
+    std::atomic<bool> pianoRollChords { false };
+    std::atomic<bool> chordPortNoLoop { false };
+    std::atomic<uint32_t> dawLiveNotes { 0 };
+    bool appliedPianoRollChords = false;          // sólo hilo de audio: al cambiar de modo se suelta todo
+    const bool testPianoRollInApp = juce::SystemStats::getEnvironmentVariable ("SMARTKEYS_TEST_PIANO_ROLL", {}) == "1";
+    std::array<uint8_t, 128> plainOnCount {};     // notas del DAW que suenan tal cual
 
     static constexpr double kLoopEchoWindowMs = 600.0;   // con el bucle confirmado
     static constexpr double kLoopMemoryMs = 10000.0;     // el bucle se da por confirmado 10 s (cada eco lo renueva)
