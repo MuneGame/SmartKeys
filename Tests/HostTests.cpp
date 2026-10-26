@@ -1135,6 +1135,13 @@ struct UserEvent
     MidiMessage msg;
 };
 
+// Voz por la entrada del plugin (sidechain) durante [fromMs, toMs) del escenario
+struct InputTone
+{
+    double fromMs = 0.0, toMs = 0.0, hz = 0.0;
+    float amplitude = 0.0f;
+};
+
 struct PortScenario
 {
     BlockResult out;                 // salida MIDI del plugin (marcas en muestras, desde el inicio)
@@ -1183,7 +1190,8 @@ private:
 // 'loopback', todo lo que sale por el teclado vuelve a entrar por la entrada MIDI
 // del plugin en el bloque siguiente, como en FL Studio con el teclado devuelto.
 PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vector<UserEvent> user, bool loopback,
-                              int subBlocks = 1, Host* second = nullptr, std::vector<UserEvent> secondUser = {})
+                              int subBlocks = 1, Host* second = nullptr, std::vector<UserEvent> secondUser = {},
+                              InputTone tone = {})
 {
     std::stable_sort (user.begin(), user.end(), [] (const UserEvent& a, const UserEvent& b) { return a.atMs < b.atMs; });
     std::stable_sort (secondUser.begin(), secondUser.end(), [] (const UserEvent& a, const UserEvent& b) { return a.atMs < b.atMs; });
@@ -1235,7 +1243,14 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
                 second->runAt (ev2);
             }
 
-            if (subBlocks <= 1)
+            const double blockFromMs = (double) k * blockMs;
+            if (tone.hz > 0.0 && blockFromMs >= tone.fromMs && blockFromMs < tone.toMs)
+            {
+                auto r = host.runSized (Host::blockSize, ev, tone.hz, tone.amplitude);   // se canta en este bloque
+                sc.out.midi.insert (sc.out.midi.end(), r.midi.begin(), r.midi.end());
+                sc.out.outputRms = jmax (sc.out.outputRms, r.outputRms);
+            }
+            else if (subBlocks <= 1)
             {
                 auto r = host.runAt (ev);
                 sc.out.midi.insert (sc.out.midi.end(), r.midi.begin(), r.midi.end());
@@ -1747,6 +1762,89 @@ void testChordPort (const String& path)
         {
             check (false, "cargar una segunda instancia");
         }
+    }
+
+    std::cout << "\n-- P10. ACORDES AL PIANO ROLL: FL graba en el Piano Roll de SmartKeys el acorde completo, no la tecla" << std::endl;
+    {
+        // Como en FL: "SmartKeys Chords" activado en MIDI Settings y SmartKeys seleccionado,
+        // así que todo lo que sale por el teclado vuelve a SmartKeys (loopback) y FL lo graba ahí.
+        auto setPianoRoll = [&host] (bool on)
+        {
+            if (auto xml = host.getPluginStateXml())
+            {
+                xml->setAttribute ("pianoRollChords", on ? 1 : 0);
+                host.setPluginStateXml (*xml);
+            }
+        };
+        setPianoRoll (true);
+        {
+            auto state = host.getPluginStateXml();
+            check (state != nullptr && state->getIntAttribute ("pianoRollChords", 0) == 1 && state->getIntAttribute ("chordKeyboard", 0) == 1,
+                   "el modo se guarda con el proyecto (y deja el teclado encendido)");
+        }
+        host.setChoice ("Mic Gate", 0);
+        host.setBool ("Mic Voice Controller", true);
+        runPortScenario (host, *tap, 0.4, {}, true);
+
+        // a) Se toca en SmartKeys (aquí, con la voz: FL no graba esa entrada)
+        const InputTone la3 { 100.0, 700.0, 220.0, 0.3f };
+        auto sing = runPortScenario (host, *tap, 1.3, {}, true, 1, nullptr, {}, la3);
+        const auto singOut = countNoteOns (sing.out.midi), singPort = countPortNoteOns (sing.port);
+        std::cout << "     voz La3: salida MIDI " << describeCounts (singOut) << "   teclado " << describeCounts (singPort)
+                  << "   ecos devueltos: " << sing.echoes << std::endl;
+        check (singPort == std::map<int, int> { { 57, 1 }, { 60, 1 }, { 64, 1 } } && hangingPortNotes (sing.port) == 0,
+               "el acorde completo (La menor) sale una vez por el teclado: es lo que FL graba en el Piano Roll de SmartKeys");
+        check (sing.echoes >= 6 && singOut == std::map<int, int> { { 57, 1 }, { 60, 1 }, { 64, 1 } } && hangingNotes (sing.out.midi) == 0,
+               "el acorde vuelve de FL (eco) y no suena otra vez: el piano y la salida MIDI lo tocan una sola vez");
+
+        // b) Al reproducir, el Piano Roll de SmartKeys le manda el acorde grabado
+        auto play = runPortScenario (host, *tap, 0.8, { { 100.0, MidiMessage::noteOn (1, 57, (uint8) 95) },
+                                                        { 100.0, MidiMessage::noteOn (1, 60, (uint8) 80) },
+                                                        { 100.0, MidiMessage::noteOn (1, 64, (uint8) 90) },
+                                                        { 500.0, MidiMessage::noteOff (1, 57) },
+                                                        { 500.0, MidiMessage::noteOff (1, 60) },
+                                                        { 500.0, MidiMessage::noteOff (1, 64) } }, true);
+        std::cout << "     Piano Roll con La menor: salida MIDI " << describeCounts (countNoteOns (play.out.midi))
+                  << "   teclado " << describeCounts (countPortNoteOns (play.port)) << std::endl;
+        check (countNoteOns (play.out.midi) == std::map<int, int> { { 57, 1 }, { 60, 1 }, { 64, 1 } } && hangingNotes (play.out.midi) == 0,
+               "al reproducir, las notas del Piano Roll suenan tal cual (no se convierte cada una en otro acorde)");
+        check (play.port.empty(), "y no salen otra vez por el teclado: nada se graba doble");
+
+        // c) Una tecla que llega del DAW (el teclado de FL, que FL ya graba): suena tal cual
+        auto key = runPortScenario (host, *tap, 0.6, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                       { 400.0, MidiMessage::noteOff (1, 54) } }, true);
+        check (countNoteOns (key.out.midi) == std::map<int, int> { { 54, 1 } } && key.port.empty() && hangingNotes (key.out.midi) == 0,
+               "una tecla que llega del DAW suena tal cual, sin acorde, y no sale por el teclado");
+
+        // d) Grabando en bucle: vuelta 1 se canta; vuelta 2, FL repite lo que grabó
+        host.transport.bpm = 120.0;
+        host.transport.loopBeats = 4.0;
+        host.transport.ppq = 0.0;
+        host.transport.playing = host.transport.recording = true;
+        auto loop = runPortScenario (host, *tap, 4.3, { { 2150.0, MidiMessage::noteOn (1, 57, (uint8) 95) },
+                                                        { 2150.0, MidiMessage::noteOn (1, 60, (uint8) 80) },
+                                                        { 2150.0, MidiMessage::noteOn (1, 64, (uint8) 90) },
+                                                        { 2700.0, MidiMessage::noteOff (1, 57) },
+                                                        { 2700.0, MidiMessage::noteOff (1, 60) },
+                                                        { 2700.0, MidiMessage::noteOff (1, 64) } }, true, 1, nullptr, {}, la3);
+        host.transport.playing = host.transport.recording = false;
+        host.transport.loopBeats = 0.0;
+        host.transport.ppq = 0.0;
+        std::cout << "     grabando en bucle: salida MIDI " << describeCounts (countNoteOns (loop.out.midi))
+                  << "   teclado " << describeCounts (countPortNoteOns (loop.port)) << std::endl;
+        check (countPortNoteOns (loop.port) == std::map<int, int> { { 57, 1 }, { 60, 1 }, { 64, 1 } }
+                 && countNoteOns (loop.out.midi) == std::map<int, int> { { 57, 2 }, { 60, 2 }, { 64, 2 } } && hangingNotes (loop.out.midi) == 0,
+               "grabando en bucle, las dos vueltas suenan y el acorde sale una sola vez por el teclado: queda grabado una vez");
+
+        // e) Modo apagado: las teclas del DAW vuelven a ser acordes
+        host.setBool ("Mic Voice Controller", false);
+        setPianoRoll (false);
+        auto normal = runPortScenario (host, *tap, 0.6, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                          { 400.0, MidiMessage::noteOff (1, 54) } }, false);
+        check (countNoteOns (normal.out.midi) == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } }
+                 && countPortNoteOns (normal.port) == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } },
+               "con el modo apagado, una tecla del DAW vuelve a ser el acorde completo (también por el teclado)");
+        runPortScenario (host, *tap, 0.3, {}, false);
     }
 
     std::cout << "\n-- P7. Bypass, exportar y cerrar el plugin con un acorde sonando" << std::endl;

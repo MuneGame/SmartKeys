@@ -125,6 +125,7 @@ SmartKeysAudioProcessor::SmartKeysAudioProcessor()
     expandedChordMidi.ensureSize (kMidiReserveBytes);
     portRoutedMidi.ensureSize (kMidiReserveBytes);
     portExpandedMidi.ensureSize (kMidiReserveBytes);
+    plainMidi.ensureSize (kMidiReserveBytes);
 
     chordPortEnabled.store (isChordPortEnabledByDefault (wrapperType));
 
@@ -186,10 +187,23 @@ bool SmartKeysAudioProcessor::isChordPortEnabledByDefault (juce::AudioProcessor:
 
 void SmartKeysAudioProcessor::setChordPortEnabled (bool shouldBeEnabled)
 {
+    if (! shouldBeEnabled)
+        pianoRollChords.store (false);   // sin teclado no hay acordes que grabar
+
     if (chordPortEnabled.exchange (shouldBeEnabled) == shouldBeEnabled)
         return;
 
     updateChordPort();   // conecta, o apaga lo que sonaba y suelta el teclado
+}
+
+// ACORDES AL PIANO ROLL: FL graba el acorde que vuelve por "SmartKeys Chords" en el
+// Piano Roll de SmartKeys (necesita el teclado encendido)
+void SmartKeysAudioProcessor::setPianoRollChords (bool shouldBeOn)
+{
+    shouldBeOn = shouldBeOn && canUsePianoRollChords();
+    if (shouldBeOn)
+        setChordPortEnabled (true);
+    pianoRollChords.store (shouldBeOn);
 }
 
 void SmartKeysAudioProcessor::updateChordPort()
@@ -201,6 +215,7 @@ void SmartKeysAudioProcessor::updateChordPort()
             disconnectChordPort();
         chordPortState.store (ChordPortState::Off);
         chordPortLooping.store (false, std::memory_order_relaxed);
+        chordPortNoLoop.store (false, std::memory_order_relaxed);
         return;
     }
 
@@ -259,6 +274,7 @@ void SmartKeysAudioProcessor::resetEchoState() noexcept
     echoedStreak = unechoedStreak = 0;
     loopConfirmedUntilMs = noLoopUntilMs = -1.0e12;
     chordPortLooping.store (false, std::memory_order_relaxed);
+    chordPortNoLoop.store (false, std::memory_order_relaxed);
     portClockValid = false;
 }
 
@@ -374,6 +390,7 @@ void SmartKeysAudioProcessor::updateEchoEvidence (double nowMs) noexcept
 
     const bool looping = nowMs < loopConfirmedUntilMs;
     chordPortLooping.store (looping, std::memory_order_relaxed);
+    chordPortNoLoop.store (nowMs < noLoopUntilMs, std::memory_order_relaxed);
 
     if (! looping)
         return;
@@ -527,6 +544,10 @@ void SmartKeysAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     portExpandedMidi.clear();
     recordingTake = false;
     hostRecording.store (false);
+    plainMidi.ensureSize (kMidiReserveBytes);
+    plainMidi.clear();
+    plainOnCount.fill (0);
+    appliedPianoRollChords = pianoRollChords.load();
 
     gainSmoothed.reset (currentSampleRate, 0.03);
     gainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (pMasterGain->load()));
@@ -677,6 +698,42 @@ void SmartKeysAudioProcessor::rememberLoopTrigger (int note, double ppq, int pas
     loopTriggerCount[n] = (uint8_t) juce::jmin (kLoopTriggersPerNote, loopTriggerCount[n] + 1);
 }
 
+//==============================================================================
+// ACORDES AL PIANO ROLL: lo que llega del DAW (el Piano Roll al reproducir, con los
+// acordes que FL grabó) suena tal cual por el piano y la salida MIDI. Nunca pasa por
+// el router ni por el teclado virtual: no se convierte otra vez en acorde ni se graba doble.
+void SmartKeysAudioProcessor::playPlainNoteOn (int note, int velocity, int pos) noexcept
+{
+    auto& count = plainOnCount[(size_t) note];
+    if (count < 255)
+        ++count;
+    const juce::uint8 msg[3] = { (juce::uint8) (0x90 | (kMidiChannel - 1)), (juce::uint8) note,
+                                 (juce::uint8) juce::jlimit (1, 127, velocity) };
+    plainMidi.addEvent (msg, 3, pos);
+}
+
+void SmartKeysAudioProcessor::playPlainNoteOff (int note, int pos) noexcept
+{
+    auto& count = plainOnCount[(size_t) note];
+    if (count == 0)
+        return;   // nada que apagar (p. ej. el NoteOff de un eco)
+    --count;
+    const juce::uint8 msg[3] = { (juce::uint8) (0x80 | (kMidiChannel - 1)), (juce::uint8) note, 0 };
+    plainMidi.addEvent (msg, 3, pos);
+}
+
+void SmartKeysAudioProcessor::releasePlainNotes (int pos, juce::MidiBuffer& out) noexcept
+{
+    for (int n = 0; n < 128; ++n)
+    {
+        if (plainOnCount[(size_t) n] == 0)
+            continue;
+        plainOnCount[(size_t) n] = 0;
+        const juce::uint8 msg[3] = { (juce::uint8) (0x80 | (kMidiChannel - 1)), (juce::uint8) n, 0 };
+        out.addEvent (msg, 3, pos);
+    }
+}
+
 void SmartKeysAudioProcessor::drainScreenNotes()
 {
     const int ready = screenFifo.getNumReady();
@@ -746,9 +803,23 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     portRoutedMidi.ensureSize (kMidiReserveBytes);
     portExpandedMidi.clear();
     portExpandedMidi.ensureSize (kMidiReserveBytes);
+    plainMidi.clear();
+    plainMidi.ensureSize (kMidiReserveBytes);
+
+    // ACORDES AL PIANO ROLL: al cambiar de modo se suelta todo lo que sonaba (las
+    // teclas que se convirtieron en acorde y las notas que sonaban tal cual)
+    const bool pianoRollMode = pianoRollChords.load (std::memory_order_relaxed);
+    if (pianoRollMode != appliedPianoRollChords)
+    {
+        appliedPianoRollChords = pianoRollMode;
+        routeReleaseAll (0);
+        releasePlainNotes (0, plainMidi);
+        midiKeyDown.fill (false);
+        suspectTrigger.fill (false);
+    }
 
     // Transporte del DAW: ¿está grabando? (posición en negras de este bloque)
-    bool recordingNow = false, hostLoop = false;
+    bool recordingNow = false, hostLoop = false, transportPlaying = false;
     double blockPpq = 0.0, ppqPerSample = 0.0, hostLoopStart = 0.0, hostLoopEnd = 0.0;
     if (auto* transport = getPlayHead())
     {
@@ -756,6 +827,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         {
             const auto ppq = position->getPpqPosition();
             const auto bpm = position->getBpm();
+            transportPlaying = position->getIsPlaying();
             if (position->getIsPlaying() && position->getIsRecording() && ppq.hasValue() && bpm.hasValue() && *bpm > 0.0)
             {
                 recordingNow = true;
@@ -992,7 +1064,24 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             const int note = size >= 2 ? (data[1] & 0x7F) : 0;
             const int velocity = size >= 3 ? (data[2] & 0x7F) : 0;
 
-            if (type == 0x90 && size >= 3 && velocity > 0)
+            if (type == 0x90 && size >= 3 && velocity > 0 && pianoRollMode)
+            {
+                // ACORDES AL PIANO ROLL: el eco del teclado (FL lo devuelve a propósito
+                // para grabarlo aquí) ya sonó; lo demás es el Piano Roll y suena tal cual
+                const double arrivalMs = blockStartMs + (double) pos * msPerSample;
+                if (portActive && isPortEchoCandidate (note, arrivalMs))
+                {
+                    ++echoOnMatched[(size_t) note];   // un envío, un eco
+                    if (echoSuppressed[(size_t) note] < 255)
+                        ++echoSuppressed[(size_t) note];
+                    continue;
+                }
+
+                if (! transportPlaying)
+                    dawLiveNotes.fetch_add (1, std::memory_order_relaxed);   // se toca con el teclado de FL
+                playPlainNoteOn (note, velocity, pos);
+            }
+            else if (type == 0x90 && size >= 3 && velocity > 0)
             {
                 const double arrivalMs = blockStartMs + (double) pos * msPerSample;
                 if (portActive && isPortEchoNoteOn (note, arrivalMs))
@@ -1016,6 +1105,12 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                     continue;
                 }
 
+                if (plainOnCount[(size_t) note] > 0 || pianoRollMode)
+                {
+                    playPlainNoteOff (note, pos);
+                    continue;
+                }
+
                 midiKeyDown[(size_t) note] = false;
                 suspectTrigger[(size_t) note] = false;
                 routeNoteOff (MidiOutputRouter::Source::Midi, note, pos);
@@ -1026,6 +1121,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                 if (type == 0xB0 && (note == 120 || note == 123))
                 {
                     routeReleaseAll (pos);   // All Sound Off / All Notes Off del DAW
+                    releasePlainNotes (pos, plainMidi);
                     midiKeyDown.fill (false);
                     suspectTrigger.fill (false);
                 }
@@ -1058,6 +1154,10 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     //==========================================================================
     strum.process (routedMidi, expandedChordMidi, numSamples);
     portStrum.process (portRoutedMidi, portExpandedMidi, numSamples);
+
+    // Las notas que suenan tal cual: piano y salida MIDI, nunca el teclado virtual
+    if (! plainMidi.isEmpty())
+        expandedChordMidi.addEvents (plainMidi, 0, numSamples, 0);
 
     // Teclado virtual "SmartKeys Chords": las mismas notas, en su instante (sólo un
     // FIFO lock-free; al exportar fuera de tiempo real no se envía nada).
@@ -1113,6 +1213,9 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     // Visualizador: sólo las notas que ya suenan (con STRUM se encienden una a una)
     uint64_t lo = 0, hi = 0;
     strum.getSoundingBitmask (lo, hi);
+    for (int n = 0; n < 128; ++n)
+        if (plainOnCount[(size_t) n] > 0)
+            (n < 64 ? lo : hi) |= (uint64_t) 1 << (n & 63);
     activeNotesBitmask[0].store (lo, std::memory_order_release);
     activeNotesBitmask[1].store (hi, std::memory_order_release);
     voiceChordSounding.store (router.isVoiceSlotActive());
@@ -1141,11 +1244,13 @@ void SmartKeysAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& bu
     if (numSamples > 0)
     {
         strum.process (routedMidi, expandedChordMidi, numSamples);
+        releasePlainNotes (0, expandedChordMidi);
         midiMessages.swapWith (expandedChordMidi);
     }
     else
     {
         strum.reset();
+        plainOnCount.fill (0);
     }
 
     pianoSynth.allNotesOff();
@@ -1171,6 +1276,7 @@ void SmartKeysAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("customMask", (int) customMask.load(), nullptr);
     state.setProperty ("editorScale", (double) editorScale.load(), nullptr);
     state.setProperty ("chordKeyboard", chordPortEnabled.load(), nullptr);
+    state.setProperty ("pianoRollChords", pianoRollChords.load(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -1219,6 +1325,13 @@ void SmartKeysAudioProcessor::setStateInformation (const void* data, int sizeInB
         else
             chordPortEnabled.store (enabled);   // el temporizador lo aplica
     }
+
+    // ACORDES AL PIANO ROLL (1.7+); sin teclado no hay modo
+    const bool pianoRoll = (bool) tree.getProperty ("pianoRollChords", false) && canUsePianoRollChords();
+    if (pianoRoll && juce::MessageManager::existsAndIsCurrentThread())
+        setPianoRollChords (true);
+    else
+        pianoRollChords.store (pianoRoll && chordPortEnabled.load());
 }
 
 //==============================================================================

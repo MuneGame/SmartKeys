@@ -171,7 +171,8 @@ class ChordPortStatus : public juce::Component,
                         public juce::SettableTooltipClient
 {
 public:
-    enum class State { Hidden, Off, Waiting, Active, Recording, Unavailable, Looping };
+    enum class State { Hidden, Off, Waiting, Active, Recording, Unavailable, Looping,
+                       PianoRoll, PianoRollRecording, PianoRollNotReturning, PianoRollFlKeyboard };
 
     ChordPortStatus();
     void paint (juce::Graphics&) override;
@@ -181,7 +182,7 @@ public:
     bool hitTest (int x, int y) override;   // sólo el texto (está alineado a la derecha)
     void setState (State newState, const juce::String& deviceName);
 
-    std::function<void()> onClick;   // encender / apagar el teclado
+    std::function<void()> onClick;   // menú: acordes al Piano Roll de SmartKeys / a otro instrumento / apagado
 
 private:
     State state = State::Hidden;
@@ -287,6 +288,11 @@ private:
     std::array<bool, 13> computerKeysDown {};
     std::array<int, 13> computerKeyNotes {};
     int computerOctave = 4;
+
+    // ACORDES AL PIANO ROLL: aviso cuando se toca con el teclado de FL (que FL graba)
+    uint32_t shownDawLiveNotes = 0;
+    double dawKeyboardHintUntilMs = 0.0;
+    void showChordPortMenu();
 
     // Enlaces por sondeo (el hilo de audio nunca avisa a la interfaz).
     // Declarados DESPUÉS de todos los controles: se destruyen antes que ellos.

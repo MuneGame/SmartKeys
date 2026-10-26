@@ -945,7 +945,7 @@ void ChordPortStatus::setState (State newState, const juce::String& deviceName)
     setVisible (state != State::Hidden);
 
     const auto quoted = "\"" + name + "\"";
-    const auto clickOff = u8 ("\n(Clic aquí: apagar el teclado)");
+    const auto clickOff = u8 ("\n(Clic aquí: elegir dónde se graban los acordes, o apagar el teclado)");
     switch (state)
     {
         case State::Active:
@@ -961,6 +961,29 @@ void ChordPortStatus::setState (State newState, const juce::String& deviceName)
             setTooltip (u8 ("FL Studio está grabando y se lo dice a SmartKeys: en cada vuelta del bucle, lo que FL "
                             "vuelve a tocar del patrón de SmartKeys no sale otra vez por ") + quoted
                         + u8 (", así que no se graba doble. Lo nuevo que toques, sí.") + clickOff);
+            break;
+        case State::PianoRoll:
+        case State::PianoRollRecording:
+            setTooltip (u8 ("ACORDES AL PIANO ROLL: FL graba en el Piano Roll de SmartKeys el acorde completo, no la tecla.\n"
+                            "1. Options › MIDI Settings › Input: selecciona ") + quoted
+                        + u8 (" y actívalo (Enable).\n"
+                              "2. Deja SmartKeys seleccionado (o clic derecho en SmartKeys › Receive notes from › ") + quoted + ").\n"
+                        + u8 ("3. Toca en SmartKeys: con el ratón en su teclado, o con las teclas A W S E D F T G Y H U J K "
+                              "con esta ventana delante (apaga el teclado de escritura de FL). También con la voz.\n"
+                              "4. Graba. Al reproducir, SmartKeys toca las notas del Piano Roll tal cual: nada se duplica.")
+                        + clickOff);
+            break;
+        case State::PianoRollNotReturning:
+            setTooltip (u8 ("Lo que SmartKeys manda por ") + quoted
+                        + u8 (" no le llega a FL, así que FL no lo graba. Options › MIDI Settings › Input: selecciona ") + quoted
+                        + u8 (", actívalo (Enable) y deja SmartKeys seleccionado (o clic derecho en SmartKeys › Receive notes from › ")
+                        + quoted + ")." + clickOff);
+            break;
+        case State::PianoRollFlKeyboard:
+            setTooltip (u8 ("Estás tocando con el teclado de FL: FL graba esa tecla y SmartKeys la toca tal cual, sin acorde. "
+                            "Para grabar el acorde completo, toca en SmartKeys: con el ratón en su teclado, o con las teclas "
+                            "A W S E D F T G Y H U J K con esta ventana delante, y apaga el teclado de escritura de FL "
+                            "(Typing keyboard to piano keyboard).") + clickOff);
             break;
         case State::Waiting:
             setTooltip (u8 ("El teclado MIDI virtual ") + quoted
@@ -997,13 +1020,19 @@ void ChordPortStatus::paint (juce::Graphics& g)
     const auto small = makeFont (8.5f, true).withExtraKerningFactor (0.12f);
     const auto main = makeFont (9.5f, true);
 
-    const bool problem = state == State::Unavailable || state == State::Looping;
+    const bool problem = state == State::Unavailable || state == State::Looping
+                      || state == State::PianoRollNotReturning || state == State::PianoRollFlKeyboard;
+    const bool pianoRoll = state == State::PianoRoll || state == State::PianoRollRecording;
     juce::String suffix;
-    if (state == State::Unavailable)  suffix = u8 (" · en uso");
-    if (state == State::Looping)      suffix = u8 (" · eco");
-    if (state == State::Off)          suffix = u8 (" · OFF");
-    if (state == State::Recording)    suffix = u8 (" · REC");
-    const bool on = state == State::Active || state == State::Recording;
+    if (state == State::Unavailable)            suffix = u8 (" · en uso");
+    if (state == State::Looping)                suffix = u8 (" · eco");
+    if (state == State::Off)                    suffix = u8 (" · OFF");
+    if (state == State::Recording)              suffix = u8 (" · REC");
+    if (state == State::PianoRoll)              suffix = u8 (" · Piano Roll");
+    if (state == State::PianoRollRecording)     suffix = u8 (" · Piano Roll · REC");
+    if (state == State::PianoRollNotReturning)  suffix = u8 (" · FL no lo recibe");
+    if (state == State::PianoRollFlKeyboard)    suffix = u8 (" · toca en SmartKeys");
+    const bool on = state == State::Active || state == State::Recording || pianoRoll;
 
     const float nameW = textWidth (main, name + suffix);
     const float tagW = textWidth (small, "MIDI");
@@ -1011,10 +1040,10 @@ void ChordPortStatus::paint (juce::Graphics& g)
 
     g.setFont (main);
     auto textColour = problem ? Colours::warning
-                    : state == State::Recording ? Colours::accent
+                    : (state == State::Recording || pianoRoll) ? Colours::accent
                     : (on ? Colours::charcoal : Colours::label);
     if (isMouseOver())
-        textColour = problem || state == State::Recording ? textColour.darker (0.3f) : Colours::accent;
+        textColour = problem || state == State::Recording || pianoRoll ? textColour.darker (0.3f) : Colours::accent;
     g.setColour (textColour);
     g.drawText (name + suffix, juce::Rectangle<float> (x, r.getY(), nameW + 2.0f, r.getHeight()), juce::Justification::centredLeft, false);
 
@@ -1302,7 +1331,8 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     // Teclado MIDI virtual: estado arriba a la derecha (clic: encender / apagar).
     // Abrir la ventana ya crea el teclado (sin esperar a que el DAW ponga a sonar el plugin).
     content.addChildComponent (portStatus);
-    portStatus.onClick = [this] { audioProcessor.setChordPortEnabled (! audioProcessor.isChordPortEnabled()); };
+    portStatus.onClick = [this] { showChordPortMenu(); };
+    shownDawLiveNotes = audioProcessor.getDawLiveNoteCount();
     audioProcessor.markInUse();
 
     timerCallback();
@@ -1471,9 +1501,29 @@ void SmartKeysAudioProcessorEditor::timerCallback()
         {
             case ChordPortState::Off:          state = PortState::Off; break;
             case ChordPortState::Waiting:      state = PortState::Waiting; break;
-            case ChordPortState::Active:       state = audioProcessor.isChordPortLooping() ? PortState::Looping
-                                                      : audioProcessor.isHostRecording()     ? PortState::Recording
-                                                                                             : PortState::Active; break;
+            case ChordPortState::Active:
+                if (audioProcessor.isPianoRollChords())
+                {
+                    // Con el transporte parado llegan teclas del DAW: se toca con el teclado de FL
+                    const auto now = juce::Time::getMillisecondCounterHiRes();
+                    const auto live = audioProcessor.getDawLiveNoteCount();
+                    if (live != shownDawLiveNotes)
+                    {
+                        shownDawLiveNotes = live;
+                        dawKeyboardHintUntilMs = now + 6000.0;
+                    }
+                    state = now < dawKeyboardHintUntilMs                ? PortState::PianoRollFlKeyboard
+                          : audioProcessor.isChordPortNotReturning()    ? PortState::PianoRollNotReturning
+                          : audioProcessor.isHostRecording()            ? PortState::PianoRollRecording
+                                                                        : PortState::PianoRoll;
+                }
+                else
+                {
+                    state = audioProcessor.isChordPortLooping() ? PortState::Looping
+                          : audioProcessor.isHostRecording()     ? PortState::Recording
+                                                                 : PortState::Active;
+                }
+                break;
             case ChordPortState::Unavailable:  state = PortState::Unavailable; break;
             default:                           break;
         }
@@ -1703,6 +1753,39 @@ void SmartKeysAudioProcessorEditor::updateDisplay()
         detail = variationName + "\n" + detail;
 
     chordDisplay.setText (name, detail, sounding);
+}
+
+//==============================================================================
+// Clic en "MIDI ● SmartKeys Chords": dónde se graban los acordes (o apagarlo)
+void SmartKeysAudioProcessorEditor::showChordPortMenu()
+{
+    if (! audioProcessor.canUsePianoRollChords())
+    {
+        audioProcessor.setChordPortEnabled (! audioProcessor.isChordPortEnabled());   // la app: encender / apagar
+        return;
+    }
+
+    const bool on = audioProcessor.isChordPortEnabled();
+    const bool pianoRoll = on && audioProcessor.isPianoRollChords();
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader (u8 ("Acordes por \"") + SmartKeysAudioProcessor::getChordPortName() + "\"");
+    menu.addItem (1, u8 ("Acordes al Piano Roll de SmartKeys (toca en SmartKeys)"), true, pianoRoll);
+    menu.addItem (2, u8 ("Acordes a otro instrumento (FLEX, Serum…)"), true, on && ! pianoRoll);
+    menu.addSeparator();
+    menu.addItem (3, u8 ("Apagado"), true, ! on);
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&portStatus),
+                        [safe = juce::Component::SafePointer<SmartKeysAudioProcessorEditor> (this)] (int result)
+                        {
+                            if (safe == nullptr || result == 0)
+                                return;
+                            auto& p = safe->audioProcessor;
+                            if (result == 1)       p.setPianoRollChords (true);
+                            else if (result == 2) { p.setPianoRollChords (false); p.setChordPortEnabled (true); }
+                            else                   p.setChordPortEnabled (false);
+                            safe->timerCallback();
+                        });
 }
 
 //==============================================================================

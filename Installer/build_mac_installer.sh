@@ -22,7 +22,7 @@
 # ==============================================================================
 set -euo pipefail
 
-VERSION="1.6.2"
+VERSION="1.7.0"
 ID_BASE="com.miwn.smartkeys"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

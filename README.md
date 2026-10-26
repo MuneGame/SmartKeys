@@ -14,6 +14,10 @@
 
 ---
 
+## Novedades de la versión 1.7.0
+
+**Acordes al Piano Roll de SmartKeys.** Hasta ahora, el Piano Roll de SmartKeys guardaba sólo la tecla que pulsabas, y el acorde completo había que grabarlo en otro instrumento. Ahora, con un clic en `MIDI ● SmartKeys Chords` → **Acordes al Piano Roll de SmartKeys**, FL graba el acorde completo en el propio Piano Roll de SmartKeys, y al reproducir SmartKeys toca esas notas tal cual: nada se duplica, ni en bucle ni en otra toma. Se toca en SmartKeys (ratón, teclas de la Mac con su ventana delante o la voz). Ver [Grabar los acordes completos en el Piano Roll](#grabar-los-acordes-completos-en-el-piano-roll-fl-studio).
+
 ## Novedades de las versiones 1.6.1 y 1.6.2
 
 - **Corregido el cierre de FL Studio** (`EAccessViolation` en el hilo principal) al quitar o reemplazar el canal de SmartKeys, cerrar el proyecto o apagar el teclado *SmartKeys Chords* en la 1.6.0. Ver [por qué se cerraba](#por-qué-se-cerraba-fl-studio-160).
@@ -36,10 +40,10 @@ La 1.5.0 trajo `MIC VOICE` sin sidechain (SmartKeys lee él mismo el micrófono 
 
 ## Descargar los instaladores (sin compilar nada)
 
-GitHub compila y prueba SmartKeys en cada cambio y publica los instaladores en la página **Releases** de este repositorio (**SmartKeys 1.6.2**):
+GitHub compila y prueba SmartKeys en cada cambio y publica los instaladores en la página **Releases** de este repositorio (**SmartKeys 1.7.0**):
 
-- **Mac:** `SmartKeys-1.6.2-macOS.pkg`. Funciona en Mac con chip Apple e Intel. Instala SmartKeys (VST3, AU y app).
-- **Windows:** `SmartKeys-1.6.2-Windows-Setup.exe`. Instala SmartKeys (VST3 y app).
+- **Mac:** `SmartKeys-1.7.0-macOS.pkg`. Funciona en Mac con chip Apple e Intel. Instala SmartKeys (VST3, AU y app).
+- **Windows:** `SmartKeys-1.7.0-Windows-Setup.exe`. Instala SmartKeys (VST3 y app).
 
 **Los dos instaladores eliminan automáticamente la versión anterior** (y la vieja SmartKeys FX) antes de copiar la nueva. No hace falta borrar nada a mano. El registro de lo que se borró en Mac queda en `/tmp/smartkeys-install.log`.
 
@@ -57,7 +61,7 @@ bash Installer/install_mac.sh
 
 1. Comprueba las Command Line Tools de Apple y CMake (si falta CMake, lo instala con Homebrew o solo para tu usuario).
 2. Borra SmartKeys y la vieja SmartKeys FX (`.vst3`, `.component`, `.app`) de `/Library`, de `~/Library` de cada usuario y de `/Applications`. También borra la caché de Audio Units y la ficha de FL Studio.
-3. Compila en `Release` el binario Universal y genera `Installer/Output/SmartKeys-1.6.2-macOS.pkg`.
+3. Compila en `Release` el binario Universal y genera `Installer/Output/SmartKeys-1.7.0-macOS.pkg`.
 4. Instala el `.pkg` y reinicia `AudioComponentRegistrar` para que FL Studio y Ableton vean el binario nuevo.
 
 Te pide la contraseña de administrador en los pasos 2 y 4. Para desinstalar todo: `bash Installer/uninstall_mac.sh`.
@@ -68,7 +72,7 @@ Te pide la contraseña de administrador en los pasos 2 y 4. Para desinstalar tod
 Installer\build_windows.bat
 ```
 
-Compila, genera `SmartKeys-1.6.2-Windows-Setup.exe` y lo ejecuta. El instalador borra antes la versión anterior. Requisitos: Visual Studio 2022 con "Desarrollo para escritorio con C++", CMake 3.22+, Git e [Inno Setup 6.3+](https://jrsoftware.org/isdl.php). Añade `noinstall` para solo generar el `.exe`.
+Compila, genera `SmartKeys-1.7.0-Windows-Setup.exe` y lo ejecuta. El instalador borra antes la versión anterior. Requisitos: Visual Studio 2022 con "Desarrollo para escritorio con C++", CMake 3.22+, Git e [Inno Setup 6.3+](https://jrsoftware.org/isdl.php). Añade `noinstall` para solo generar el `.exe`.
 
 ### Para desarrolladores: copiar al compilar
 
@@ -105,9 +109,27 @@ Los acordes salen siempre por el **canal MIDI 1**. El **puerto** MIDI lo asigna 
 
 ### Grabar los acordes completos en el Piano Roll (FL Studio)
 
-FL Studio graba en el Piano Roll lo que llega por un **teclado MIDI**. Por eso SmartKeys también es uno: **SmartKeys Chords** (macOS). Todo acorde que sale de SmartKeys sale también por ese teclado, con su desfase de STRUM, como si tocaras todas sus notas en un teclado real.
+FL Studio graba en el Piano Roll lo que llega por un **teclado MIDI**, nunca lo que un plugin manda por su salida MIDI. Por eso SmartKeys también es un teclado: **SmartKeys Chords** (macOS). Todo acorde que sale de SmartKeys sale también por ese teclado, con su desfase de STRUM, como si tocaras todas sus notas en un teclado real. Hay dos formas de grabarlo; se elige con un clic en `MIDI ● SmartKeys Chords`, arriba a la derecha.
 
-1. Carga SmartKeys y abre su ventana (o dale ▶): arriba a la derecha aparece `MIDI ● SmartKeys Chords`. Si dice `· OFF`, haz clic en él.
+#### A. En el Piano Roll de SmartKeys (`Acordes al Piano Roll de SmartKeys`)
+
+El Piano Roll de SmartKeys guarda el **acorde completo** (por ejemplo F3 A3 C4), no la tecla que pulsas.
+
+1. Clic en `MIDI ● SmartKeys Chords` → **Acordes al Piano Roll de SmartKeys**. La etiqueta dice `· Piano Roll`.
+2. **Options → MIDI Settings → Input**: selecciona **SmartKeys Chords** y activa **Enable**. Si no está en la lista, pulsa **Refresh device list**.
+3. Deja **seleccionado SmartKeys** en el Channel Rack. Para que lo reciba aunque selecciones otro canal: ponle un **Port** en el paso 2 y haz clic derecho en SmartKeys → **Receive notes from** → **SmartKeys Chords**.
+4. Apaga el teclado de escritura de FL (**Typing keyboard to piano keyboard**, en la barra de herramientas) y **toca en SmartKeys**: con el ratón en su teclado, con las teclas de la Mac `A W S E D F T G Y H U J K` (`Z` / `X`: octava) con la ventana de SmartKeys delante, o con la voz (`MIC VOICE`).
+5. Pulsa grabar (●) y toca: el Piano Roll de SmartKeys se llena con todas las notas de cada acorde, apiladas (con STRUM, escalonadas).
+
+Al reproducir, SmartKeys toca las notas de su Piano Roll **tal cual**: no las convierte otra vez en acordes ni las vuelve a mandar por el teclado, así que **nada se graba doble**, ni con el patrón en bucle ni en otra toma.
+
+- **Por qué hay que tocar en SmartKeys:** FL graba siempre lo que entra por **su** teclado (el de escritura o un teclado MIDI conectado a FL), y ningún plugin puede evitarlo. En este modo, una tecla que llega desde FL suena tal cual, sin acorde, y la etiqueta avisa `· toca en SmartKeys`.
+- **Si la etiqueta dice `· FL no lo recibe`**, lo que SmartKeys manda no le llega a FL: revisa los pasos 2 y 3.
+- **Los acordes que FL ya grabó** se editan en el Piano Roll como cualquier nota: SmartKeys los toca como están.
+
+#### B. En otro instrumento (FLEX, Serum, Kontakt…)
+
+1. Clic en `MIDI ● SmartKeys Chords` → **Acordes a otro instrumento**. Si dice `· OFF`, enciéndelo así.
 2. **Options → MIDI Settings → Input**: selecciona **SmartKeys Chords**, activa **Enable** y ponle un **Port** libre, por ejemplo `10` (sin Port no aparece en el menú del paso 3). Si no está en la lista, pulsa **Refresh device list**.
 3. En el Channel Rack, **clic derecho** en el instrumento que quieres tocar y grabar (FLEX, Serum, Kontakt…) → **Receive notes from** → **SmartKeys Chords** (*All MIDI channels*). Su botón muestra un candado: recibe los acordes aunque el canal seleccionado sea otro.
 4. Deja **seleccionado SmartKeys** y toca como siempre: teclado MIDI, teclado de la Mac, tu voz (`MIC VOICE`) o las notas de su Piano Roll al darle ▶. El instrumento enganchado suena con el acorde completo.
@@ -115,13 +137,16 @@ FL Studio graba en el Piano Roll lo que llega por un **teclado MIDI**. Por eso S
 
 ![Grabar los acordes completos en FL Studio](docs/fl_studio_chords.png)
 
-A tener en cuenta:
+En esta forma:
 
 - **El Piano Roll de SmartKeys guarda tus teclas sueltas**, que son lo que entró por tu teclado, y FL las vuelve a tocar en cada vuelta del patrón. **Grabando en bucle no pasa nada:** mientras la etiqueta dice `· REC`, lo que FL repite en cada vuelta no vuelve a salir por el teclado, así que no se graba doble. **Al reproducir sin grabar**, esas teclas vuelven a tocar el acorde en el instrumento enganchado (que ya lo tiene grabado) y lo oirías dos veces: después de grabar, borra las teclas de SmartKeys o silencia su patrón. En una toma nueva, haz lo mismo antes de grabar.
 - **Si grabas y no aparece `· REC`**, FL no le está avisando a SmartKeys de que graba, y desde la segunda vuelta del bucle los acordes se grabarían otra vez. Graba una vuelta cada vez (para al terminarla), o en modo **SONG** sobre una zona vacía del Playlist, donde nada se repite.
 - **Convertir en acordes las notas sueltas que ya tienes** en el Piano Roll de SmartKeys: engancha el instrumento (pasos 2–3), pon FL a grabar y dale ▶. SmartKeys toca esas notas como acordes y FL los graba en el instrumento enganchado.
 - **Una sola vía hacia cada instrumento:** este teclado **o** el *Output port* del wrapper. Con las dos, el acorde le llega dos veces. El Port del paso 2 no debe coincidir con el *Input port* del wrapper de SmartKeys.
-- **Si te saltas el paso 3** (teclado activado y SmartKeys seleccionado), FL devuelve los acordes al propio SmartKeys. SmartKeys los reconoce como **eco** y los ignora (la etiqueta dice `· eco`), pero así ningún otro instrumento los graba.
+- **Si te saltas el paso 3** (teclado activado y SmartKeys seleccionado), FL devuelve los acordes al propio SmartKeys. SmartKeys los reconoce como **eco** y los ignora (la etiqueta dice `· eco`), pero así ningún otro instrumento los graba. Si lo que quieres es tener los acordes en el Piano Roll de SmartKeys, usa la forma A.
+
+En las dos:
+
 - **Al reabrir FL Studio**, el teclado aparece cuando se carga el proyecto con SmartKeys. FL recuerda su Port; si el instrumento no recibe nada, pulsa **Refresh device list** en MIDI Settings.
 - **Exportar:** al renderizar (fuera de tiempo real) el teclado no envía nada. Exporta con las notas ya grabadas en el instrumento, o con la vía del wrapper.
 - **Octavas:** FL numera una octava más arriba que SmartKeys. El Do central (MIDI 60) es C4 en SmartKeys y C5 en FL, así que el `F2 A2 C3` del display aparece como F3 A3 C4 en el Piano Roll de FL.
@@ -162,7 +187,7 @@ La perilla **STRUM SPEED** (debajo del display) va de `OFF` a 200 ms:
 |---|---|
 | `SMART CHORDS / SINGLE NOTES / COMPLEX CHORDS` | Acorde diatónico (3–4 notas), nota individual cuantizada, o acorde a dos manos (5–7 notas) |
 | `GAIN` | Volumen del piano interno (−60 a +6 dB); la salida MIDI no cambia |
-| `MIDI ● SmartKeys Chords` | Teclado MIDI virtual (macOS): `●` activo, `○` esperando a que suene el plugin, `· en uso` (otra app lo tiene), `· eco` (FL lo devuelve a SmartKeys), `· REC` (FL graba y se lo dice a SmartKeys: lo que repite el bucle no sale otra vez), `· OFF` apagado. Clic: encender / apagar. Pasa el ratón para ver los pasos de FL Studio |
+| `MIDI ● SmartKeys Chords` | Teclado MIDI virtual (macOS): `●` activo, `○` esperando a que suene el plugin, `· en uso` (otra app lo tiene), `· eco` (FL lo devuelve a SmartKeys), `· REC` (FL graba y se lo dice a SmartKeys: lo que repite el bucle no sale otra vez), `· Piano Roll` (los acordes se graban en el Piano Roll de SmartKeys), `· FL no lo recibe`, `· toca en SmartKeys`, `· OFF` apagado. Clic: menú (acordes al Piano Roll de SmartKeys / a otro instrumento / apagado). Pasa el ratón para ver los pasos de FL Studio |
 | `MIC VOICE` | Activa la voz: el micrófono de macOS (o la entrada sidechain si el DAW la manda) |
 | Medidor · `GATE` · `Mic: A3 -> Acorde: Am` | Nivel de la voz, umbral del gate y la nota y el acorde que dispara en vivo |
 | `KEY` · `SCALE` · barra `ESCALA` | Tónica, escala (`Más escalas`: Occidentales / Árabes / Indias) y notas activas una a una |
@@ -260,6 +285,7 @@ En la 1.6.1 el teclado ya no usa App Nap: su hilo es de tiempo real y FL Studio,
 - **Tiempo real.** El hilo de audio sólo copia los NoteOn/NoteOff del camino del teclado (ya con el STRUM) a un FIFO lock-free de tamaño fijo, con su hora: inicio del bloque + un bloque + su posición. Un hilo propio vacía el FIFO cada ~1 ms y envía cada nota a su hora, así el teclado lleva el mismo desfase que la salida MIDI. Ni candados, ni memoria dinámica, ni CoreMIDI en el hilo de audio.
 - **Ninguna nota colgada ni doble.** El teclado lleva la cuenta de lo que cada instancia dejó sonando. Al poner el bypass, reiniciar el audio o cerrar el plugin, envía sus NoteOff. Si dos instancias tocan la misma nota, sale una sola vez y se apaga cuando la suelta la última.
 - **Grabación en bucle.** El teclado tiene su propio router y su propio STRUM, a los que sólo llegan las teclas que deben salir por él. Mientras el DAW graba (y se lo dice al plugin: `isRecording`; la etiqueta muestra `· REC`), SmartKeys anota en qué posición (en negras) salió cada tecla y en qué vuelta del bucle (una vuelta nueva empieza cuando la posición salta hacia atrás). Si FL repite una tecla en la misma posición (±1 semicorchea, por si FL cuantiza al grabar) que en una vuelta anterior de la misma toma, está tocando lo que ya grabó en el patrón de SmartKeys, y ese acorde no sale otra vez: el instrumento enganchado ya lo tiene grabado. Sin grabar no se filtra nada: al tocar en vivo sobre un bucle, repetir un acorde en el mismo sitio de cada vuelta es lo normal. Si el DAW no corta el bloque de audio justo al final del bucle, la primera nota de la vuelta siguiente llega en un bloque que empezó antes del final, con una posición «de más»: SmartKeys aprende dónde termina el bucle en la primera vuelta (o lo sabe desde el principio si el DAW anuncia sus puntos de bucle) y la reconoce igual. En una toma nueva, la primera vuelta sale entera. La salida MIDI y el piano de SmartKeys siguen tocándolo todo.
+- **Acordes al Piano Roll de SmartKeys (1.7).** En este modo FL devuelve el teclado a SmartKeys a propósito y lo graba en su Piano Roll. Lo que sale de las teclas de SmartKeys (pantalla, teclado de la Mac, voz) se convierte en acorde y sale por el teclado; su eco (cada envío vuelve una vez, en unos pocos bloques) no suena otra vez. Todo lo demás que llega del DAW (el Piano Roll al reproducir, o una tecla tocada desde FL) suena tal cual por el piano y la salida MIDI, sin pasar por el router ni por el teclado virtual: no se convierte otra vez en acorde ni se graba doble, grabe FL o no. Al cambiar de modo se suelta todo lo que sonaba, y el modo se guarda con el proyecto. Si lo que sale no vuelve (FL no recibe el teclado) o llegan teclas del DAW con el transporte parado (se está tocando con el teclado de FL), la etiqueta lo avisa.
 - **Exportar.** Fuera de tiempo real (render) no envía nada: el disco va más rápido que el reloj.
 - **Eco.** Si FL devuelve el teclado al propio SmartKeys, cada nota del acorde volvería a entrar como una tecla y dispararía otro acorde. SmartKeys sabe qué notas envió el teclado y cuándo (de todas sus instancias):
   - Un NoteOn es candidato a eco si esa nota salió por el teclado hace muy poco (unos pocos bloques) y su eco todavía no llegó. Cada envío vuelve una sola vez, así que repetir rápido una tecla nunca se confunde con un eco.
@@ -272,7 +298,7 @@ En la 1.6.1 el teclado ya no usa App Nap: su hilo es de tiempo real y FL Studio,
 2. Elige la voz: la entrada del plugin si el DAW manda audio por ella, si no el micrófono del sistema (búfer circular). Ejecuta el detector de voz a la frecuencia de esa fuente.
 3. Publica el nivel y la nota detectada para el medidor y la lectura `Mic: A3 -> Acorde: Am`.
 4. `buffer.clear()`: la voz cruda nunca sale.
-5. Expande cada nota de entrada (MIDI, Piano Roll, teclado en pantalla y voz) al acorde completo, en orden de muestra. El MIDI se lee como bytes crudos: nunca se construye un `juce::MidiMessage`, que con un SysEx pediría memoria.
+5. Expande cada nota de entrada (MIDI, Piano Roll, teclado en pantalla y voz) al acorde completo, en orden de muestra. Con *Acordes al Piano Roll de SmartKeys*, las notas que llegan del DAW pasan tal cual y sólo se expanden la pantalla, el teclado de la Mac y la voz. El MIDI se lee como bytes crudos: nunca se construye un `juce::MidiMessage`, que con un SysEx pediría memoria.
 6. STRUM: reparte las notas de cada acorde en el tiempo con una cola por muestra. Cada evento queda en `0 ≤ posición < numSamples`.
 7. El teclado *SmartKeys Chords* tiene su propio camino: las mismas teclas pasan por su router y su STRUM (menos las que FL repite al grabar en bucle) y sus notas se copian al FIFO del teclado, con su hora (no al exportar).
 8. Renderiza el piano interno y aplica `GAIN`.
@@ -376,13 +402,13 @@ SmartKeys/
   - **Control del micrófono** (simulado): se abre a la frecuencia del dispositivo, se reabre si cambia la entrada o deja de entregar audio, avisa si falla, no abre Bluetooth, respeta el permiso (pendiente → abre al permitirlo; denegado; programa sin `NSMicrophoneUsageDescription`).
   - **Teclado SmartKeys Chords:** cada nota sale en el orden de su hora y a su hora (±6 ms, se conserva el STRUM); un NoteOn que llega con 1 s de retraso no sale, ni su NoteOff; todas las instancias saben qué salió (para reconocer el eco); la misma nota de dos instancias sale una sola vez y se apaga con la última; al reiniciar o cerrar una instancia salen sus NoteOff; con el FIFO lleno descarta sin bloquear ni pedir memoria.
   - 0 asignaciones en todo el camino de audio.
-- **Prueba de integración** (`HostTests.cpp`, 80 comprobaciones). Carga el VST3 compilado como un DAW y comprueba:
+- **Prueba de integración** (`HostTests.cpp`, 88 comprobaciones). Carga el VST3 compilado como un DAW y comprueba:
   - Cada tecla sale como acorde completo por MIDI, **siempre por el canal 1** (aunque entre por otro), mientras suena el piano interno; `GAIN` baja el piano sin tocar el MIDI.
   - Ya no existen `MIDI CH`, `OUTPUT MODE`, `A4` ni `MICROTUNING`; un proyecto de la 1.3 / 1.4 con `MIDI CH 5` se abre sin restos y sale por el canal 1.
   - El STRUM a 100 ms: +5520 y +12480 muestras a 48 kHz, en ASC y en DESC. COMPLEX CHORDS de 5 a 7 notas.
   - La voz por la entrada del DAW (sidechain) y **MIC VOICE sin sidechain** con un micrófono simulado a 44,1 kHz mientras el DAW va a 48 kHz: La3 → La menor, cambio a la entrada del DAW y vuelta, frases que disparan y sueltan el acorde.
   - **4000 bloques de 0 a 512 muestras** (como los manda FL Studio): ningún evento MIDI fuera de su bloque.
-  - **Teclado SmartKeys Chords**, a tiempo real (39 comprobaciones): el acorde completo a la vez; el STRUM con el mismo desfase, también con el búfer partido en trozos procesados de golpe (como FL Studio); repeticiones cada 60 ms y una segunda tecla 20 ms después sin perder ninguna; **bucle simulado** (todo lo que sale vuelve a entrar en el bloque siguiente, 50 ecos): sólo los acordes de las teclas pulsadas, con legato y repeticiones, también con STRUM; el bucle que aparece de repente: ninguna nota colgada; **grabación en bucle** (un compás que se repite: lo que FL repite en la vuelta 2 no sale otra vez por el teclado, lo nuevo sí, también con el acorde en la negra 1 aunque el bloque de audio cruce el final del bucle; sin grabar, cada vuelta sale entera; en una toma nueva, la primera vuelta sale entera); **dos instancias** tocando la misma tecla: cada nota sale una vez y se apaga con la última; bypass, exportar, apagar y cerrar.
+  - **Teclado SmartKeys Chords**, a tiempo real (47 comprobaciones): el acorde completo a la vez; el STRUM con el mismo desfase, también con el búfer partido en trozos procesados de golpe (como FL Studio); repeticiones cada 60 ms y una segunda tecla 20 ms después sin perder ninguna; **bucle simulado** (todo lo que sale vuelve a entrar en el bloque siguiente, 50 ecos): sólo los acordes de las teclas pulsadas, con legato y repeticiones, también con STRUM; el bucle que aparece de repente: ninguna nota colgada; **grabación en bucle** (un compás que se repite: lo que FL repite en la vuelta 2 no sale otra vez por el teclado, lo nuevo sí, también con el acorde en la negra 1 aunque el bloque de audio cruce el final del bucle; sin grabar, cada vuelta sale entera; en una toma nueva, la primera vuelta sale entera); **dos instancias** tocando la misma tecla: cada nota sale una vez y se apaga con la última; **acordes al Piano Roll de SmartKeys** (con el teclado devuelto a SmartKeys como hace FL: la voz sale como acorde una sola vez y su eco no suena otra vez; las notas del Piano Roll suenan tal cual y no salen por el teclado; grabando en bucle, el acorde sale una sola vez; con el modo apagado todo vuelve a ser como antes); bypass, exportar, apagar y cerrar.
   - **0 asignaciones** en 3000 llamadas al `processBlock` real, en 2,5 s leyendo el micrófono del sistema y con el teclado activo y sus ecos, medidas reemplazando `malloc`.
   - **Concurrencia:** un hilo de audio llama sin parar al `processBlock` mientras el hilo de mensajes guarda y carga el estado, cambia parámetros, enciende y apaga `MIC VOICE` (el micrófono se abre y se cierra) y enciende y apaga el teclado *SmartKeys Chords* (se crea y se destruye con el audio corriendo).
 - **AddressSanitizer + UBSan** y **ThreadSanitizer:**
