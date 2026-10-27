@@ -1368,6 +1368,14 @@ PresetDialog::PresetDialog()
     includeInstrument.setColour (juce::ToggleButton::tickDisabledColourId, Colours::border);
     addAndMakeVisible (includeInstrument);
 
+    // El teclado se queda en el nombre: marcar "Incluir…" y pulsar Enter guarda (un botón con el
+    // foco se pulsaría con Enter y desmarcaría la casilla)
+    for (juce::Button* b : { (juce::Button*) &includeInstrument, (juce::Button*) &okButton, (juce::Button*) &cancelButton })
+    {
+        b->setWantsKeyboardFocus (false);
+        b->setMouseClickGrabsKeyboardFocus (false);
+    }
+
     okButton.setToggleState (true, juce::dontSendNotification);   // botón principal (rosa)
     okButton.getProperties().set (fontSizeProperty, 12.0f);
     cancelButton.getProperties().set (fontSizeProperty, 12.0f);
