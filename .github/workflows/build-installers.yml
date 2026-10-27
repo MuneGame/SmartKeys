@@ -270,11 +270,12 @@ jobs:
 
       - name: Compilar el VST3, la sonda del micrófono, el instrumento de prueba y las pruebas (Intel)
         run: |
+          set -o pipefail
           cmake -S . -B build-mic -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-                -DSMARTKEYS_BUILD_MIC_PROBE=ON -DSMARTKEYS_BUILD_HOST_TESTS=ON -DSMARTKEYS_BUILD_TESTS=ON
+                -DSMARTKEYS_BUILD_MIC_PROBE=ON -DSMARTKEYS_BUILD_HOST_TESTS=ON -DSMARTKEYS_BUILD_TESTS=ON 2>&1 | tee build-mic.txt
           cmake --build build-mic --target SmartKeys_VST3 SmartKeysMicProbe SmartKeysHostTests SmartKeysTests \
                 SmartKeysTestSynth_VST3 SmartKeysTestSynth_AU SmartKeysTestFx_VST3 SmartKeysTestFx_AU SmartKeysCatalogTests \
-                SmartKeysEditorTests
+                SmartKeysEditorTests 2>&1 | tee -a build-mic.txt
 
       - name: Pruebas del núcleo
         run: ./build-mic/SmartKeysTests_artefacts/Release/SmartKeysTests | tail -n 5
@@ -396,11 +397,16 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/logs"
           cp host-*.txt probe-*.txt catalog.txt editor.txt "$RUNNER_TEMP/logs/" 2>/dev/null || true
+          # La compilación: los errores y el final (el registro completo es muy largo)
+          if [ -f build-mic.txt ]; then
+            grep -n -E "error|Error|FAILED" build-mic.txt | head -n 200 > "$RUNNER_TEMP/logs/build-mic-errors.txt" || true
+            tail -n 300 build-mic.txt > "$RUNNER_TEMP/logs/build-mic-tail.txt"
+          fi
           cd "$RUNNER_TEMP/logs"
           git init -q -b ci-logs
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A && git commit -q -m "Registro de pruebas macOS (${GITHUB_SHA::7})"
+          git add -A && git commit -q --allow-empty -m "Registro de pruebas macOS (${GITHUB_SHA::7})"
           git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-logs || true
 
   windows-host:
@@ -411,9 +417,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Compilar SmartKeys, el instrumento de prueba y las pruebas
+        shell: bash
         run: |
-          cmake -B build-host -A x64 -DSMARTKEYS_BUILD_HOST_TESTS=ON -DSMARTKEYS_COPY_AFTER_BUILD=OFF
-          cmake --build build-host --config Release --parallel --target SmartKeys_VST3 SmartKeysTestSynth_VST3 SmartKeysTestFx_VST3 SmartKeysHostTests SmartKeysCatalogTests SmartKeysEditorTests
+          set -o pipefail
+          cmake -B build-host -A x64 -DSMARTKEYS_BUILD_HOST_TESTS=ON -DSMARTKEYS_COPY_AFTER_BUILD=OFF 2>&1 | tee build-win.txt
+          cmake --build build-host --config Release --parallel --target SmartKeys_VST3 SmartKeysTestSynth_VST3 SmartKeysTestFx_VST3 SmartKeysHostTests SmartKeysCatalogTests SmartKeysEditorTests 2>&1 | tee -a build-win.txt
 
       - name: Ventana de SmartKeys — VIEW SYNTH con el instrumento dentro (VST3 en VST3)
         shell: bash
@@ -459,11 +467,15 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/logs"
           cp host-win.txt catalog-win.txt editor-win.txt "$RUNNER_TEMP/logs/" 2>/dev/null || true
+          if [ -f build-win.txt ]; then
+            grep -n -E "error|FAILED" build-win.txt | head -n 200 > "$RUNNER_TEMP/logs/build-win-errors.txt" || true
+            tail -n 300 build-win.txt > "$RUNNER_TEMP/logs/build-win-tail.txt"
+          fi
           cd "$RUNNER_TEMP/logs"
           git init -q -b ci-logs-win
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A && git commit -q -m "Registro de pruebas Windows (${GITHUB_SHA::7})"
+          git add -A && git commit -q --allow-empty -m "Registro de pruebas Windows (${GITHUB_SHA::7})"
           git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-logs-win || true
 
   publish:
