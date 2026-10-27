@@ -59,11 +59,11 @@ struct ComputerKeyboard::Native
     {
         // El bloque usa 'this' sin retenerlo: el monitor se quita en el destructor, antes de que
         // 'this' deje de existir (todo en el hilo principal)
-        auto* self = this;
+        Native* target = this;
         id handler = [NSEvent addLocalMonitorForEventsMatchingMask: (NSEventMaskKeyDown | NSEventMaskKeyUp)
                                                            handler: ^NSEvent* (NSEvent* event)
                                                            {
-                                                               self->handle (event);
+                                                               target->handle (event);
                                                                return event;   // la tecla sigue su camino
                                                            }];
        #if __has_feature(objc_arc)
