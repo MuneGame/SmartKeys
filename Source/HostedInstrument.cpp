@@ -59,6 +59,56 @@ namespace
             p.enableAllBuses();
     }
 
+    // La descripción que se guarda (con el proyecto y para volver a crearlo) es la que se pidió:
+    // con ella se pudo crear. La del plugin ya creado sólo completa lo que falte (en Linux, JUCE
+    // la devuelve con el .so de dentro del paquete .vst3, que no se puede volver a abrir; en
+    // Windows, con el archivo de dentro de la carpeta .vst3)
+    juce::PluginDescription describeLoaded (const juce::PluginDescription& requested, const juce::AudioPluginInstance& instance)
+    {
+        auto d = requested;
+        const auto created = instance.getPluginDescription();
+
+        auto fill = [] (juce::String& field, const juce::String& value)
+        {
+            if (field.trim().isEmpty())
+                field = value;
+        };
+        fill (d.name, created.name);
+        fill (d.descriptiveName, created.descriptiveName);
+        fill (d.manufacturerName, created.manufacturerName);
+        fill (d.version, created.version);
+        fill (d.category, created.category);
+        if (d.pluginFormatName.isEmpty())
+            d.pluginFormatName = created.pluginFormatName;
+        if (d.fileOrIdentifier.isEmpty())
+            d.fileOrIdentifier = created.fileOrIdentifier;
+        if (d.uniqueId == 0 && d.deprecatedUid == 0)
+        {
+            d.uniqueId = created.uniqueId;
+            d.deprecatedUid = created.deprecatedUid;
+        }
+        if (d.numInputChannels == 0 && d.numOutputChannels == 0)
+        {
+            d.numInputChannels = created.numInputChannels;
+            d.numOutputChannels = created.numOutputChannels;
+        }
+        d.isInstrument = d.isInstrument || created.isInstrument;
+        return d;
+    }
+
+    // El sonido guardado del instrumento (texto base64 de JUCE; también base64 estándar)
+    juce::MemoryBlock decodeState (const juce::String& text)
+    {
+        juce::MemoryBlock data;
+        if (text.isEmpty() || data.fromBase64Encoding (text))
+            return data;
+
+        juce::MemoryOutputStream decoded;
+        if (juce::Base64::convertFromBase64 (decoded, text))
+            return decoded.getMemoryBlock();
+        return {};
+    }
+
     const char* statusName (HostedInstrument::Status s) noexcept
     {
         switch (s)
@@ -314,6 +364,7 @@ void HostedInstrument::startLoad (const juce::PluginDescription& d, const juce::
         cacheHasPlugin = true;
         cacheDescription = d;
         cacheState = stateToApply;
+        cacheError = {};
     }
 
     // Carga protegida: si el programa se cerró la última vez creando este plugin, al
@@ -323,6 +374,10 @@ void HostedInstrument::startLoad (const juce::PluginDescription& d, const juce::
         if (current != nullptr)
             unloadInternal();
         errorText = juce::String::fromUTF8 ("Se cerró el programa al cargarlo la última vez");
+        {
+            const juce::ScopedLock sl (cacheLock);
+            cacheError = errorText;
+        }
         setStatus (Status::Crashed);
         return;
     }
@@ -398,6 +453,10 @@ void HostedInstrument::finishLoad (uint32_t generation, const juce::PluginDescri
         // El proyecto (o un preset) pide este instrumento: se queda apuntado para no perderlo
         unloadInternal();
         errorText = problem;
+        {
+            const juce::ScopedLock sl (cacheLock);
+            cacheError = problem;
+        }
         setStatus (missing ? Status::Missing : Status::Failed);
         return;
     }
@@ -407,7 +466,7 @@ void HostedInstrument::finishLoad (uint32_t generation, const juce::PluginDescri
         instance->setStateInformation (loadingState.getData(), (int) loadingState.getSize());
 
     auto slot = std::make_unique<Slot>();
-    slot->description = instance->getPluginDescription();
+    slot->description = describeLoaded (requested, *instance);
     slot->instance = std::move (instance);
     slot->midi.ensureSize (kHostMidiBytes);
     if (active.load())
@@ -457,6 +516,7 @@ void HostedInstrument::unload()
         cacheHasPlugin = false;
         cacheDescription = {};
         cacheState.reset();
+        cacheError = {};
     }
     unloadInternal();
     errorText = {};
@@ -644,6 +704,8 @@ std::unique_ptr<juce::XmlElement> HostedInstrument::createStateXml()
     auto xml = std::make_unique<juce::XmlElement> (kStateTag);
     xml->setAttribute ("bypass", bypassed.load() ? 1 : 0);
     xml->setAttribute ("status", statusName (getStatus()));
+    if (cacheError.isNotEmpty())
+        xml->setAttribute ("error", cacheError);
     xml->addChildElement (cacheDescription.createXml().release());
     if (cacheState.getSize() > 0)
         xml->createNewChildElement ("STATE")->addTextElement (cacheState.toBase64Encoding());
@@ -676,7 +738,7 @@ void HostedInstrument::restoreState (const juce::XmlElement* xml)
         if (auto* p = xml->getChildByName ("PLUGIN"))
             hasPlugin = d.loadFromXml (*p) && d.fileOrIdentifier.isNotEmpty();
         if (hasPlugin)
-            data.fromBase64Encoding (xml->getChildElementAllSubText ("STATE", {}).trim());
+            data = decodeState (xml->getChildElementAllSubText ("STATE", {}).trim());
         bypass = xml->getBoolAttribute ("bypass", false);
     }
 
@@ -686,6 +748,7 @@ void HostedInstrument::restoreState (const juce::XmlElement* xml)
         cacheHasPlugin = hasPlugin;
         cacheDescription = d;
         cacheState = data;
+        cacheError = {};
         restorePending = true;
         restoreHasPlugin = hasPlugin;
         restoreDescription = d;

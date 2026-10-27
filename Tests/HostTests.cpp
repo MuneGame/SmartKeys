@@ -260,6 +260,8 @@ public:
         numIns  = plugin->getTotalNumInputChannels();
         numOuts = plugin->getTotalNumOutputChannels();
         buffer.setSize (jmax (numIns, numOuts, 1), kMaxBlock);   // bloques de hasta 4096 (más grandes que el preparado)
+        midi.ensureSize (65536);   // como un DAW: el MIDI del bloque ya reservado (lo que el plugin manda
+                                   // se copia aquí; si creciera, la asignación sería del "DAW", no del plugin)
         std::cout << "Buses: " << numIns << " canal(es) de entrada (micrófono), " << numOuts << " de salida" << std::endl;
         return true;
     }
@@ -576,7 +578,9 @@ bool waitForSlot (Host& host, const String& wanted, int timeoutMs = 10000)
         if (slotStatus (host) == wanted)
             return true;
     }
-    std::cout << "     (la ranura quedó en \"" << slotStatus (host) << "\")" << std::endl;
+    auto h = slotXml (host);
+    std::cout << "     (la ranura quedó en \"" << slotStatus (host) << "\": "
+              << (h != nullptr ? h->toString (XmlElement::TextFormat().singleLine().withoutHeader()) : String ("-")) << ")" << std::endl;
     return false;
 }
 
@@ -1241,15 +1245,16 @@ void testHostedInstrument (const String& path)
     {
         mark = synthLogLines();
         host.prepare (2048);
+        // C4 -> C E G y, 1600 muestras después, A4 -> A C E (sin notas en común)
         auto r = host.runSized (2048, { { 100, MidiMessage::noteOn (1, 60, (uint8) 100) },
-                                        { 1700, MidiMessage::noteOn (1, 67, (uint8) 100) } });
+                                        { 1700, MidiMessage::noteOn (1, 69, (uint8) 100) } });
         auto log = readSynthLog (mark);
         const auto midiT = midiNoteOnTimes (r), synthT = log.noteOnTimes();
         std::cout << "     " << log.find ("PREPARE") << "   " << log.find ("MAXBLOCK") << std::endl;
         check (log.has ("PREPARE 48000 2048"), "SmartKeys prepara otra vez el instrumento con el búfer nuevo (2048)");
         check (! log.has ("OVERBLOCK"), "el instrumento nunca recibe un bloque más grande que el que se le preparó");
         check (synthT.size() == 6 && sameTiming (midiT, synthT), "en bloques de 2048, cada nota sigue en su muestra exacta (+1600 la segunda tecla)");
-        host.runSized (2048, { { 0, MidiMessage::noteOff (1, 60) }, { 0, MidiMessage::noteOff (1, 67) } });
+        host.runSized (2048, { { 0, MidiMessage::noteOff (1, 60) }, { 0, MidiMessage::noteOff (1, 69) } });
         mark = synthLogLines();
         host.prepare (Host::blockSize);
         host.settle (4);
@@ -1283,15 +1288,15 @@ void testHostedInstrument (const String& path)
         setSlotBypass (host, true);
         auto first = host.runBlocks (2);
         auto silent = host.runBlocks (6);
-        auto whileBypassed = host.run ({ MidiMessage::noteOn (1, 72, (uint8) 100) });
+        auto whileBypassed = host.run ({ MidiMessage::noteOn (1, 53, (uint8) 100) });   // F3 -> F A C
         auto log = readSynthLog (mark);
         check (log.notesOff().count (69) == 1 && log.notesOff().count (72) == 1 && log.notesOff().count (76) == 1,
                "al entrar en BYPASS, el instrumento recibe el NoteOff de lo que sonaba (nada se queda colgado)");
         check (silent.outputRms <= 0.0f && whileBypassed.outputRms <= 0.0f, "en BYPASS el instrumento no suena");
-        check (whileBypassed.notesOn (1) == std::set<int> { 72, 76, 79 } && log.countNoteOn() == 0,
+        check (whileBypassed.notesOn (1) == std::set<int> { 53, 57, 60 } && log.countNoteOn() == 0,
                "en BYPASS los acordes siguen saliendo por MIDI y el instrumento no recibe nada");
         check (slotXml (host) != nullptr && slotXml (host)->getIntAttribute ("bypass") == 1, "BYPASS se guarda con el proyecto");
-        host.run ({ MidiMessage::noteOff (1, 69), MidiMessage::noteOff (1, 72) });
+        host.run ({ MidiMessage::noteOff (1, 69), MidiMessage::noteOff (1, 53) });
 
         setSlotBypass (host, false);
         host.settle (2);
@@ -1368,7 +1373,8 @@ void testHostedInstrument (const String& path)
         ghost.isInstrument = true;
         ghost.fileOrIdentifier = File::getSpecialLocation (File::tempDirectory).getChildFile ("NoExiste").getChildFile ("Ghost.vst3").getFullPathName();
         ghost.uniqueId = 4242;
-        setSlot (host, &ghost, false, "QUJD");
+        const auto ghostState = MemoryBlock ("ABC", 3).toBase64Encoding();   // el formato con el que SmartKeys guarda
+        setSlot (host, &ghost, false, ghostState);
         const bool missing = waitForSlot (host, "missing");
         auto r = host.run ({ MidiMessage::noteOn (1, 62, (uint8) 100) });
         auto saved = slotXml (host);
@@ -1376,7 +1382,7 @@ void testHostedInstrument (const String& path)
         check (r.outputRms <= 0.0f && r.notesOn (1).size() == 3, "silencio, y los acordes siguen saliendo por MIDI");
         check (saved != nullptr && saved->getChildByName ("PLUGIN") != nullptr
                  && saved->getChildByName ("PLUGIN")->getStringAttribute ("name") == "Ghost Synth"
-                 && saved->getChildElementAllSubText ("STATE", {}).trim() == "QUJD",
+                 && saved->getChildElementAllSubText ("STATE", {}).trim() == ghostState,
                "al guardar, el proyecto conserva el instrumento que falta y su sonido (para la computadora que lo tenga)");
         host.run ({ MidiMessage::noteOff (1, 62) });
     }
@@ -1591,12 +1597,13 @@ void testConcurrency (const String& path, double seconds)
             if (Time::getMillisecondCounterHiRes() > endMs)
             {
                 stopTimer();
-                MessageManager::getInstance()->stopDispatchLoop();
+                done = true;
             }
         }
         Host& host;
         double endMs;
         int iterations = 0, portToggles = 0, slotChanges = 0;
+        bool done = false;
         MemoryBlock previous;
         std::mt19937 rng { 5 };
         const PluginDescription* synth = nullptr;
@@ -1622,8 +1629,11 @@ void testConcurrency (const String& path, double seconds)
         }
     });
 
+    // (runDispatchLoop + stopDispatchLoop dejaría el bucle de mensajes parado para siempre:
+    // lo que sigue necesita que SmartKeys reciba sus mensajes)
     hammer.startTimer (7);
-    MessageManager::getInstance()->runDispatchLoop();
+    while (! hammer.done)
+        MessageManager::getInstance()->runDispatchLoopUntil (20);
     stop = true;
     audio.join();
     stateReader.join();

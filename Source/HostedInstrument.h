@@ -167,6 +167,7 @@ private:
     bool cacheHasPlugin = false;
     juce::PluginDescription cacheDescription;
     juce::MemoryBlock cacheState;
+    juce::String cacheError;   // por qué no se cargó (se guarda para diagnóstico; no se lee al abrir)
     bool restorePending = false, restoreHasPlugin = false;
     juce::PluginDescription restoreDescription;
     juce::MemoryBlock restoreStateData;
