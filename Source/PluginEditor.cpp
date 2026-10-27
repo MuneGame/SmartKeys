@@ -2,7 +2,7 @@
   ==============================================================================
 
     PluginEditor.cpp
-    SmartKeys (MIWN) — Interfaz gráfica vectorial (850 x 606 px, redimensionable).
+    SmartKeys (MIWN) — Interfaz gráfica vectorial (850 x 658 px, redimensionable).
 
   ==============================================================================
 */
@@ -1183,6 +1183,356 @@ void VoiceReadout::paint (juce::Graphics& g)
     }
 }
 
+//==============================================================================
+// InstrumentSlot: "+ LOAD PLUGIN" / "Loaded: Serum" (2.0)
+//==============================================================================
+static void drawChevron (juce::Graphics& g, juce::Rectangle<float> area, juce::Colour colour)
+{
+    const auto c = area.getCentre();
+    juce::Path p;
+    p.startNewSubPath (c.x - 4.0f, c.y - 2.0f);
+    p.lineTo (c.x, c.y + 2.5f);
+    p.lineTo (c.x + 4.0f, c.y - 2.0f);
+    g.setColour (colour);
+    g.strokePath (p, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+static void drawWarningIcon (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    const auto r = area.withSizeKeepingCentre (18.0f, 16.0f);
+    juce::Path tri;
+    tri.addTriangle (r.getCentreX(), r.getY(), r.getRight(), r.getBottom(), r.getX(), r.getBottom());
+    g.setColour (Colours::warning);
+    g.strokePath (tri, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.fillRoundedRectangle (r.getCentreX() - 0.9f, r.getY() + 5.0f, 1.8f, 6.0f, 0.9f);
+    g.fillEllipse (r.getCentreX() - 1.1f, r.getBottom() - 3.8f, 2.2f, 2.2f);
+}
+
+void InstrumentSlot::setState (Look newLook, const juce::String& newPrefix, const juce::String& newTitle, const juce::String& newSubtitle)
+{
+    if (newLook == look && newPrefix == prefix && newTitle == title && newSubtitle == subtitle)
+        return;
+    look = newLook;
+    prefix = newPrefix;
+    title = newTitle;
+    subtitle = newSubtitle;
+    repaint();
+}
+
+void InstrumentSlot::mouseUp (const juce::MouseEvent& e)
+{
+    if (e.mouseWasClicked() && getLocalBounds().contains (e.getPosition()) && onClick != nullptr)
+        onClick();
+}
+
+void InstrumentSlot::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
+    const bool over = isMouseOver (true);
+    const bool empty = look == Look::Empty;
+
+    g.setColour (empty ? Colours::accent.withAlpha (over ? 0.10f : 0.045f) : (over ? Colours::softPanel : Colours::white));
+    g.fillRoundedRectangle (r, 6.0f);
+
+    // Vacía: borde rosa discontinuo; con un problema: rojo
+    if (empty)
+    {
+        juce::Path outline, dashed;
+        outline.addRoundedRectangle (r.reduced (0.5f), 6.0f);
+        const float dashes[] = { 5.0f, 3.5f };
+        juce::PathStrokeType (1.3f).createDashedStroke (dashed, outline, dashes, 2);
+        g.setColour (Colours::accent.withAlpha (over ? 0.95f : 0.7f));
+        g.fillPath (dashed);
+    }
+    else
+    {
+        g.setColour (look == Look::Problem ? Colours::warning.withAlpha (0.8f) : Colours::border);
+        g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
+    }
+
+    // Icono: "+" (vacía), aviso (problema) o un módulo de instrumento con tres faders
+    auto icon = r.removeFromLeft (r.getHeight()).reduced (7.0f);
+    if (empty)
+    {
+        g.setColour (Colours::accent);
+        const auto c = icon.getCentre();
+        g.fillRoundedRectangle (c.x - 7.0f, c.y - 1.2f, 14.0f, 2.4f, 1.2f);
+        g.fillRoundedRectangle (c.x - 1.2f, c.y - 7.0f, 2.4f, 14.0f, 1.2f);
+    }
+    else if (look == Look::Problem)
+    {
+        drawWarningIcon (g, icon);
+    }
+    else
+    {
+        const auto box = icon.withSizeKeepingCentre (20.0f, 18.0f);
+        const auto colour = look == Look::Loaded ? Colours::accent : Colours::disabled;
+        g.setColour (colour);
+        g.drawRoundedRectangle (box, 3.5f, 1.4f);
+        const float levels[] = { 0.35f, 0.7f, 0.5f };
+        for (int i = 0; i < 3; ++i)
+        {
+            const float x = box.getX() + 5.0f + (float) i * 5.0f;
+            g.fillRoundedRectangle (x - 0.7f, box.getY() + 4.0f, 1.4f, box.getHeight() - 8.0f, 0.7f);
+            const float y = box.getBottom() - 4.0f - levels[i] * (box.getHeight() - 8.0f);
+            g.fillRoundedRectangle (x - 2.2f, y - 1.3f, 4.4f, 2.6f, 1.2f);
+        }
+    }
+
+    drawChevron (g, r.removeFromRight (24.0f), empty ? Colours::accent : Colours::label);
+
+    // Texto: título (con su "Loaded:" delante) y una línea de detalle
+    auto text = r.reduced (2.0f, 3.0f);
+    auto top = text.removeFromTop (text.getHeight() * 0.56f);
+    const auto titleFont = makeFont (13.5f, true);
+    float x = top.getX();
+    if (prefix.isNotEmpty())
+    {
+        const auto prefixFont = makeFont (11.5f, true);
+        const float w = textWidth (prefixFont, prefix);
+        g.setFont (prefixFont);
+        g.setColour (Colours::label);
+        g.drawText (prefix, juce::Rectangle<float> (x, top.getY(), w + 2.0f, top.getHeight()), juce::Justification::bottomLeft, false);
+        x += w + 6.0f;
+    }
+    g.setFont (titleFont);
+    g.setColour (empty ? Colours::accent : look == Look::Problem ? Colours::warning
+                                         : look == Look::Busy || look == Look::Bypassed ? Colours::label : Colours::text);
+    g.drawFittedText (title, juce::Rectangle<float> (x, top.getY(), top.getRight() - x, top.getHeight()).toNearestInt(),
+                      juce::Justification::bottomLeft, 1, 0.7f);
+
+    g.setFont (makeFont (10.5f, true));
+    g.setColour (look == Look::Problem ? Colours::warning.withAlpha (0.85f) : Colours::label);
+    g.drawFittedText (subtitle, text.toNearestInt(), juce::Justification::centredLeft, 1, 0.7f);
+}
+
+//==============================================================================
+// PresetBox
+//==============================================================================
+void PresetBox::setName (const juce::String& newName)
+{
+    if (newName != name)
+    {
+        name = newName;
+        repaint();
+    }
+}
+
+void PresetBox::mouseUp (const juce::MouseEvent& e)
+{
+    if (e.mouseWasClicked() && getLocalBounds().contains (e.getPosition()) && onClick != nullptr)
+        onClick();
+}
+
+void PresetBox::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
+    g.setColour (isMouseOver (true) ? Colours::softPanel : Colours::white);
+    g.fillRoundedRectangle (r, 6.0f);
+    g.setColour (Colours::border);
+    g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
+
+    drawChevron (g, r.removeFromRight (22.0f), Colours::label);
+    auto text = r.reduced (9.0f, 3.0f);
+    g.setFont (makeFont (8.5f, true).withExtraKerningFactor (0.2f));
+    g.setColour (Colours::label);
+    g.drawText ("PRESET", text.removeFromTop (text.getHeight() * 0.42f), juce::Justification::bottomLeft, false);
+    g.setFont (makeFont (12.0f, true));
+    g.setColour (name.isEmpty() ? Colours::disabled : Colours::text);
+    g.drawFittedText (name.isEmpty() ? u8 ("Sin preset") : name, text.toNearestInt(), juce::Justification::centredLeft, 1, 0.7f);
+}
+
+//==============================================================================
+// PresetDialog: guardar / borrar un preset dentro de la interfaz
+//==============================================================================
+PresetDialog::PresetDialog()
+{
+    setWantsKeyboardFocus (true);
+
+    nameEditor.setFont (makeFont (15.0f, true));
+    nameEditor.setIndents (10, 7);
+    nameEditor.setColour (juce::TextEditor::backgroundColourId, Colours::softPanel);
+    nameEditor.setColour (juce::TextEditor::textColourId, Colours::text);
+    nameEditor.setColour (juce::TextEditor::outlineColourId, Colours::border);
+    nameEditor.setColour (juce::TextEditor::focusedOutlineColourId, Colours::accent);
+    nameEditor.setColour (juce::TextEditor::highlightColourId, Colours::accent.withAlpha (0.25f));
+    nameEditor.setColour (juce::CaretComponent::caretColourId, Colours::accent);
+    nameEditor.setInputRestrictions (64);
+    nameEditor.onTextChange = [this] { updateWarning(); };
+    nameEditor.onReturnKey = [this] { okButton.triggerClick(); };
+    nameEditor.onEscapeKey = [this] { close(); };
+    addAndMakeVisible (nameEditor);
+
+    includeInstrument.setColour (juce::ToggleButton::textColourId, Colours::text);
+    includeInstrument.setColour (juce::ToggleButton::tickColourId, Colours::accent);
+    includeInstrument.setColour (juce::ToggleButton::tickDisabledColourId, Colours::border);
+    addAndMakeVisible (includeInstrument);
+
+    okButton.setToggleState (true, juce::dontSendNotification);   // botón principal (rosa)
+    okButton.getProperties().set (fontSizeProperty, 12.0f);
+    cancelButton.getProperties().set (fontSizeProperty, 12.0f);
+    okButton.onClick = [this]
+    {
+        if (deleting)
+        {
+            auto callback = onDelete;
+            close();
+            if (callback != nullptr)
+                callback();
+            return;
+        }
+
+        const auto name = nameEditor.getText().trim();
+        if (smartkeys::presets::cleanName (name).isEmpty())
+        {
+            warning = u8 ("Escribe un nombre para el preset");
+            repaint();
+            nameEditor.grabKeyboardFocus();
+            return;
+        }
+
+        auto callback = onSave;
+        const bool include = includeInstrument.isEnabled() && includeInstrument.getToggleState();
+        close();
+        if (callback != nullptr)
+            callback (name, include);
+    };
+    cancelButton.onClick = [this] { close(); };
+    addAndMakeVisible (okButton);
+    addAndMakeVisible (cancelButton);
+}
+
+juce::Rectangle<int> PresetDialog::getCard() const
+{
+    return getLocalBounds().withSizeKeepingCentre (430, deleting ? 160 : 214);
+}
+
+void PresetDialog::showSave (const juce::String& suggestedName, const juce::String& instrumentName)
+{
+    deleting = false;
+    title = u8 ("GUARDAR PRESET");
+    message = u8 ("Guarda KEY, SCALE, el modo, el voicing, el STRUM y MIC VOICE.");
+    nameEditor.setVisible (true);
+    nameEditor.setText (suggestedName, false);
+    nameEditor.selectAll();
+    includeInstrument.setVisible (true);
+    includeInstrument.setEnabled (instrumentName.isNotEmpty());
+    includeInstrument.setButtonText (instrumentName.isNotEmpty()
+                                        ? u8 ("Incluir ") + instrumentName + u8 (" con su sonido (cadena favorita)")
+                                        : u8 ("Incluir el instrumento (no hay ninguno cargado)"));
+    includeInstrument.setToggleState (false, juce::dontSendNotification);
+    okButton.setButtonText (u8 ("GUARDAR"));
+    cancelButton.setButtonText (u8 ("CANCELAR"));
+    updateWarning();
+    setVisible (true);
+    toFront (false);
+    resized();
+    nameEditor.grabKeyboardFocus();
+}
+
+void PresetDialog::showDelete (const juce::String& presetName)
+{
+    deleting = true;
+    title = u8 ("BORRAR PRESET");
+    message = u8 ("¿Borrar \"") + presetName + u8 ("\"? No se puede deshacer.");
+    warning = {};
+    nameEditor.setVisible (false);
+    includeInstrument.setVisible (false);
+    okButton.setButtonText (u8 ("BORRAR"));
+    cancelButton.setButtonText (u8 ("CANCELAR"));
+    setVisible (true);
+    toFront (false);
+    resized();
+    grabKeyboardFocus();
+}
+
+void PresetDialog::mouseDown (const juce::MouseEvent& e)
+{
+    if (! getCard().contains (e.getPosition()))
+        close();
+}
+
+void PresetDialog::close()
+{
+    setVisible (false);
+    if (auto* content = getParentComponent())
+        if (auto* editor = content->getParentComponent())
+            editor->grabKeyboardFocus();   // el teclado de la PC vuelve a tocar notas
+}
+
+void PresetDialog::updateWarning()
+{
+    const auto clean = smartkeys::presets::cleanName (nameEditor.getText());
+    warning = ! deleting && smartkeys::presets::userPresetExists (clean)
+                ? u8 ("Ya existe \"") + clean + u8 ("\": se reemplazará")
+                : juce::String();
+    repaint();
+}
+
+bool PresetDialog::keyPressed (const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::escapeKey)
+    {
+        close();
+        return true;
+    }
+    if (key == juce::KeyPress::returnKey)
+    {
+        okButton.triggerClick();
+        return true;
+    }
+    return true;   // ninguna tecla llega al teclado de notas mientras está abierto
+}
+
+void PresetDialog::resized()
+{
+    auto card = getCard().reduced (22, 18);
+    card.removeFromTop (48);   // título + mensaje
+    if (! deleting)
+    {
+        nameEditor.setBounds (card.removeFromTop (34));
+        card.removeFromTop (10);
+        includeInstrument.setBounds (card.removeFromTop (24));
+        card.removeFromTop (22);   // aviso
+    }
+    auto buttons = card.removeFromBottom (34);
+    okButton.setBounds (buttons.removeFromRight (120));
+    buttons.removeFromRight (8);
+    cancelButton.setBounds (buttons.removeFromRight (120));
+}
+
+void PresetDialog::paint (juce::Graphics& g)
+{
+    g.fillAll (Colours::text.withAlpha (0.38f));
+
+    const auto card = getCard().toFloat();
+    for (int i = 3; i >= 1; --i)
+    {
+        g.setColour (juce::Colours::black.withAlpha (0.05f * (float) (4 - i)));
+        g.fillRoundedRectangle (card.expanded ((float) i * 2.0f).translated (0.0f, 2.0f), 12.0f + (float) i * 2.0f);
+    }
+    g.setColour (Colours::white);
+    g.fillRoundedRectangle (card, 10.0f);
+    g.setColour (Colours::accent);
+    g.fillRoundedRectangle (card.getX(), card.getY(), 40.0f, 3.0f, 1.5f);
+
+    auto area = card.reduced (22.0f, 16.0f);
+    g.setColour (Colours::text);
+    g.setFont (makeFont (13.0f, true).withExtraKerningFactor (0.12f));
+    g.drawText (title, area.removeFromTop (20.0f), juce::Justification::centredLeft, false);
+    g.setColour (Colours::label);
+    g.setFont (makeFont (11.5f, true));
+    g.drawFittedText (message, area.removeFromTop (26.0f).toNearestInt(), juce::Justification::centredLeft, 2, 0.8f);
+
+    if (warning.isNotEmpty() && ! deleting)
+    {
+        const auto w = includeInstrument.getBounds().toFloat().translated (0.0f, 26.0f).withHeight (18.0f);
+        g.setColour (Colours::warning);
+        g.setFont (makeFont (11.0f, true));
+        g.drawFittedText (warning, w.toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
+    }
+}
+
 } // namespace smartkeys::ui
 
 //==============================================================================
@@ -1192,11 +1542,17 @@ using namespace smartkeys::ui;
 
 namespace
 {
-    // Coordenadas del contenido (850 x 606): tarjetas y filas
-    constexpr float kMicCardY   = 56.0f,  kMicCardH   = 44.0f;
-    constexpr float kKeyCardY   = 108.0f, kKeyCardH   = 170.0f;
-    constexpr float kScaleBarY  = 286.0f, kScaleBarH  = 84.0f;
-    constexpr float kKeyboardY  = 378.0f, kKeyboardH  = 218.0f;
+    // Coordenadas del contenido (850 x 658): tarjetas y filas
+    constexpr float kInstCardY  = 56.0f,  kInstCardH  = 44.0f;    // 2.0: INSTRUMENT
+    constexpr float kMicCardY   = 108.0f, kMicCardH   = 44.0f;
+    constexpr float kKeyCardY   = 160.0f, kKeyCardH   = 170.0f;
+    constexpr float kScaleBarY  = 338.0f, kScaleBarH  = 84.0f;
+    constexpr float kKeyboardY  = 430.0f, kKeyboardH  = 218.0f;
+    constexpr int   kMicRowShift = (int) (kMicCardY - 56.0f);     // la tira MIC bajó una fila
+
+    // Menús de la ranura y de los presets: los instrumentos / presets van de 1 en adelante
+    enum MenuIds : int { kMenuScanNew = 100000, kMenuScanAll, kMenuRetry, kMenuUnload, kMenuInfo,
+                         kMenuSavePreset, kMenuDeletePreset, kMenuPresetFolder };
 }
 
 SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProcessor& p)
@@ -1233,9 +1589,60 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
         s->setColour (juce::Slider::textBoxTextColourId, Colours::text);
         content.addAndMakeVisible (s);
     }
-    gainSlider.setTooltip (u8 ("Volumen del piano interno de SmartKeys. Los acordes salen siempre por la salida MIDI "
-                               "del plugin, en el canal 1 (en FL Studio: engranaje > MIDI > Output port)."));
+    gainSlider.setTooltip (u8 ("Volumen del instrumento cargado en la ranura (su sonido sale por SmartKeys). Los acordes "
+                               "salen siempre también por la salida MIDI del plugin, en el canal 1 (en FL Studio: "
+                               "engranaje > MIDI > Output port)."));
     gateSlider.setTooltip (u8 ("Umbral del micrófono: por debajo, la voz no dispara notas"));
+
+    //--------------------------------------------------------------------------
+    // Fila INSTRUMENT (2.0): la ranura (el instrumento que toca los acordes), su
+    // ventana, BYPASS, UNLOAD y los presets de SmartKeys
+    instrumentSlot.onClick = [this] { showInstrumentMenu(); };
+    content.addAndMakeVisible (instrumentSlot);
+
+    for (auto* b : { &showGuiButton, &bypassButton, &unloadButton })
+    {
+        b->getProperties().set (fontSizeProperty, 11.5f);
+        content.addAndMakeVisible (b);
+    }
+    showGuiButton.setTooltip (u8 ("Abre o cierra la ventana del instrumento cargado: ahí eliges sus presets y mueves sus "
+                                  "perillas. Flota junto a SmartKeys y se cierra con ella."));
+    showGuiButton.onClick = [this]
+    {
+        auto& hosted = audioProcessor.getHostedInstrument();
+        if (hosted.isWindowOpen())
+            hosted.closeWindow();
+        else
+            hosted.showWindow (this);
+        updateInstrumentRow (true);
+    };
+    bypassButton.setClickingTogglesState (true);
+    bypassButton.setTooltip (u8 ("BYPASS: el instrumento deja de sonar (suelta todas sus notas). Los acordes siguen "
+                                 "saliendo por MIDI."));
+    bypassButton.onClick = [this]
+    {
+        audioProcessor.getHostedInstrument().setBypassed (bypassButton.getToggleState());
+        updateInstrumentRow (true);
+    };
+    unloadButton.setTooltip (u8 ("UNLOAD: quita el instrumento de la ranura."));
+    unloadButton.onClick = [this]
+    {
+        audioProcessor.getHostedInstrument().unload();
+        updateInstrumentRow (true);
+    };
+
+    presetBox.setTooltip (u8 ("Presets de SmartKeys: KEY, SCALE, modo, voicing, STRUM y MIC VOICE (y, si quieres, el "
+                              "instrumento con su sonido). Los presets del instrumento se eligen en su ventana."));
+    presetBox.onClick = [this] { showPresetMenu(); };
+    content.addAndMakeVisible (presetBox);
+
+    presetDialog.onSave = [this] (const juce::String& name, bool includeInstrument)
+    {
+        if (auto preset = audioProcessor.createPresetXml (includeInstrument))
+            if (smartkeys::presets::save (name, *preset).wasOk())
+                audioProcessor.setPresetName (smartkeys::presets::cleanName (name));
+        updateInstrumentRow (true);
+    };
 
     //--------------------------------------------------------------------------
     // Tira MIC: controlador de voz en tiempo real. La voz llega por la entrada
@@ -1250,12 +1657,12 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     };
    #if JUCE_MAC
     micButton.setTooltip (u8 ("Canta o tararea: tu voz, corregida a KEY y SCALE, dispara la nota o el acorde del modo "
-                              "elegido en tiempo real (suena el piano y sale por MIDI).\n"
+                              "elegido en tiempo real (lo toca el instrumento cargado y sale por MIDI).\n"
                               "SmartKeys lee la entrada de audio activa de macOS (Ajustes del Sistema > Sonido > Entrada); "
                               "si el DAW le manda audio por su entrada (sidechain), usa ese."));
    #else
     micButton.setTooltip (u8 ("Canta o tararea: tu voz, corregida a KEY y SCALE, dispara la nota o el acorde del modo "
-                              "elegido en tiempo real (suena el piano y sale por MIDI).\n"
+                              "elegido en tiempo real (lo toca el instrumento cargado y sale por MIDI).\n"
                               "En Windows la voz entra por la entrada sidechain del plugin."));
    #endif
     content.addAndMakeVisible (micButton);
@@ -1335,6 +1742,12 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     shownDawLiveNotes = audioProcessor.getDawLiveNoteCount();
     audioProcessor.markInUse();
 
+    // Encima de todo: guardar / borrar preset (oculto)
+    content.addChildComponent (presetDialog);
+
+    // La ventana del instrumento cargado vuelve a abrirse si estaba abierta al cerrar SmartKeys
+    audioProcessor.getHostedInstrument().smartKeysEditorOpened (*this);
+
     timerCallback();
     startTimerHz (60);
 
@@ -1368,6 +1781,9 @@ SmartKeysAudioProcessorEditor::~SmartKeysAudioProcessorEditor()
     for (size_t i = 0; i < computerKeysDown.size(); ++i)
         if (computerKeysDown[i] && computerKeyNotes[i] >= 0)
             audioProcessor.pushScreenNote (computerKeyNotes[i], 0, false);
+
+    // 4) La ventana del instrumento cargado se cierra con la de SmartKeys (y lo recuerda)
+    audioProcessor.getHostedInstrument().smartKeysEditorClosing();
 
     setLookAndFeel (nullptr);
 }
@@ -1428,6 +1844,7 @@ void SmartKeysAudioProcessorEditor::paintContent (juce::Graphics& g)
         g.setColour (Colours::border.withAlpha (0.8f));
         g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
     };
+    card ({ 16.0f, kInstCardY, 818.0f, kInstCardH });      // INSTRUMENT (2.0)
     card ({ 16.0f, kMicCardY, 818.0f, kMicCardH });        // MIC
     card ({ 16.0f, kKeyCardY, 410.0f, kKeyCardH });        // KEY
     card ({ 436.0f, kKeyCardY, 398.0f, kKeyCardH });       // SCALE
@@ -1437,10 +1854,11 @@ void SmartKeysAudioProcessorEditor::paintContent (juce::Graphics& g)
     // Rótulo del GATE (dentro de la tarjeta MIC: se dibuja después de ella)
     g.setColour (Colours::label);
     g.setFont (makeFont (11.0f, true));
-    g.drawText ("GATE", 344, 64, 34, 28, juce::Justification::centredLeft, false);
+    g.drawText ("GATE", 344, 64 + kMicRowShift, 34, 28, juce::Justification::centredLeft, false);
 
-    // Pestaña de acento sobre KEY
+    // Pestañas de acento sobre INSTRUMENT y KEY
     g.setColour (Colours::accent);
+    g.fillRoundedRectangle (16.0f, kInstCardY, 28.0f, 3.0f, 1.5f);
     g.fillRoundedRectangle (16.0f, kKeyCardY, 28.0f, 3.0f, 1.5f);
     g.setColour (Colours::label);
     g.setFont (makeFont (13.0f, true));
@@ -1468,11 +1886,19 @@ void SmartKeysAudioProcessorEditor::layoutContent()
     gainSlider.setBounds (692, 15, 142, 28);
     portStatus.setBounds (560, 1, 274, 12);   // "MIDI ● SmartKeys Chords", alineado a la derecha
 
+    // Fila INSTRUMENT: ranura | SHOW PLUGIN GUI | BYPASS | UNLOAD | PRESET
+    const int iy = (int) kInstCardY;
+    instrumentSlot.setBounds (22, iy + 4, 318, 36);
+    showGuiButton.setBounds (346, iy + 8, 150, 28);
+    bypassButton.setBounds (500, iy + 8, 84, 28);
+    unloadButton.setBounds (588, iy + 8, 84, 28);
+    presetBox.setBounds (680, iy + 4, 148, 36);
+
     // Tira MIC: MIC VOICE | medidor | GATE | Mic: A3 -> Acorde: Am
-    micButton.setBounds (22, 64, 150, 28);
-    micMeter.setBounds (184, 70, 150, 16);
-    gateSlider.setBounds (378, 66, 140, 24);
-    voiceReadout.setBounds (534, 62, 292, 32);
+    micButton.setBounds (22, 64 + kMicRowShift, 150, 28);
+    micMeter.setBounds (184, 70 + kMicRowShift, 150, 16);
+    gateSlider.setBounds (378, 66 + kMicRowShift, 140, 24);
+    voiceReadout.setBounds (534, 62 + kMicRowShift, 292, 32);
 
     // KEY · SCALE · ESCALA
     keySelector.setBounds (30, (int) kKeyCardY + 28, 382, 132);
@@ -1489,6 +1915,8 @@ void SmartKeysAudioProcessorEditor::layoutContent()
     strumTitleLabel.setBounds (642, y + 132, 186, 16);
     strumValueLabel.setBounds (642, y + 148, 186, 26);
     strumDirSwitch.setBounds (587, y + 180, 242, 30);
+
+    presetDialog.setBounds (0, 0, kWidth, kHeight);
 }
 
 //==============================================================================
@@ -1568,6 +1996,7 @@ void SmartKeysAudioProcessorEditor::timerCallback()
     updateVoiceReadout();
     updateStrumLabel();
     updateDisplay();
+    updateInstrumentRow();
 }
 
 void SmartKeysAudioProcessorEditor::updateStrumLabel()
@@ -1789,8 +2218,307 @@ void SmartKeysAudioProcessorEditor::showChordPortMenu()
 }
 
 //==============================================================================
+// 2.0: fila INSTRUMENT (la ranura, su ventana, BYPASS, UNLOAD y los presets)
+void SmartKeysAudioProcessorEditor::updateInstrumentRow (bool force)
+{
+    using Look = smartkeys::ui::InstrumentSlot::Look;
+    using Status = smartkeys::HostedInstrument::Status;
+
+    auto& hosted = audioProcessor.getHostedInstrument();
+    auto& catalog = hosted.getCatalog();
+    const auto hostedChange = hosted.getChangeCounter();
+    const auto catalogChange = catalog.getChangeCounter();
+    const auto presetName = audioProcessor.getPresetName();
+    const auto failure = hosted.getRecentFailure();
+    const bool windowOpen = hosted.isWindowOpen();
+    const bool invalidAudio = hosted.producedInvalidAudio();
+
+    if (! force && hostedChange == shownHostedChange && catalogChange == shownCatalogChange && presetName == shownPresetName
+          && failure == shownFailure && windowOpen == shownWindowOpen && invalidAudio == shownInvalidAudio)
+        return;
+
+    shownHostedChange = hostedChange;
+    shownCatalogChange = catalogChange;
+    shownPresetName = presetName;
+    shownFailure = failure;
+    shownWindowOpen = windowOpen;
+    shownInvalidAudio = invalidAudio;
+
+    const auto status = hosted.getStatus();
+    const auto d = hosted.getDescription();
+    juce::String kind = smartkeys::PluginCatalog::getFormatDisplayName (d);
+    if (d.manufacturerName.isNotEmpty())
+        kind << u8 ("  ·  ") << d.manufacturerName;
+
+    juce::String tip;
+    switch (status)
+    {
+        case Status::Empty:
+            instrumentSlot.setState (Look::Empty, {}, "+ LOAD PLUGIN", u8 ("Elige el instrumento que tocará los acordes"));
+            tip = u8 ("Carga un instrumento VST3 o Audio Unit (Serum, Kontakt, Analog Lab…): SmartKeys le toca los acordes "
+                      "completos, con el STRUM, y su sonido sale por SmartKeys. SmartKeys ya no tiene piano propio.");
+            break;
+        case Status::Loading:
+            instrumentSlot.setState (Look::Busy, {}, u8 ("Cargando ") + d.name + u8 ("…"), kind);
+            break;
+        case Status::Loaded:
+        {
+            auto sub = hosted.isBypassed() ? u8 ("BYPASS: en silencio (los acordes siguen saliendo por MIDI)") : kind;
+            if (invalidAudio)
+                sub = u8 ("Devolvió audio no válido: SmartKeys silenció ese momento");
+            if (failure.isNotEmpty())
+                sub = u8 ("No se pudo cargar ") + failure;
+            instrumentSlot.setState (hosted.isBypassed() ? Look::Bypassed : Look::Loaded, "Loaded:", d.name, sub);
+            tip = d.name + "  (" + kind + ")\n" + u8 ("Clic: cambiar de instrumento. SHOW PLUGIN GUI abre su ventana.");
+            break;
+        }
+        case Status::Missing:
+            instrumentSlot.setState (Look::Problem, {}, d.name, u8 ("No está instalado en esta computadora (se conserva en el proyecto)"));
+            tip = u8 ("El proyecto usa ") + d.name + u8 (" (") + kind + u8 ("), que no está en esta computadora. Se guarda tal cual: "
+                  "en la computadora que lo tenga sonará con su sonido.");
+            break;
+        case Status::Failed:
+            instrumentSlot.setState (Look::Problem, {}, d.name, u8 ("No se pudo cargar: ") + hosted.getErrorText());
+            break;
+        case Status::Crashed:
+            instrumentSlot.setState (Look::Problem, {}, d.name, u8 ("Se cerró el programa al cargarlo: clic para reintentar"));
+            tip = u8 ("La última vez el programa se cerró mientras se cargaba este instrumento; por eso no se volvió a abrir solo. "
+                      "Clic > Reintentar para cargarlo (con su sonido guardado).");
+            break;
+    }
+
+    if (catalog.isScanning())
+    {
+        const auto name = catalog.getScanningName();
+        instrumentSlot.setState (status == Status::Empty ? Look::Busy : (status == Status::Loaded ? Look::Loaded : Look::Problem),
+                                 status == Status::Loaded ? juce::String ("Loaded:") : juce::String(),
+                                 status == Status::Empty ? u8 ("Buscando instrumentos…") : d.name,
+                                 u8 ("Buscando VST3 ") + juce::String (juce::roundToInt (catalog.getScanProgress() * 100.0f)) + "%"
+                                     + (name.isNotEmpty() ? u8 ("  ·  ") + juce::File::createFileWithoutCheckingPath (name).getFileNameWithoutExtension()
+                                                          : juce::String()));
+    }
+
+    if (instrumentSlot.getTooltip() != tip)
+        instrumentSlot.setTooltip (tip);
+
+    const bool loaded = status == Status::Loaded;
+    showGuiButton.setEnabled (loaded);
+    showGuiButton.setToggleState (loaded && windowOpen, juce::dontSendNotification);
+    showGuiButton.setButtonText (loaded && windowOpen ? "HIDE PLUGIN GUI" : "SHOW PLUGIN GUI");
+    bypassButton.setEnabled (loaded);
+    bypassButton.setToggleState (loaded && hosted.isBypassed(), juce::dontSendNotification);
+    unloadButton.setEnabled (status != Status::Empty);
+    presetBox.setName (presetName);
+}
+
+// Clic en la ranura: los instrumentos instalados (Audio Unit al instante; VST3 de la búsqueda)
+void SmartKeysAudioProcessorEditor::showInstrumentMenu()
+{
+    using Status = smartkeys::HostedInstrument::Status;
+    auto& hosted = audioProcessor.getHostedInstrument();
+    auto& catalog = hosted.getCatalog();
+
+   #if ! JUCE_MAC
+    // Windows / Linux: sólo hay VST3. La primera vez se buscan solos.
+    if (catalog.hasVst3Format() && ! catalog.hasEverScannedVst3() && ! catalog.isScanning())
+        catalog.startVst3Scan (false);
+   #endif
+
+    const auto instruments = catalog.getInstruments();
+    const auto status = hosted.getStatus();
+    const auto current = hosted.getDescription();
+
+    juce::PopupMenu menu;
+    auto addSection = [&] (const juce::String& format, const juce::String& header)
+    {
+        juce::Array<int> indices;
+        for (int i = 0; i < instruments.size(); ++i)
+            if (instruments.getReference (i).pluginFormatName == format)
+                indices.add (i);
+        if (indices.isEmpty())
+            return false;
+
+        menu.addSectionHeader (header);
+        const bool grouped = indices.size() > 10;   // muchos: un submenú por fabricante
+        juce::PopupMenu group;
+        juce::String maker;
+        bool groupTicked = false;
+
+        auto flushGroup = [&]
+        {
+            if (group.getNumItems() > 0)
+                menu.addSubMenu (maker.isNotEmpty() ? maker : u8 ("Otros"), group, true, nullptr, groupTicked);
+            group = {};
+            groupTicked = false;
+        };
+
+        for (int i : indices)
+        {
+            const auto& d = instruments.getReference (i);
+            const bool ticked = status != Status::Empty && d.isDuplicateOf (current);
+            if (grouped)
+            {
+                if (d.manufacturerName != maker)
+                {
+                    flushGroup();
+                    maker = d.manufacturerName;
+                }
+                group.addItem (i + 1, d.name, true, ticked);
+                groupTicked = groupTicked || ticked;
+            }
+            else
+            {
+                menu.addItem (i + 1, d.manufacturerName.isNotEmpty() ? d.name + u8 ("   ·   ") + d.manufacturerName : d.name, true, ticked);
+            }
+        }
+        flushGroup();
+        return true;
+    };
+
+   #if JUCE_MAC
+    if (! addSection ("AudioUnit", u8 ("Instrumentos Audio Unit")))
+    {
+        menu.addSectionHeader (u8 ("Instrumentos Audio Unit"));
+        menu.addItem (kMenuInfo, u8 ("No hay ninguno instalado"), false, false);
+    }
+   #endif
+
+    if (catalog.hasVst3Format())
+    {
+        if (! addSection ("VST3", u8 ("Instrumentos VST3")))
+        {
+            menu.addSectionHeader (u8 ("Instrumentos VST3"));
+            menu.addItem (kMenuInfo, catalog.isScanning()             ? u8 ("Buscando…")
+                                     : catalog.hasEverScannedVst3()   ? u8 ("No se encontró ninguno")
+                                                                      : u8 ("Pulsa \"Buscar instrumentos VST3\""), false, false);
+        }
+
+        menu.addSeparator();
+        if (catalog.isScanning())
+        {
+            menu.addItem (kMenuScanNew, u8 ("Buscando instrumentos VST3… ")
+                                            + juce::String (juce::roundToInt (catalog.getScanProgress() * 100.0f)) + "%", false, false);
+        }
+        else
+        {
+            menu.addItem (kMenuScanNew, u8 ("Buscar instrumentos VST3 nuevos"));
+            menu.addItem (kMenuScanAll, u8 ("Volver a buscar todos los VST3"));
+        }
+    }
+
+    if (status == Status::Missing || status == Status::Failed || status == Status::Crashed)
+    {
+        menu.addSeparator();
+        menu.addItem (kMenuRetry, u8 ("Reintentar cargar \"") + current.name + u8 ("\""));
+    }
+    if (status != Status::Empty)
+    {
+        menu.addSeparator();
+        menu.addItem (kMenuUnload, u8 ("Quitar el instrumento (UNLOAD)"));
+    }
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&instrumentSlot)
+                                                  .withMinimumWidth (instrumentSlot.getWidth()),
+                        [safe = juce::Component::SafePointer<SmartKeysAudioProcessorEditor> (this), instruments] (int result)
+                        {
+                            if (safe == nullptr || result == 0)
+                                return;
+
+                            auto& h = safe->audioProcessor.getHostedInstrument();
+                            if (result == kMenuScanNew)       h.getCatalog().startVst3Scan (false);
+                            else if (result == kMenuScanAll)  h.getCatalog().startVst3Scan (true);
+                            else if (result == kMenuRetry)    h.retry();
+                            else if (result == kMenuUnload)   h.unload();
+                            else if (juce::isPositiveAndBelow (result - 1, instruments.size()))
+                                h.load (instruments.getReference (result - 1));
+                            safe->updateInstrumentRow (true);
+                        });
+}
+
+// Clic en PRESET: los de fábrica, los del usuario, guardar, borrar y la carpeta
+void SmartKeysAudioProcessorEditor::showPresetMenu()
+{
+    namespace presets = smartkeys::presets;
+    const auto items = presets::list();
+    const auto current = audioProcessor.getPresetName();
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader (u8 ("Presets de fábrica"));
+    bool userHeader = false;
+    int currentUser = -1;
+    for (int i = 0; i < items.size(); ++i)
+    {
+        const auto& item = items.getReference (i);
+        if (! item.isFactory() && ! userHeader)
+        {
+            menu.addSectionHeader (u8 ("Mis presets"));
+            userHeader = true;
+        }
+        menu.addItem (i + 1, item.name, true, item.name == current);
+        if (! item.isFactory() && item.name == current)
+            currentUser = i;
+    }
+    if (! userHeader)
+    {
+        menu.addSectionHeader (u8 ("Mis presets"));
+        menu.addItem (kMenuInfo, u8 ("Todavía ninguno"), false, false);
+    }
+
+    menu.addSeparator();
+    menu.addItem (kMenuSavePreset, u8 ("Guardar preset…"));
+    if (currentUser >= 0)
+        menu.addItem (kMenuDeletePreset, u8 ("Borrar \"") + current + u8 ("\"…"));
+    menu.addItem (kMenuPresetFolder, u8 ("Abrir la carpeta de presets"));
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetBox),
+                        [safe = juce::Component::SafePointer<SmartKeysAudioProcessorEditor> (this), items, currentUser] (int result)
+                        {
+                            if (safe == nullptr || result == 0)
+                                return;
+
+                            auto& editor = *safe;
+                            if (result == kMenuSavePreset)
+                            {
+                                auto& hosted = editor.audioProcessor.getHostedInstrument();
+                                const bool loaded = hosted.getStatus() == smartkeys::HostedInstrument::Status::Loaded;
+                                const auto name = currentUser >= 0 ? items.getReference (currentUser).name : u8 ("Mi preset");
+                                editor.presetDialog.showSave (name, loaded ? hosted.getDescription().name : juce::String());
+                            }
+                            else if (result == kMenuDeletePreset && currentUser >= 0)
+                            {
+                                const auto item = items.getReference (currentUser);
+                                editor.presetDialog.onDelete = [safe, item]
+                                {
+                                    if (safe == nullptr)
+                                        return;
+                                    if (presets::remove (item))
+                                        safe->audioProcessor.setPresetName ({});
+                                    safe->updateInstrumentRow (true);
+                                };
+                                editor.presetDialog.showDelete (item.name);
+                            }
+                            else if (result == kMenuPresetFolder)
+                            {
+                                const auto folder = presets::getUserFolder();
+                                folder.createDirectory();
+                                folder.startAsProcess();
+                            }
+                            else if (juce::isPositiveAndBelow (result - 1, items.size()))
+                            {
+                                const auto& item = items.getReference (result - 1);
+                                if (auto xml = presets::load (item))
+                                    editor.audioProcessor.applyPreset (*xml, item.name);
+                            }
+                            editor.updateInstrumentRow (true);
+                        });
+}
+
+//==============================================================================
 bool SmartKeysAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 {
+    if (presetDialog.isVisible())
+        return false;   // se está escribiendo el nombre de un preset
+
     const auto c = juce::CharacterFunctions::toLowerCase (key.getTextCharacter());
 
     if (key.getModifiers().isCommandDown())
@@ -1809,7 +2537,7 @@ bool SmartKeysAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 bool SmartKeysAudioProcessorEditor::keyStateChanged (bool)
 {
     bool handled = false;
-    const bool command = juce::ModifierKeys::currentModifiers.isCommandDown();
+    const bool command = juce::ModifierKeys::currentModifiers.isCommandDown() || presetDialog.isVisible();
 
     for (int i = 0; i < 13; ++i)
     {

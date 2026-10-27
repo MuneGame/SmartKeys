@@ -2,7 +2,8 @@
   ==============================================================================
 
     PluginProcessor.cpp
-    SmartKeys (MIWN) — Piano inteligente, generador de acordes y controlador vocal.
+    SmartKeys (MIWN) — Generador de acordes, controlador vocal y contenedor de
+    instrumentos (2.0).
 
   ==============================================================================
 */
@@ -83,7 +84,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SmartKeysAudioProcessor::cre
     return { params.begin(), params.end() };
 }
 
-// Entrada de micrófono (mono o estéreo; sidechain opcional) + salida estéreo del piano
+// Entrada de micrófono (mono o estéreo; sidechain opcional) + salida estéreo del instrumento cargado
 juce::AudioProcessor::BusesProperties SmartKeysAudioProcessor::createBuses()
 {
     return BusesProperties()
@@ -129,16 +130,21 @@ SmartKeysAudioProcessor::SmartKeysAudioProcessor()
 
     chordPortEnabled.store (isChordPortEnabledByDefault (wrapperType));
 
+    // La latencia del instrumento cargado es la de SmartKeys (el DAW la compensa)
+    hosted.onLatencyChanged = [this] (int samples) { setLatencySamples (samples); };
+
     // Vigilancia del micrófono del sistema y del teclado virtual (hilo de mensajes, 4 veces por segundo)
     startTimer (250);
 }
 
 SmartKeysAudioProcessor::~SmartKeysAudioProcessor()
 {
-    // 1) Ningún temporizador más; 2) el teclado virtual apaga lo que esta
-    //    instancia dejó sonando y la suelta; 3) el micrófono del sistema se
+    // 1) Ningún temporizador más; 2) el instrumento cargado se cierra (su ventana,
+    //    el audio lo suelta y se destruye); 3) el teclado virtual apaga lo que esta
+    //    instancia dejó sonando y la suelta; 4) el micrófono del sistema se
     //    cierra (el IOProc de CoreAudio termina antes de destruir su búfer)
     stopTimer();
+    hosted.shutdown();
     disconnectChordPort();
     systemMic.shutdown();
 
@@ -526,8 +532,8 @@ void SmartKeysAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 {
     currentSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
 
-    pianoSynth.prepare (currentSampleRate, samplesPerBlock);
     voiceTracker.prepare (currentSampleRate);
+    hosted.prepare (currentSampleRate, samplesPerBlock);   // y suelta lo que sonara en el instrumento
 
     router.reset();
     strum.prepare (currentSampleRate);
@@ -570,7 +576,7 @@ void SmartKeysAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 void SmartKeysAudioProcessor::releaseResources()
 {
     voiceTracker.reset();
-    pianoSynth.allNotesOff();
+    hosted.release();
     strum.reset();
     portStrum.reset();
     portFeed.requestReleaseAll();
@@ -621,8 +627,8 @@ void SmartKeysAudioProcessor::updateEngineIfNeeded()
 }
 
 //==============================================================================
-// Hilo de audio. Cada tecla va a los dos caminos: la salida MIDI + el piano
-// (router) y el teclado "SmartKeys Chords" (portRouter), que puede saltársela.
+// Hilo de audio. Cada tecla va a los dos caminos: la salida MIDI + el instrumento
+// cargado (router) y el teclado "SmartKeys Chords" (portRouter), que puede saltársela.
 void SmartKeysAudioProcessor::routeNoteOn (MidiOutputRouter::Source source, int trigger, juce::uint8 velocity,
                                            int pos, bool toPort)
 {
@@ -700,7 +706,7 @@ void SmartKeysAudioProcessor::rememberLoopTrigger (int note, double ppq, int pas
 
 //==============================================================================
 // ACORDES AL PIANO ROLL: lo que llega del DAW (el Piano Roll al reproducir, con los
-// acordes que FL grabó) suena tal cual por el piano y la salida MIDI. Nunca pasa por
+// acordes que FL grabó) suena tal cual por el instrumento y la salida MIDI. Nunca pasa por
 // el router ni por el teclado virtual: no se convierte otra vez en acorde ni se graba doble.
 void SmartKeysAudioProcessor::playPlainNoteOn (int note, int velocity, int pos) noexcept
 {
@@ -991,7 +997,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     micLevelDb.store (source != VoiceSource::None ? voiceTracker.inputLevelDb.load() : -100.0f);
 
     //==========================================================================
-    // PASO 3 — SILENCIAR LA VOZ CRUDA (ya analizada) ANTES DE RENDERIZAR EL PIANO
+    // PASO 3 — SILENCIAR LA VOZ CRUDA (ya analizada) ANTES DE QUE SUENE EL INSTRUMENTO
     //==========================================================================
     buffer.clear();
 
@@ -1155,7 +1161,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     strum.process (routedMidi, expandedChordMidi, numSamples);
     portStrum.process (portRoutedMidi, portExpandedMidi, numSamples);
 
-    // Las notas que suenan tal cual: piano y salida MIDI, nunca el teclado virtual
+    // Las notas que suenan tal cual: instrumento y salida MIDI, nunca el teclado virtual
     if (! plainMidi.isEmpty())
         expandedChordMidi.addEvents (plainMidi, 0, numSamples, 0);
 
@@ -1188,9 +1194,13 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     }
 
     //==========================================================================
-    // PASO 6 — PIANO INTERNO (siempre; el volumen se ajusta con GAIN)
+    // PASO 6 — EL INSTRUMENTO CARGADO TOCA LOS ACORDES COMPLETOS (con su STRUM,
+    //          exactos a la muestra); su audio sale por SmartKeys con GAIN.
+    //          Sin instrumento (o mientras se cambia) el bloque sale en silencio.
     //==========================================================================
-    pianoSynth.render (buffer, expandedChordMidi, 0, numSamples);
+    const int outFirst = juce::jmax (0, getChannelIndexInProcessBlockBuffer (false, 0, 0));
+    const int outChannels = juce::jmin (getMainBusNumOutputChannels(), buffer.getNumChannels() - outFirst);
+    hosted.process (buffer, outFirst, outChannels, expandedChordMidi, numSamples, getPlayHead());
 
     gainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (pMasterGain->load()));
     if (gainSmoothed.isSmoothing())
@@ -1222,8 +1232,8 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 }
 
 //==============================================================================
-// Bypass: silencio y, al entrar, se apaga todo lo que sonaba (salida MIDI,
-// piano y teclado virtual): ningún instrumento enganchado queda con notas colgadas.
+// Bypass: silencio y, al entrar, se apaga todo lo que sonaba (salida MIDI, el
+// instrumento cargado y el teclado virtual): nada queda con notas colgadas.
 void SmartKeysAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     buffer.clear();
@@ -1241,11 +1251,18 @@ void SmartKeysAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& bu
     voiceTracker.forceRelease (0);
 
     const int numSamples = buffer.getNumSamples();
+    hosted.releaseAllNotes();
     if (numSamples > 0)
     {
         strum.process (routedMidi, expandedChordMidi, numSamples);
         releasePlainNotes (0, expandedChordMidi);
         midiMessages.swapWith (expandedChordMidi);
+
+        // El instrumento cargado suelta lo que sonaba; su sonido no sale (bypass)
+        const int outFirst = juce::jmax (0, getChannelIndexInProcessBlockBuffer (false, 0, 0));
+        const int outChannels = juce::jmin (getMainBusNumOutputChannels(), buffer.getNumChannels() - outFirst);
+        hosted.process (buffer, outFirst, outChannels, silentMidi, numSamples, getPlayHead());
+        buffer.clear();
     }
     else
     {
@@ -1253,7 +1270,6 @@ void SmartKeysAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& bu
         plainOnCount.fill (0);
     }
 
-    pianoSynth.allNotesOff();
     portFeed.requestReleaseAll();
     midiKeyDown.fill (false);
     suspectTrigger.fill (false);
@@ -1261,6 +1277,12 @@ void SmartKeysAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& bu
     for (auto& a : activeNotesBitmask)
         a.store (0, std::memory_order_release);
     voiceChordSounding.store (false);
+}
+
+void SmartKeysAudioProcessor::setNonRealtime (bool isNonRealtime) noexcept
+{
+    AudioProcessor::setNonRealtime (isNonRealtime);
+    hosted.setNonRealtime (isNonRealtime);   // se aplica al preparar el instrumento
 }
 
 //==============================================================================
@@ -1272,14 +1294,20 @@ juce::AudioProcessorEditor* SmartKeysAudioProcessor::createEditor()
 void SmartKeysAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
-    state.setProperty ("stateVersion", 5, nullptr);
+    state.setProperty ("stateVersion", 6, nullptr);
     state.setProperty ("customMask", (int) customMask.load(), nullptr);
     state.setProperty ("editorScale", (double) editorScale.load(), nullptr);
     state.setProperty ("chordKeyboard", chordPortEnabled.load(), nullptr);
     state.setProperty ("pianoRollChords", pianoRollChords.load(), nullptr);
+    state.setProperty ("presetName", getPresetName(), nullptr);
 
     if (auto xml = state.createXml())
+    {
+        // 2.0: el instrumento cargado, con su sonido (su propio estado, en base64)
+        if (auto hostedXml = hosted.createStateXml())
+            xml->addChildElement (hostedXml.release());
         copyXmlToBinary (*xml, destData);
+    }
 }
 
 void SmartKeysAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
@@ -1290,6 +1318,13 @@ void SmartKeysAudioProcessor::setStateInformation (const void* data, int sizeInB
 
     // Proyectos de la 1.1–1.3: la progresión guardada ya no existe
     xml->deleteAllChildElementsWithTagName ("Progression");
+
+    // 2.0: el instrumento cargado va aparte (no es un parámetro). Un proyecto de la
+    // 1.x no tiene: queda la ranura vacía (ya no hay piano propio).
+    std::unique_ptr<juce::XmlElement> hostedXml;
+    if (auto* h = xml->getChildByName (smartkeys::HostedInstrument::kStateTag))
+        hostedXml = std::make_unique<juce::XmlElement> (*h);
+    xml->deleteAllChildElementsWithTagName (smartkeys::HostedInstrument::kStateTag);
 
     auto tree = juce::ValueTree::fromXml (*xml);
 
@@ -1332,6 +1367,90 @@ void SmartKeysAudioProcessor::setStateInformation (const void* data, int sizeInB
         setPianoRollChords (true);
     else
         pianoRollChords.store (pianoRoll && chordPortEnabled.load());
+
+    setPresetName (tree.getProperty ("presetName", {}).toString());
+
+    // El instrumento: se carga en el hilo de mensajes (si ya es el mismo, sólo su sonido)
+    hosted.restoreState (hostedXml.get());
+}
+
+//==============================================================================
+// PRESETS DE SMARTKEYS (hilo de mensajes)
+namespace
+{
+    // Lo que guarda un preset (el GAIN no: es de la mezcla)
+    constexpr const char* kPresetParams[] = { ParamIDs::rootKey, ParamIDs::scale, ParamIDs::mode, ParamIDs::chordExt,
+                                              ParamIDs::complexVar, ParamIDs::micOn, ParamIDs::micGate,
+                                              ParamIDs::strumMs, ParamIDs::strumDir };
+}
+
+std::unique_ptr<juce::XmlElement> SmartKeysAudioProcessor::createPresetXml (bool includeInstrument)
+{
+    auto xml = std::make_unique<juce::XmlElement> (smartkeys::presets::kRootTag);
+    xml->setAttribute ("version", 1);
+
+    for (auto* id : kPresetParams)
+    {
+        if (auto* p = apvts.getParameter (id))
+        {
+            auto* e = xml->createNewChildElement ("PARAM");
+            e->setAttribute ("id", id);
+            e->setAttribute ("value", (double) p->convertFrom0to1 (p->getValue()));
+        }
+    }
+    xml->setAttribute ("customMask", (int) customMask.load());
+
+    if (includeInstrument)
+        if (auto h = hosted.createStateXml())
+            xml->addChildElement (h.release());
+
+    return xml;
+}
+
+void SmartKeysAudioProcessor::applyPreset (const juce::XmlElement& preset, const juce::String& name)
+{
+    for (auto* id : kPresetParams)
+    {
+        const juce::XmlElement* found = nullptr;
+        for (auto* e : preset.getChildWithTagNameIterator ("PARAM"))
+            if (e->getStringAttribute ("id") == id)
+                found = e;
+
+        auto* p = apvts.getParameter (id);
+        if (found == nullptr || p == nullptr)
+            continue;
+
+        // Como un gesto del usuario: el DAW lo registra (deshacer, automatización)
+        const float normalised = p->convertTo0to1 ((float) found->getDoubleAttribute ("value"));
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (normalised);
+        p->endChangeGesture();
+    }
+
+    // Las 12 notas (después de KEY y SCALE, que ponen las de su escala)
+    const int mask = preset.getIntAttribute ("customMask", -1);
+    if (mask > 0 && mask < 4096)
+        customMask.store ((uint16_t) mask);
+    else
+        customMask.store (ScaleChordEngine::getPitchClassMask ((int) pRootKey->load(), (int) pScale->load()));
+
+    // Cadena favorita: el instrumento con su sonido
+    if (auto* h = preset.getChildByName (smartkeys::HostedInstrument::kStateTag))
+        hosted.restoreState (h);
+
+    setPresetName (name);
+}
+
+juce::String SmartKeysAudioProcessor::getPresetName() const
+{
+    const juce::ScopedLock sl (presetNameLock);
+    return presetName;
+}
+
+void SmartKeysAudioProcessor::setPresetName (const juce::String& name)
+{
+    const juce::ScopedLock sl (presetNameLock);
+    presetName = name;
 }
 
 //==============================================================================

@@ -2,11 +2,15 @@
   ==============================================================================
 
     PluginProcessor.h
-    SmartKeys (MIWN) — Piano inteligente, generador de acordes y controlador vocal.
+    SmartKeys (MIWN) — Generador de acordes, controlador vocal y contenedor de
+    instrumentos (2.0, estilo Kontakt / PatchWork).
 
     Un único plugin de instrumento (Channel Rack de FL Studio / pista MIDI de
-    Ableton). Siempre suena el piano interno (con su GAIN) y siempre salen los
-    acordes completos por la salida MIDI, en el canal 1. Afinación A4 = 440 Hz.
+    Ableton). SmartKeys convierte cada tecla (o la voz) en el acorde completo y
+    se lo toca al instrumento VST3 / Audio Unit cargado en su ranura
+    (HostedInstrument); el audio de ese instrumento sale por SmartKeys (con su
+    GAIN). Los acordes completos salen también siempre por la salida MIDI, en
+    el canal 1. Afinación A4 = 440 Hz. SmartKeys ya no tiene piano propio.
 
     MIC VOICE (1.5): la voz se lee de la ENTRADA del plugin si el DAW manda
     audio por ella (sidechain); si esa entrada llega en silencio digital, como
@@ -40,11 +44,12 @@
 #include <atomic>
 #include "ScaleChordEngine.h"
 #include "VoicePitchTracker.h"
-#include "FlKeysPianoSynth.h"
 #include "MidiOutputRouter.h"
 #include "StrumScheduler.h"
 #include "SystemMicInput.h"
 #include "ChordMidiPort.h"
+#include "HostedInstrument.h"
+#include "Presets.h"
 
 namespace ParamIDs
 {
@@ -88,9 +93,12 @@ public:
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using AudioProcessor::processBlock;
 
-    // En bypass no suena nada y no queda ninguna nota encendida (piano, MIDI ni teclado virtual)
+    // En bypass no suena nada y no queda ninguna nota encendida (instrumento, MIDI ni teclado virtual)
     void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using AudioProcessor::processBlockBypassed;
+
+    // Exportar (FL: render): el instrumento cargado también trabaja fuera de tiempo real
+    void setNonRealtime (bool isNonRealtime) noexcept override;
 
     //==========================================================================
     juce::AudioProcessorEditor* createEditor() override;
@@ -100,7 +108,7 @@ public:
     bool acceptsMidi() const override                     { return true; }
     bool producesMidi() const override                    { return true; }
     bool isMidiEffect() const override                    { return false; }
-    double getTailLengthSeconds() const override          { return 0.3; }
+    double getTailLengthSeconds() const override          { return hosted.getTailLengthSeconds(); }
 
     int getNumPrograms() override                         { return 1; }
     int getCurrentProgram() override                      { return 0; }
@@ -178,6 +186,15 @@ public:
 
     static juce::StringArray getKeyNames();
 
+    // Ranura de instrumento (la interfaz la usa desde el hilo de mensajes)
+    smartkeys::HostedInstrument& getHostedInstrument() noexcept   { return hosted; }
+
+    // Presets propios de SmartKeys (hilo de mensajes). El GAIN no forma parte del preset.
+    std::unique_ptr<juce::XmlElement> createPresetXml (bool includeInstrument);
+    void applyPreset (const juce::XmlElement& preset, const juce::String& name);
+    juce::String getPresetName() const;
+    void setPresetName (const juce::String&);
+
     // La entrada del plugin se considera "conectada" con cualquier muestra por
     // encima de -120 dBFS; el silencio digital (FL sin sidechain) no cuenta.
     static constexpr float  kInputSignalFloor = 1.0e-6f;
@@ -193,7 +210,7 @@ private:
     void updateEngineIfNeeded();
     void drainScreenNotes();
 
-    // Cada tecla va a los dos routers (salida MIDI + piano, y teclado virtual)
+    // Cada tecla va a los dos routers (salida MIDI + instrumento, y teclado virtual)
     void routeNoteOn (smartkeys::MidiOutputRouter::Source source, int trigger, juce::uint8 velocity, int pos, bool toPort);
     void routeNoteOff (smartkeys::MidiOutputRouter::Source source, int trigger, int pos);
     void routeReleaseAll (int pos);
@@ -204,7 +221,7 @@ private:
     bool matchesEarlierPass (int note, double ppq, int pass) const noexcept;
     void rememberLoopTrigger (int note, double ppq, int pass) noexcept;
 
-    // ACORDES AL PIANO ROLL: notas del DAW que suenan tal cual (piano + salida MIDI)
+    // ACORDES AL PIANO ROLL: notas del DAW que suenan tal cual (instrumento + salida MIDI)
     void playPlainNoteOn (int note, int velocity, int pos) noexcept;
     void playPlainNoteOff (int note, int pos) noexcept;
     void releasePlainNotes (int pos, juce::MidiBuffer& out) noexcept;
@@ -237,7 +254,6 @@ private:
 
     smartkeys::ScaleChordEngine  engine;
     smartkeys::VoicePitchTracker voiceTracker;      // voz: entrada del plugin o micrófono del sistema
-    smartkeys::FlKeysPianoSynth  pianoSynth;
     smartkeys::MidiOutputRouter  router;
     smartkeys::StrumScheduler    strum;
 
@@ -281,6 +297,7 @@ private:
     juce::MidiBuffer expandedChordMidi;           // salida final (con STRUM)
     juce::MidiBuffer portRoutedMidi, portExpandedMidi;   // lo mismo para el teclado virtual
     juce::MidiBuffer plainMidi;                   // notas del DAW tal cual (ACORDES AL PIANO ROLL)
+    const juce::MidiBuffer silentMidi;            // bypass: el instrumento sólo suelta sus notas
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> gainSmoothed;
 
     static constexpr size_t kMidiReserveBytes = 16384;
@@ -336,6 +353,14 @@ private:
     static constexpr double kLoopEchoWindowMs = 600.0;   // con el bucle confirmado
     static constexpr double kLoopMemoryMs = 10000.0;     // el bucle se da por confirmado 10 s (cada eco lo renueva)
     static constexpr double kNoLoopMemoryMs = 60000.0;   // "sin bucle" vale 60 s
+
+    // Preset cargado o guardado por última vez (se guarda con el proyecto)
+    juce::CriticalSection presetNameLock;
+    juce::String presetName;
+
+    // El instrumento cargado. El destructor lo cierra explícitamente (ventana,
+    // audio y plugin, en ese orden) antes que nada.
+    smartkeys::HostedInstrument hosted;
 
     // Declarado al final: se destruye PRIMERO (el dispositivo se cierra antes
     // que todo lo demás). Además el destructor lo apaga explícitamente.

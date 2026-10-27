@@ -2,7 +2,7 @@
   ==============================================================================
 
     PluginEditor.h
-    SmartKeys (MIWN) — Interfaz gráfica vectorial (850 x 606 px, redimensionable).
+    SmartKeys (MIWN) — Interfaz gráfica vectorial (850 x 658 px, redimensionable).
 
   ==============================================================================
 */
@@ -191,6 +191,75 @@ private:
 };
 
 //==============================================================================
+// 2.0: la ranura de instrumento ("+ LOAD PLUGIN" / "Loaded: Serum"). Clic: menú
+// con los instrumentos instalados.
+class InstrumentSlot : public juce::Component,
+                       public juce::SettableTooltipClient
+{
+public:
+    enum class Look { Empty, Busy, Loaded, Bypassed, Problem };
+
+    void paint (juce::Graphics&) override;
+    void mouseEnter (const juce::MouseEvent&) override  { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override   { repaint(); }
+    void mouseUp (const juce::MouseEvent&) override;
+    void setState (Look look, const juce::String& prefix, const juce::String& title, const juce::String& subtitle);
+
+    std::function<void()> onClick;
+
+private:
+    Look look = Look::Empty;
+    juce::String prefix, title, subtitle;
+};
+
+// Preset de SmartKeys: "PRESET / Neo-Soul · D Dorian ▾". Clic: menú de presets.
+class PresetBox : public juce::Component,
+                  public juce::SettableTooltipClient
+{
+public:
+    void paint (juce::Graphics&) override;
+    void mouseEnter (const juce::MouseEvent&) override  { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override   { repaint(); }
+    void mouseUp (const juce::MouseEvent&) override;
+    void setName (const juce::String&);
+
+    std::function<void()> onClick;
+
+private:
+    juce::String name;
+};
+
+// Ventana dentro de la interfaz para guardar o borrar un preset (no abre otra
+// ventana del sistema: en un plugin podría quedar detrás del DAW)
+class PresetDialog : public juce::Component
+{
+public:
+    PresetDialog();
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;   // fuera de la ventana: cancelar (nada pasa a la interfaz de detrás)
+    bool keyPressed (const juce::KeyPress&) override;
+
+    // Guardar: nombre propuesto y, si hay instrumento cargado, su nombre (para incluirlo)
+    void showSave (const juce::String& suggestedName, const juce::String& instrumentName);
+    void showDelete (const juce::String& presetName);
+    void close();
+
+    std::function<void (const juce::String& name, bool includeInstrument)> onSave;
+    std::function<void()> onDelete;
+
+private:
+    void updateWarning();
+    juce::Rectangle<int> getCard() const;
+
+    bool deleting = false;
+    juce::String title, message, warning;
+    juce::TextEditor nameEditor;
+    juce::ToggleButton includeInstrument;
+    juce::TextButton okButton, cancelButton;
+};
+
+//==============================================================================
 // Pantalla LED del acorde / nota
 class ChordDisplay : public juce::Component
 {
@@ -214,7 +283,7 @@ public:
     ~SmartKeysAudioProcessorEditor() override;
 
     static constexpr int kWidth = 850;
-    static constexpr int kHeight = 606;
+    static constexpr int kHeight = 658;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -223,7 +292,7 @@ public:
     bool keyStateChanged (bool isKeyDown) override;
 
 private:
-    // Todo el contenido vive en un componente de 850 x 606 que se escala al redimensionar
+    // Todo el contenido vive en un componente de 850 x 658 que se escala al redimensionar
     struct Content : public juce::Component
     {
         std::function<void (juce::Graphics&)> painter;
@@ -242,6 +311,11 @@ private:
     void updateVoiceReadout();
     void updateStrumLabel();
 
+    // 2.0: ranura de instrumento y presets
+    void updateInstrumentRow (bool force = false);
+    void showInstrumentMenu();
+    void showPresetMenu();
+
     //==========================================================================
     // ORDEN DE LOS MIEMBROS: C++ los destruye en orden inverso. Primero el
     // LookAndFeel y los controles; los enlaces con los parámetros van al FINAL
@@ -255,6 +329,11 @@ private:
     smartkeys::ui::ChoiceButtons modeSwitch;
     juce::Slider gainSlider;
     smartkeys::ui::ChordPortStatus portStatus;        // "MIDI ● SmartKeys Chords"
+
+    // Fila INSTRUMENT (2.0): ranura, ventana del plugin, BYPASS, UNLOAD y presets
+    smartkeys::ui::InstrumentSlot instrumentSlot;
+    juce::TextButton showGuiButton { "SHOW PLUGIN GUI" }, bypassButton { "BYPASS" }, unloadButton { "UNLOAD" };
+    smartkeys::ui::PresetBox presetBox;
 
     // Tira MIC: controlador de voz, medidor, gate y "Mic: A3 -> Acorde: Am"
     juce::TextButton micButton;
@@ -293,6 +372,14 @@ private:
     uint32_t shownDawLiveNotes = 0;
     double dawKeyboardHintUntilMs = 0.0;
     void showChordPortMenu();
+
+    // Lo que muestra la fila INSTRUMENT (se refresca cuando cambia)
+    uint32_t shownHostedChange = ~0u, shownCatalogChange = ~0u;
+    juce::String shownPresetName { "\x01" }, shownFailure;
+    bool shownWindowOpen = false, shownInvalidAudio = false;
+
+    // Encima de todo: guardar / borrar preset
+    smartkeys::ui::PresetDialog presetDialog;
 
     // Enlaces por sondeo (el hilo de audio nunca avisa a la interfaz).
     // Declarados DESPUÉS de todos los controles: se destruyen antes que ellos.

@@ -22,7 +22,7 @@
 # ==============================================================================
 set -euo pipefail
 
-VERSION="1.7.0"
+VERSION="2.0.0"
 ID_BASE="com.miwn.smartkeys"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -52,7 +52,8 @@ SIGN_ID="${DEV_ID_APP:--}"
 TIMESTAMP="--timestamp=none"
 [[ "$SIGN_ID" != "-" ]] && TIMESTAMP="--timestamp"
 
-# Permiso de micrófono (Hardened Runtime lo exige)
+# Permiso de micrófono (Hardened Runtime lo exige). 2.0: la app carga en su ranura
+# plugins de otros fabricantes (firmados por ellos): sin estos permisos macOS no la dejaría
 ENTITLEMENTS="$ROOT/Installer/.standalone.entitlements"
 cat > "$ENTITLEMENTS" <<'EOS'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -60,6 +61,10 @@ cat > "$ENTITLEMENTS" <<'EOS'
 <plist version="1.0">
 <dict>
     <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
 </dict>
 </plist>

@@ -7,10 +7,10 @@
 
       1. Cada tecla sale por MIDI OUT como el ACORDE COMPLETO (lo que pinta el
          Piano Roll del instrumento destino), siempre por el canal MIDI 1.
-      2. Siempre a la vez: el piano interno suena (con su GAIN) y los acordes
-         completos salen por MIDI. Ya no existen OUTPUT MODE, A4, MICROTUNING
-         ni MIDI CH, y los proyectos guardados con la 1.3 / 1.4 se abren sin
-         restos de lo quitado.
+      2. Siempre a la vez: el instrumento cargado en la ranura suena (con GAIN)
+         y los acordes completos salen por MIDI. Ya no existen OUTPUT MODE, A4,
+         MICROTUNING ni MIDI CH, y los proyectos guardados con la 1.3 / 1.4 se
+         abren sin restos de lo quitado.
       3. STRUM: las notas del acorde entran escalonadas ASC/DESC, exactas a la
          muestra, y un NoteOff anticipado no deja notas colgadas.
       4. COMPLEX CHORDS: 5–7 notas por tecla y el mismo número de NoteOff.
@@ -30,8 +30,19 @@
          (bucle), los ecos no disparan acordes ni dejan notas colgadas; bypass,
          cerrar el plugin y exportar. En macOS se abre la fuente CoreMIDI de
          verdad; en Linux el teclado escribe en un archivo.
+      9. 2.0, la ranura de instrumento (SmartKeys como contenedor): sin
+         instrumento no suena nada (ya no hay piano propio) y el MIDI sale
+         igual; con el instrumento de prueba cargado (VST3, y AU en macOS) éste
+         recibe el acorde COMPLETO en la muestra exacta de la salida MIDI, con
+         el STRUM exacto, en trozos si el bloque es más grande que el
+         preparado; su audio sale por SmartKeys con GAIN; la latencia llega al
+         DAW; BYPASS suelta sus notas y lo calla; su sonido vuelve con el
+         proyecto; quitarlo, un instrumento que falta (no se pierde al guardar),
+         NaN del instrumento, carga protegida tras un cierre, cero asignaciones
+         y cargas / descargas con el audio corriendo.
 
-    Uso:  SmartKeysHostTests <SmartKeys.vst3> [--stress <segundos>] [--system-mic-only] [--port-only]
+    Uso:  SmartKeysHostTests <SmartKeys.vst3> --synth <SmartKeysTestSynth.vst3> [--synth-au]
+                             [--stress <segundos>] [--system-mic-only] [--port-only] [--host-only]
 
   ==============================================================================
 */
@@ -217,6 +228,9 @@ class Host
 public:
     static constexpr double sampleRate = 48000.0;
     static constexpr int blockSize = 512;
+    static constexpr int kMaxBlock = 4096;
+
+    std::vector<float>* capture = nullptr;   // si no es nulo: guarda el canal izquierdo de la salida
 
     bool load (const String& path)
     {
@@ -245,7 +259,7 @@ public:
         plugin->prepareToPlay (sampleRate, blockSize);
         numIns  = plugin->getTotalNumInputChannels();
         numOuts = plugin->getTotalNumOutputChannels();
-        buffer.setSize (jmax (numIns, numOuts, 1), blockSize);
+        buffer.setSize (jmax (numIns, numOuts, 1), kMaxBlock);   // bloques de hasta 4096 (más grandes que el preparado)
         std::cout << "Buses: " << numIns << " canal(es) de entrada (micrófono), " << numOuts << " de salida" << std::endl;
         return true;
     }
@@ -255,6 +269,13 @@ public:
         if (plugin != nullptr)
             plugin->releaseResources();
         plugin.reset();
+    }
+
+    // El DAW cambia el tamaño de búfer (el plugin se prepara otra vez)
+    void prepare (int maxBlock)
+    {
+        plugin->releaseResources();
+        plugin->prepareToPlay (sampleRate, jmin (maxBlock, kMaxBlock));
     }
 
     AudioPluginInstance& instance() { return *plugin; }
@@ -394,7 +415,15 @@ public:
             r.midi.push_back (m);
         }
         for (int ch = 0; ch < numOuts && numSamples > 0; ++ch)
+        {
+            const float* d = view.getReadPointer (ch);
+            for (int i = 0; i < numSamples; ++i)
+                if (! std::isfinite (d[i]))
+                    ++nonFiniteSamples;
             r.outputRms = jmax (r.outputRms, view.getRMSLevel (ch, 0, numSamples));
+        }
+        if (capture != nullptr && numOuts > 0)
+            capture->insert (capture->end(), view.getReadPointer (0), view.getReadPointer (0) + numSamples);
 
         sampleClock += numSamples;
         if (transport.playing || transport.recording)
@@ -427,6 +456,8 @@ public:
     }
 
     int eventsOutOfRange = 0;
+    long nonFiniteSamples = 0;   // NaN / infinito en la salida (nunca debe haber)
+    int64 getSampleClock() const noexcept { return sampleClock; }
 
     Transport transport;
 
@@ -443,7 +474,7 @@ public:
         return total;
     }
 
-    // Deja que el piano termine de sonar
+    // Deja que el instrumento termine de sonar
     void settle (int numBlocks = 250) { runBlocks (numBlocks); }
 
     // Bloques a TIEMPO REAL (el micrófono del sistema entrega audio a su ritmo)
@@ -477,6 +508,233 @@ private:
 };
 
 //==============================================================================
+// 2.0: el instrumento de prueba (Tests/TestSynth.cpp) en la ranura de SmartKeys
+//==============================================================================
+String gSynthPath;             // SmartKeysTestSynth.vst3 (--synth)
+bool gSynthAU = false;         // macOS: también como Audio Unit registrado (--synth-au)
+File gSynthLog;                // lo que apunta el instrumento de prueba
+constexpr int kSynthLatency = 96;
+
+int fourCC (const char* s) { return (int) (((uint32) (uint8) s[0] << 24) | ((uint32) (uint8) s[1] << 16) | ((uint32) (uint8) s[2] << 8) | (uint32) (uint8) s[3]); }
+
+PluginDescription testSynthDescription (bool asAudioUnit = false)
+{
+    if (asAudioUnit)
+    {
+        PluginDescription d;
+        d.name = d.descriptiveName = "SmartKeysTestSynth";
+        d.manufacturerName = "MIWN Test";
+        d.pluginFormatName = "AudioUnit";
+        d.category = "Synth";
+        d.isInstrument = true;
+        d.fileOrIdentifier = "AudioUnit:Synths/aumu,Tsyn,Miwt";
+        d.uniqueId = d.deprecatedUid = fourCC ("aumu") ^ fourCC ("Tsyn") ^ fourCC ("Miwt");
+        d.numOutputChannels = 2;
+        return d;
+    }
+
+    VST3PluginFormatHeadless format;
+    OwnedArray<PluginDescription> types;
+    format.findAllTypesForFile (types, gSynthPath);
+    return types.isEmpty() ? PluginDescription() : *types[0];
+}
+
+std::unique_ptr<XmlElement> slotXml (Host& host)
+{
+    auto xml = host.getPluginStateXml();
+    if (xml == nullptr)
+        return nullptr;
+    if (auto* h = xml->getChildByName ("HostedPlugin"))
+        return std::make_unique<XmlElement> (*h);
+    return nullptr;
+}
+
+String slotStatus (Host& host)
+{
+    auto h = slotXml (host);
+    return h != nullptr ? h->getStringAttribute ("status") : String ("empty");
+}
+
+// Deja correr el hilo de mensajes (el temporizador de SmartKeys y el del instrumento)
+// mientras el "DAW" sigue procesando bloques
+void pumpWhileRunning (Host& host, int ms)
+{
+    const auto end = Time::getMillisecondCounterHiRes() + ms;
+    while (Time::getMillisecondCounterHiRes() < end)
+    {
+        MessageManager::getInstance()->runDispatchLoopUntil (10);
+        host.run();
+    }
+}
+
+bool waitForSlot (Host& host, const String& wanted, int timeoutMs = 10000)
+{
+    const auto end = Time::getMillisecondCounterHiRes() + timeoutMs;
+    while (Time::getMillisecondCounterHiRes() < end)
+    {
+        pumpWhileRunning (host, 40);
+        if (slotStatus (host) == wanted)
+            return true;
+    }
+    std::cout << "     (la ranura quedó en \"" << slotStatus (host) << "\")" << std::endl;
+    return false;
+}
+
+// Pone en la ranura un instrumento (como al abrir un proyecto, un preset o elegirlo
+// en LOAD PLUGIN) y espera a que se cargue
+void setSlot (Host& host, const PluginDescription* d, bool bypass = false, const String& stateBase64 = {})
+{
+    auto xml = host.getPluginStateXml();
+    if (xml == nullptr)
+        return;
+    xml->deleteAllChildElementsWithTagName ("HostedPlugin");
+    if (d != nullptr)
+    {
+        auto* h = xml->createNewChildElement ("HostedPlugin");
+        h->setAttribute ("bypass", bypass ? 1 : 0);
+        h->addChildElement (d->createXml().release());
+        if (stateBase64.isNotEmpty())
+            h->createNewChildElement ("STATE")->addTextElement (stateBase64);
+    }
+    host.setPluginStateXml (*xml);
+}
+
+bool loadInSlot (Host& host, const PluginDescription& d, int timeoutMs = 10000)
+{
+    setSlot (host, &d);
+    return waitForSlot (host, "loaded", timeoutMs);
+}
+
+void setSlotBypass (Host& host, bool on)
+{
+    auto xml = host.getPluginStateXml();
+    if (xml == nullptr)
+        return;
+    if (auto* h = xml->getChildByName ("HostedPlugin"))
+        h->setAttribute ("bypass", on ? 1 : 0);
+    host.setPluginStateXml (*xml);
+}
+
+// Lo que apuntó el instrumento de prueba (las líneas desde 'fromLine')
+struct SynthEvent
+{
+    int64 at = 0;
+    int status = 0, d1 = 0, d2 = 0;
+    bool isNoteOn() const  { return (status & 0xF0) == 0x90 && d2 > 0; }
+    bool isNoteOff() const { return (status & 0xF0) == 0x80 || ((status & 0xF0) == 0x90 && d2 == 0); }
+};
+
+struct SynthLog
+{
+    int instance = -1;                // la última instancia creada
+    std::vector<SynthEvent> events;   // de esa instancia
+    StringArray lines;                // todas las líneas nuevas (sin el "#id ")
+
+    bool has (const String& prefix) const
+    {
+        for (auto& l : lines)
+            if (l.startsWith (prefix))
+                return true;
+        return false;
+    }
+
+    String find (const String& prefix) const
+    {
+        for (auto& l : lines)
+            if (l.startsWith (prefix))
+                return l;
+        return {};
+    }
+
+    std::map<int, int64> noteOnTimes() const
+    {
+        std::map<int, int64> t;
+        for (auto& e : events)
+            if (e.isNoteOn() && t.count (e.d1) == 0)
+                t[e.d1] = e.at;
+        return t;
+    }
+
+    std::set<int> notesOn() const  { std::set<int> s; for (auto& e : events) if (e.isNoteOn()) s.insert (e.d1); return s; }
+    std::set<int> notesOff() const { std::set<int> s; for (auto& e : events) if (e.isNoteOff()) s.insert (e.d1); return s; }
+    int countNoteOn() const        { int n = 0; for (auto& e : events) n += e.isNoteOn() ? 1 : 0; return n; }
+};
+
+int synthLogLines()
+{
+    MessageManager::getInstance()->runDispatchLoopUntil (60);   // lo pendiente del instrumento, ya escrito
+    StringArray l;
+    gSynthLog.readLines (l);
+    l.removeEmptyStrings();
+    return l.size();
+}
+
+SynthLog readSynthLog (int fromLine)
+{
+    MessageManager::getInstance()->runDispatchLoopUntil (80);   // el instrumento escribe cada 10 ms
+
+    StringArray all;
+    gSynthLog.readLines (all);
+    all.removeEmptyStrings();
+
+    SynthLog log;
+    for (auto& l : all)
+        if (l.contains (" CREATED"))
+            log.instance = l.fromFirstOccurrenceOf ("#", false, false).upToFirstOccurrenceOf (" ", false, false).getIntValue();
+
+    for (int i = jmax (0, fromLine); i < all.size(); ++i)
+    {
+        const auto& l = all[i];
+        const int id = l.fromFirstOccurrenceOf ("#", false, false).upToFirstOccurrenceOf (" ", false, false).getIntValue();
+        const auto body = l.fromFirstOccurrenceOf (" ", false, false);
+        log.lines.add (body);
+        if (id == log.instance && body.startsWith ("EV "))
+        {
+            StringArray t;
+            t.addTokens (body, " ", {});
+            if (t.size() >= 5)
+                log.events.push_back ({ t[1].getLargeIntValue(), t[2].getIntValue(), t[3].getIntValue(), t[4].getIntValue() });
+        }
+    }
+    return log;
+}
+
+float goertzel (const std::vector<float>& x, size_t from, size_t n, double sr, double hz)
+{
+    const double w = MathConstants<double>::twoPi * hz / sr, coeff = 2.0 * std::cos (w);
+    double s1 = 0.0, s2 = 0.0;
+    for (size_t i = from; i < jmin (x.size(), from + n); ++i)
+    {
+        const double v = x[i] + coeff * s1 - s2;
+        s2 = s1;
+        s1 = v;
+    }
+    return (float) (std::sqrt (jmax (0.0, s1 * s1 + s2 * s2 - coeff * s1 * s2)) / (double) n);
+}
+
+// Instante (en muestras del DAW) de cada NoteOn de la salida MIDI
+std::map<int, int64> midiNoteOnTimes (const BlockResult& r)
+{
+    std::map<int, int64> t;
+    for (auto& m : r.midi)
+        if (m.isNoteOn() && t.count (m.getNoteNumber()) == 0)
+            t[m.getNoteNumber()] = (int64) m.getTimeStamp();
+    return t;
+}
+
+// ¿El instrumento recibió cada nota a la vez que la salida MIDI (con el mismo desfase constante)?
+bool sameTiming (const std::map<int, int64>& midi, const std::map<int, int64>& synth)
+{
+    if (midi.empty() || midi.size() != synth.size())
+        return false;
+    const int64 offset = synth.begin()->second - midi.at (synth.begin()->first);
+    for (auto& [note, at] : midi)
+        if (synth.count (note) == 0 || synth.at (note) - at != offset)
+            return false;
+    return true;
+}
+
+//==============================================================================
 void testInstrument (const String& path)
 {
     std::cout << "\n=== SmartKeys (instrumento) ===" << std::endl;
@@ -485,6 +743,10 @@ void testInstrument (const String& path)
 
     check (host.isInstrument(), "se registra como instrumento (Channel Rack / pista MIDI)");
     check (host.getNumInputs() >= 1, "tiene entrada de micrófono (sidechain)");
+
+    // 2.0: SmartKeys suena con el instrumento cargado en su ranura
+    const auto synth = testSynthDescription();
+    check (synth.fileOrIdentifier.isNotEmpty() && loadInSlot (host, synth), "el instrumento de prueba se carga en la ranura");
 
     // Do mayor, SMART CHORDS, tríadas
     host.setChoice ("Key", 0);
@@ -500,7 +762,7 @@ void testInstrument (const String& path)
         std::cout << "     D4 -> " << describe (r.notesOn()) << std::endl;
         check (r.notesOn (1) == std::set<int> { 62, 65, 69 }, "D4 en Do mayor sale como Dm completo {D4 F4 A4} por el canal 1");
         auto tail = host.runBlocks (3);
-        check (tail.outputRms > 1.0e-3f || r.outputRms > 1.0e-3f, "el piano interno suena a la vez");
+        check (tail.outputRms > 1.0e-3f || r.outputRms > 1.0e-3f, "el instrumento cargado suena a la vez");
         auto off = host.run ({ MidiMessage::noteOff (1, 62) });
         check (off.notesOff (1) == std::set<int> { 62, 65, 69 }, "al soltar la tecla salen los 3 NoteOff");
     }
@@ -520,7 +782,7 @@ void testInstrument (const String& path)
         host.settle();
     }
 
-    std::cout << "\n-- 3. Piano interno + MIDI siempre a la vez (sin OUTPUT MODE, A4 ni MICROTUNING)" << std::endl;
+    std::cout << "\n-- 3. Instrumento cargado + MIDI siempre a la vez (sin OUTPUT MODE, A4 ni MICROTUNING)" << std::endl;
     {
         check (! host.hasParameter ("Output Mode") && ! host.hasParameter ("Reference Pitch")
                  && ! host.hasParameter ("Scale Microtuning"),
@@ -534,11 +796,11 @@ void testInstrument (const String& path)
         auto tail2 = host.runBlocks (4);
         check (r2.notesOn (1) == std::set<int> { 69, 72, 76 }, "el acorde Am completo sale por MIDI");
         const float loud = jmax (r2.outputRms, tail2.outputRms);
-        check (loud > 1.0e-3f, "y suena el piano interno a la vez");
+        check (loud > 1.0e-3f, "y suena el instrumento cargado a la vez");
         host.run ({ MidiMessage::noteOff (1, 69) });
         host.settle();
 
-        // GAIN baja el piano, pero el MIDI sale igual
+        // GAIN baja el instrumento, pero el MIDI sale igual
         if (auto* g = host.findParameter ("Master Gain"))
             g->setValueNotifyingHost (g->getValueForText ("-30"));
         host.settle (4);
@@ -547,7 +809,7 @@ void testInstrument (const String& path)
         const float quiet = jmax (r3.outputRms, tail3.outputRms);
         std::cout << "     RMS con GAIN -3 dB: " << loud << "   con -30 dB: " << quiet << std::endl;
         check (r3.notesOn (1) == std::set<int> { 69, 72, 76 } && quiet > 0.0f && quiet < loud * 0.1f,
-               "GAIN -30 dB: el piano baja ~27 dB y el acorde sigue saliendo completo por MIDI");
+               "GAIN -30 dB: el instrumento baja ~27 dB y el acorde sigue saliendo completo por MIDI");
         host.run ({ MidiMessage::noteOff (1, 69) });
         if (auto* g = host.findParameter ("Master Gain"))
             g->setValueNotifyingHost (g->getValueForText ("-3"));
@@ -597,7 +859,7 @@ void testInstrument (const String& path)
             auto tail = host.runBlocks (4);
             check (r.notesOn (1) == std::set<int> { 62, 66, 69 } && r.channelsUsed() == std::set<int> { 1 },
                    "la tónica guardada (Re) se respeta: D4 -> D mayor, por el canal 1 aunque el proyecto tuviera CH 5");
-            check (jmax (r.outputRms, tail.outputRms) > 1.0e-3f, "aunque el proyecto tenía MIDI OUT, el piano suena");
+            check (jmax (r.outputRms, tail.outputRms) > 1.0e-3f, "aunque el proyecto tenía MIDI OUT, el instrumento cargado suena");
             host.run ({ MidiMessage::noteOff (1, 62) });
             host.setChoice ("Key", 0);
             host.settle();
@@ -692,7 +954,7 @@ void testInstrument (const String& path)
         const auto on = sing.notesOn (1);
         std::cout << "     voz La3 (220 Hz) -> " << describe (on) << std::endl;
         check (on.size() == 3 && pitchClasses (on) == std::set<int> { 9, 0, 4 }, "cantar La3 dispara el acorde La menor completo por MIDI");
-        check (sing.outputRms > 1.0e-3f, "y el piano interno lo toca");
+        check (sing.outputRms > 1.0e-3f, "y el instrumento cargado lo toca");
 
         auto quiet = host.runBlocks (30);
         check (! on.empty() && quiet.notesOff (1) == on, "al dejar de cantar se sueltan todas las notas del acorde");
@@ -834,6 +1096,409 @@ void testInstrument (const String& path)
 }
 
 //==============================================================================
+// 2.0: LA RANURA DE INSTRUMENTO. SmartKeys es un contenedor: toca el instrumento
+// cargado con los acordes completos. Aquí se carga el instrumento de prueba,
+// que apunta exactamente lo que recibe y cuándo.
+void testHostedInstrument (const String& path)
+{
+    std::cout << "\n=== 2.0: instrumento cargado en la ranura de SmartKeys ===" << std::endl;
+    const auto synth = testSynthDescription();
+    if (synth.fileOrIdentifier.isEmpty())
+    {
+        check (false, "el instrumento de prueba (--synth) se puede describir");
+        return;
+    }
+
+    Host host;
+    if (! host.load (path)) { check (false, "cargar el plugin"); return; }
+    host.setChoice ("Key", 0);
+    host.setChoice ("Scale", 0);
+    host.setChoice ("Mode", 0);
+    host.setChoice ("Chord Type", 0);
+    host.setBool ("Mic Voice Controller", false);
+    host.settle (4);
+
+    std::cout << "\n-- H1. Sin instrumento: ya no hay piano propio; el MIDI sale igual" << std::endl;
+    {
+        auto r = host.run ({ MidiMessage::noteOn (1, 62, (uint8) 100) });
+        auto tail = host.runBlocks (6);
+        check (r.notesOn (1) == std::set<int> { 62, 65, 69 }, "D4 sale como Dm completo por MIDI OUT");
+        check (jmax (r.outputRms, tail.outputRms) <= 0.0f, "con la ranura vacía SmartKeys no suena (no tiene piano propio)");
+        check (slotStatus (host) == "empty" && host.instance().getLatencySamples() == 0, "ranura vacía: latencia 0");
+        host.run ({ MidiMessage::noteOff (1, 62) });
+        host.settle (2);
+    }
+
+    std::cout << "\n-- H2. LOAD PLUGIN: el instrumento se carga (en el hilo de mensajes) y se prepara" << std::endl;
+    int mark = synthLogLines();
+    const double t0 = Time::getMillisecondCounterHiRes();
+    const bool loaded = loadInSlot (host, synth);
+    std::cout << "     cargado en " << (int) (Time::getMillisecondCounterHiRes() - t0) << " ms" << std::endl;
+    check (loaded, "el instrumento de prueba se carga en la ranura");
+    if (! loaded)
+    {
+        host.unload();
+        return;
+    }
+    pumpWhileRunning (host, 300);   // SmartKeys avisa al DAW de la latencia desde su temporizador
+    {
+        auto log = readSynthLog (mark);
+        std::cout << "     " << log.find ("PREPARE") << "   latencia de SmartKeys: " << host.instance().getLatencySamples() << std::endl;
+        check (log.has ("PREPARE 48000 512 realtime=1"), "se prepara con la frecuencia y el bloque del DAW (48 kHz, 512)");
+        check (host.instance().getLatencySamples() == kSynthLatency,
+               "SmartKeys declara al DAW la latencia del instrumento (96 muestras): el DAW la compensa");
+    }
+
+    std::cout << "\n-- H3. Una tecla -> el instrumento recibe el acorde COMPLETO, en la misma muestra" << std::endl;
+    {
+        std::vector<float> audio;
+        host.capture = &audio;
+        mark = synthLogLines();
+        auto r = host.runAt ({ { 100, MidiMessage::noteOn (1, 62, (uint8) 100) } });
+        auto tail = host.runBlocks (16);
+        host.capture = nullptr;
+        auto log = readSynthLog (mark);
+        const auto synthTimes = log.noteOnTimes();
+        std::cout << "     MIDI OUT " << describe (r.notesOn (1)) << "   instrumento " << describe (log.notesOn()) << std::endl;
+        check (r.notesOn (1) == std::set<int> { 62, 65, 69 } && log.notesOn() == std::set<int> { 62, 65, 69 },
+               "D4 -> el instrumento recibe D4 F4 A4 (el acorde completo, no sólo la tecla)");
+        check (sameTiming (midiNoteOnTimes (r), synthTimes), "cada nota le llega en la muestra exacta de la salida MIDI");
+
+        // Su audio sale por SmartKeys: el espectro tiene D, F y A
+        const size_t from = 2048, n = 8192;
+        const float d = goertzel (audio, from, n, Host::sampleRate, 293.66), f = goertzel (audio, from, n, Host::sampleRate, 349.23),
+                    a = goertzel (audio, from, n, Host::sampleRate, 440.00), off = goertzel (audio, from, n, Host::sampleRate, 370.0);
+        std::cout << "     RMS " << jmax (r.outputRms, tail.outputRms) << "   D " << d << "  F " << f << "  A " << a << "  (fuera: " << off << ")" << std::endl;
+        check (jmax (r.outputRms, tail.outputRms) > 1.0e-3f, "el instrumento suena por la salida de SmartKeys");
+        check (d > off * 10.0f && f > off * 10.0f && a > off * 10.0f, "lo que suena es Re menor (D, F, A)");
+
+        mark = synthLogLines();
+        auto off2 = host.run ({ MidiMessage::noteOff (1, 62) });
+        auto logOff = readSynthLog (mark);
+        check (off2.notesOff (1) == std::set<int> { 62, 65, 69 } && logOff.notesOff() == std::set<int> { 62, 65, 69 },
+               "al soltar, el instrumento recibe los 3 NoteOff");
+        host.settle (8);
+    }
+
+    std::cout << "\n-- H4. STRUM: el instrumento recibe el barrido exacto (ASC y DESC)" << std::endl;
+    {
+        host.setText ("Strum Speed", "100");
+        for (int dir : { 0, 1 })
+        {
+            host.setChoice ("Strum Direction", dir);
+            host.settle (2);
+            mark = synthLogLines();
+            auto r = host.runAt ({ { 100, MidiMessage::noteOn (1, 65, (uint8) 100) } });   // F4 -> F A C
+            auto tail = host.runBlocks (30);
+            r.midi.insert (r.midi.end(), tail.midi.begin(), tail.midi.end());
+            auto log = readSynthLog (mark);
+            const auto midiT = midiNoteOnTimes (r);
+            const auto synthT = log.noteOnTimes();
+            if (synthT.size() == 3)
+                std::cout << "     " << (dir == 0 ? "ASC " : "DESC") << ": F4 +" << (synthT.at (65) - synthT.begin()->second)
+                          << "  A4 +" << (synthT.at (69) - synthT.begin()->second) << "  C5 +" << (synthT.at (72) - synthT.begin()->second)
+                          << " muestras (en el instrumento)" << std::endl;
+            const bool order = synthT.size() == 3 && (dir == 0 ? (synthT.at (65) < synthT.at (69) && synthT.at (69) < synthT.at (72))
+                                                                 : (synthT.at (72) < synthT.at (69) && synthT.at (69) < synthT.at (65)));
+            check (order && sameTiming (midiT, synthT),
+                   dir == 0 ? "ASC: F4 -> A4 -> C5 llegan al instrumento en la muestra exacta del STRUM"
+                            : "DESC: C5 -> A4 -> F4 llegan al instrumento en la muestra exacta del STRUM");
+            if (dir == 0 && synthT.size() == 3)
+                check (synthT.at (69) - synthT.at (65) == 5520 && synthT.at (72) - synthT.at (65) == 12480,
+                       "ASC 100 ms: +115 ms y +260 ms (5520 y 12480 muestras), como la salida MIDI");
+            host.run ({ MidiMessage::noteOff (1, 65) });
+            host.settle (4);
+        }
+
+        // Soltar a mitad del barrido: las notas pendientes no le llegan y nada queda colgado
+        host.setChoice ("Strum Direction", 0);
+        mark = synthLogLines();
+        host.runAt ({ { 100, MidiMessage::noteOn (1, 65, (uint8) 100) }, { 2000, MidiMessage::noteOff (1, 65) } });
+        host.runBlocks (30);
+        auto log = readSynthLog (mark);
+        check (log.countNoteOn() == 1 && log.notesOff() == std::set<int> { 65 },
+               "NoteOff a mitad del STRUM: el instrumento sólo recibe la nota que ya entró, y su NoteOff");
+        host.setText ("Strum Speed", "0");
+        host.settle (4);
+    }
+
+    std::cout << "\n-- H5. COMPLEX CHORDS: el instrumento recibe las 5-7 notas" << std::endl;
+    {
+        host.setChoice ("Mode", 2);
+        host.setChoice ("Complex Variation", 1);
+        host.settle (2);
+        mark = synthLogLines();
+        auto r = host.run ({ MidiMessage::noteOn (1, 62, (uint8) 110) });
+        auto log = readSynthLog (mark);
+        std::cout << "     MIDI OUT " << describe (r.notesOn (1)) << "   instrumento " << describe (log.notesOn()) << std::endl;
+        check (r.notesOn (1).size() >= 5 && log.notesOn() == r.notesOn (1), "el instrumento toca el acorde complejo completo");
+        host.run ({ MidiMessage::noteOff (1, 62) });
+        host.setChoice ("Mode", 0);
+        host.settle (4);
+    }
+
+    std::cout << "\n-- H6. El DAW cambia el tamaño de búfer: el instrumento se prepara otra vez" << std::endl;
+    {
+        mark = synthLogLines();
+        host.prepare (2048);
+        auto r = host.runSized (2048, { { 100, MidiMessage::noteOn (1, 60, (uint8) 100) },
+                                        { 1700, MidiMessage::noteOn (1, 67, (uint8) 100) } });
+        auto log = readSynthLog (mark);
+        const auto midiT = midiNoteOnTimes (r), synthT = log.noteOnTimes();
+        std::cout << "     " << log.find ("PREPARE") << "   " << log.find ("MAXBLOCK") << std::endl;
+        check (log.has ("PREPARE 48000 2048"), "SmartKeys prepara otra vez el instrumento con el búfer nuevo (2048)");
+        check (! log.has ("OVERBLOCK"), "el instrumento nunca recibe un bloque más grande que el que se le preparó");
+        check (synthT.size() == 6 && sameTiming (midiT, synthT), "en bloques de 2048, cada nota sigue en su muestra exacta (+1600 la segunda tecla)");
+        host.runSized (2048, { { 0, MidiMessage::noteOff (1, 60) }, { 0, MidiMessage::noteOff (1, 67) } });
+        mark = synthLogLines();
+        host.prepare (Host::blockSize);
+        host.settle (4);
+        check (readSynthLog (mark).has ("PREPARE 48000 512"), "y de vuelta a 512");
+    }
+
+    std::cout << "\n-- H7. GAIN: el volumen del instrumento" << std::endl;
+    {
+        auto level = [&] (const char* db)
+        {
+            host.setText ("Master Gain", db);
+            host.settle (4);
+            auto r = host.run ({ MidiMessage::noteOn (1, 69, (uint8) 100) });
+            auto tail = host.runBlocks (6);
+            host.run ({ MidiMessage::noteOff (1, 69) });
+            host.settle (6);
+            return jmax (r.outputRms, tail.outputRms);
+        };
+        const float loud = level ("-3"), quiet = level ("-30");
+        std::cout << "     RMS con GAIN -3 dB: " << loud << "   con -30 dB: " << quiet << std::endl;
+        check (loud > 1.0e-3f && quiet > 0.0f && quiet < loud * 0.1f, "GAIN -30 dB baja el instrumento ~27 dB");
+        host.setText ("Master Gain", "-3");
+        host.settle (2);
+    }
+
+    std::cout << "\n-- H8. BYPASS: suelta sus notas y lo calla; el MIDI sigue saliendo" << std::endl;
+    {
+        host.run ({ MidiMessage::noteOn (1, 69, (uint8) 100) });   // La menor sostenido
+        host.runBlocks (4);
+        mark = synthLogLines();
+        setSlotBypass (host, true);
+        auto first = host.runBlocks (2);
+        auto silent = host.runBlocks (6);
+        auto whileBypassed = host.run ({ MidiMessage::noteOn (1, 72, (uint8) 100) });
+        auto log = readSynthLog (mark);
+        check (log.notesOff().count (69) == 1 && log.notesOff().count (72) == 1 && log.notesOff().count (76) == 1,
+               "al entrar en BYPASS, el instrumento recibe el NoteOff de lo que sonaba (nada se queda colgado)");
+        check (silent.outputRms <= 0.0f && whileBypassed.outputRms <= 0.0f, "en BYPASS el instrumento no suena");
+        check (whileBypassed.notesOn (1) == std::set<int> { 72, 76, 79 } && log.countNoteOn() == 0,
+               "en BYPASS los acordes siguen saliendo por MIDI y el instrumento no recibe nada");
+        check (slotXml (host) != nullptr && slotXml (host)->getIntAttribute ("bypass") == 1, "BYPASS se guarda con el proyecto");
+        host.run ({ MidiMessage::noteOff (1, 69), MidiMessage::noteOff (1, 72) });
+
+        setSlotBypass (host, false);
+        host.settle (2);
+        auto back = host.run ({ MidiMessage::noteOn (1, 62, (uint8) 100) });
+        auto backTail = host.runBlocks (4);
+        check (jmax (back.outputRms, backTail.outputRms) > 1.0e-3f, "al quitar BYPASS vuelve a sonar");
+        host.run ({ MidiMessage::noteOff (1, 62) });
+        host.settle (6);
+    }
+
+    std::cout << "\n-- H9. El sonido del instrumento se guarda con el proyecto y vuelve al abrirlo" << std::endl;
+    {
+        host.run ({ MidiMessage::noteOn (1, 64, (uint8) 100) });
+        host.run ({ MidiMessage::noteOff (1, 64) });
+        mark = synthLogLines();
+        auto saved = host.getPluginStateXml();
+        auto savedSlot = slotXml (host);
+        const auto stateLine = readSynthLog (mark).find ("STATE_SAVE");
+        const int notes = stateLine.fromFirstOccurrenceOf ("notes=", false, false).getIntValue();
+        std::cout << "     guardado: " << (savedSlot != nullptr ? savedSlot->toString (XmlElement::TextFormat().singleLine()).substring (0, 160) : String ("-"))
+                  << "...  (" << stateLine << ")" << std::endl;
+        check (savedSlot != nullptr && savedSlot->getStringAttribute ("status") == "loaded"
+                 && savedSlot->getChildByName ("PLUGIN") != nullptr
+                 && savedSlot->getChildByName ("PLUGIN")->getStringAttribute ("name") == "SmartKeysTestSynth"
+                 && savedSlot->getChildElementAllSubText ("STATE", {}).isNotEmpty(),
+               "el proyecto guarda qué instrumento hay y su sonido (su propio estado)");
+
+        Host reopened;
+        if (reopened.load (path) && saved != nullptr)
+        {
+            mark = synthLogLines();
+            reopened.setPluginStateXml (*saved);
+            const bool ok = waitForSlot (reopened, "loaded");
+            pumpWhileRunning (reopened, 300);
+            auto log = readSynthLog (mark);
+            std::cout << "     al abrir: " << log.find ("STATE_LOAD") << "   latencia " << reopened.instance().getLatencySamples() << std::endl;
+            check (ok && log.has ("CREATED") && log.has ("STATE_LOAD notes=" + String (notes)),
+                   "al abrir el proyecto, el instrumento vuelve con su sonido");
+            check (reopened.instance().getLatencySamples() == kSynthLatency, "y SmartKeys vuelve a declarar su latencia");
+            auto r = reopened.run ({ MidiMessage::noteOn (1, 62, (uint8) 100) });
+            auto tail = reopened.runBlocks (4);
+            check (jmax (r.outputRms, tail.outputRms) > 1.0e-3f, "y suena");
+            reopened.run ({ MidiMessage::noteOff (1, 62) });
+            reopened.unload();
+            check (readSynthLog (mark).has ("DESTROYED"), "cerrar SmartKeys destruye su instrumento");
+        }
+        else
+        {
+            check (false, "reabrir el proyecto");
+        }
+    }
+
+    std::cout << "\n-- H10. UNLOAD: la ranura queda vacía" << std::endl;
+    {
+        mark = synthLogLines();
+        setSlot (host, nullptr);
+        const bool empty = waitForSlot (host, "empty");
+        pumpWhileRunning (host, 300);
+        auto r = host.run ({ MidiMessage::noteOn (1, 62, (uint8) 100) });
+        auto tail = host.runBlocks (4);
+        check (empty && readSynthLog (mark).has ("DESTROYED"), "el instrumento se destruye");
+        check (host.instance().getLatencySamples() == 0, "la latencia vuelve a 0");
+        check (jmax (r.outputRms, tail.outputRms) <= 0.0f && r.notesOn (1) == std::set<int> { 62, 65, 69 },
+               "silencio, y los acordes siguen saliendo por MIDI");
+        host.run ({ MidiMessage::noteOff (1, 62) });
+    }
+
+    std::cout << "\n-- H11. Un instrumento que no está instalado no se pierde al guardar" << std::endl;
+    {
+        PluginDescription ghost;
+        ghost.name = ghost.descriptiveName = "Ghost Synth";
+        ghost.manufacturerName = "Nadie";
+        ghost.pluginFormatName = "VST3";
+        ghost.isInstrument = true;
+        ghost.fileOrIdentifier = File::getSpecialLocation (File::tempDirectory).getChildFile ("NoExiste").getChildFile ("Ghost.vst3").getFullPathName();
+        ghost.uniqueId = 4242;
+        setSlot (host, &ghost, false, "QUJD");
+        const bool missing = waitForSlot (host, "missing");
+        auto r = host.run ({ MidiMessage::noteOn (1, 62, (uint8) 100) });
+        auto saved = slotXml (host);
+        check (missing, "falta: la ranura lo dice (\"no está instalado\")");
+        check (r.outputRms <= 0.0f && r.notesOn (1).size() == 3, "silencio, y los acordes siguen saliendo por MIDI");
+        check (saved != nullptr && saved->getChildByName ("PLUGIN") != nullptr
+                 && saved->getChildByName ("PLUGIN")->getStringAttribute ("name") == "Ghost Synth"
+                 && saved->getChildElementAllSubText ("STATE", {}).trim() == "QUJD",
+               "al guardar, el proyecto conserva el instrumento que falta y su sonido (para la computadora que lo tenga)");
+        host.run ({ MidiMessage::noteOff (1, 62) });
+    }
+
+    std::cout << "\n-- H12. Un instrumento que devuelve NaN no rompe la mezcla del DAW" << std::endl;
+    {
+        loadInSlot (host, synth);
+        host.nonFiniteSamples = 0;
+        host.run ({ MidiMessage::noteOn (1, 62, (uint8) 100) });
+        auto bad = host.runAt ({ { 10, MidiMessage::controllerEvent (1, 102, 127) } });
+        auto after = host.runBlocks (4);
+        check (host.nonFiniteSamples == 0, "SmartKeys nunca saca NaN / infinito: ese bloque sale en silencio");
+        check (after.outputRms > 1.0e-3f, "y el siguiente bloque vuelve a sonar");
+        host.run ({ MidiMessage::noteOff (1, 62) });
+        host.settle (4);
+    }
+
+   #if SK_COUNT_ALLOCATIONS
+    std::cout << "\n-- H13. Con el instrumento cargado: cero asignaciones en el processBlock" << std::endl;
+    {
+        host.setText ("Strum Speed", "60");
+        std::mt19937 rng (21);
+        std::set<int> held;
+        auto block = [&] (int i)
+        {
+            const int n = 64 + (int) (rng() % 449);
+            std::vector<std::pair<int, MidiMessage>> ev;
+            if (rng() % 3 == 0)
+            {
+                const int note = 48 + (int) (rng() % 30);
+                if (held.count (note) > 0) { ev.push_back ({ 0, MidiMessage::noteOff (1, note) }); held.erase (note); }
+                else                       { ev.push_back ({ 0, MidiMessage::noteOn (1, note, (uint8) 90) }); held.insert (note); }
+            }
+            if (i % 300 == 0)
+                ev.push_back ({ 0, MidiMessage::controllerEvent (1, 123, 0) });
+            host.runSized (n, ev);
+        };
+        for (int i = 0; i < 400; ++i)
+            block (i);
+        {
+            void* warm[4];
+            backtrace (warm, 4);
+        }
+        gTraceAllocations = SystemStats::getEnvironmentVariable ("SK_ALLOC_TRACE", {}).isNotEmpty();
+        gProcessAllocations = 0;
+        for (int i = 400; i < 2400; ++i)
+        {
+            if (i % 250 == 0)
+                host.setChoice ("Mode", (i / 250) % 3);
+            block (i);
+        }
+        const long allocs = gProcessAllocations.load();
+        std::cout << "     2000 bloques tocando el instrumento (acordes, STRUM, All Notes Off): " << allocs << " asignaciones" << std::endl;
+        check (allocs == 0, "el hilo de audio no pide memoria con un instrumento cargado");
+        if (gTraceAllocations)
+            printAllocationTraces();
+        gTraceAllocations = false;
+        std::vector<std::pair<int, MidiMessage>> offs;
+        for (int note : held)
+            offs.push_back ({ 0, MidiMessage::noteOff (1, note) });
+        host.runSized (256, offs);
+        host.setText ("Strum Speed", "0");
+        host.setChoice ("Mode", 0);
+        host.settle (4);
+    }
+   #endif
+
+   #if JUCE_MAC
+    if (gSynthAU)
+    {
+        std::cout << "\n-- H14. Audio Unit: el instrumento de prueba como AU (el formato de FL Studio en Mac)" << std::endl;
+        mark = synthLogLines();
+        const bool ok = loadInSlot (host, testSynthDescription (true));
+        auto r = host.runAt ({ { 50, MidiMessage::noteOn (1, 62, (uint8) 100) } });
+        auto tail = host.runBlocks (8);
+        auto log = readSynthLog (mark);
+        auto savedSlot = slotXml (host);
+        std::cout << "     " << (savedSlot != nullptr && savedSlot->getChildByName ("PLUGIN") != nullptr
+                                     ? savedSlot->getChildByName ("PLUGIN")->getStringAttribute ("file") : String ("-")) << std::endl;
+        check (ok && savedSlot != nullptr && savedSlot->getChildByName ("PLUGIN")->getStringAttribute ("format") == "AudioUnit",
+               "el AU se carga en la ranura");
+        check (log.notesOn() == std::set<int> { 62, 65, 69 } && sameTiming (midiNoteOnTimes (r), log.noteOnTimes()),
+               "el AU recibe el acorde completo en la muestra exacta");
+        check (jmax (r.outputRms, tail.outputRms) > 1.0e-3f, "y suena por SmartKeys");
+        host.run ({ MidiMessage::noteOff (1, 62) });
+        host.settle (4);
+    }
+   #endif
+
+    host.unload();
+}
+
+//==============================================================================
+// Carga protegida: si el programa se cerró mientras se creaba el instrumento, al
+// abrir otra vez el proyecto no se vuelve a crear solo (y el proyecto lo conserva).
+// Necesita que no quede ningún SmartKeys abierto (el catálogo se lee al crearse).
+void testCrashProtection (const String& path)
+{
+    std::cout << "\n=== 2.0: carga protegida tras un cierre ===" << std::endl;
+    const auto synth = testSynthDescription();
+    const auto key = synth.pluginFormatName + "|" + synth.fileOrIdentifier + "|" + String (synth.uniqueId);
+    const auto userData = File (SystemStats::getEnvironmentVariable ("SMARTKEYS_USER_DATA", {}));
+    userData.createDirectory();
+    userData.getChildFile ("Cargando plugin.txt").replaceWithText (key);   // "se cerró cargándolo"
+
+    Host host;
+    if (! host.load (path)) { check (false, "cargar el plugin"); return; }
+    const int mark = synthLogLines();
+    setSlot (host, &synth);
+    const bool crashed = waitForSlot (host, "crashed", 3000);
+    pumpWhileRunning (host, 300);
+    auto log = readSynthLog (mark);
+    auto saved = slotXml (host);
+    check (crashed && ! log.has ("CREATED"), "el proyecto no vuelve a crear solo el instrumento que cerró el programa");
+    check (saved != nullptr && saved->getChildByName ("PLUGIN") != nullptr, "pero lo conserva (se puede reintentar)");
+    host.unload();
+    check (! userData.getChildFile ("Cargando plugin.txt").existsAsFile()
+             || userData.getChildFile ("Cargando plugin.txt").loadFileAsString().trim().isEmpty(),
+           "el apunte se limpia");
+}
+
+//==============================================================================
 // Concurrencia: un hilo de "audio" llama a processBlock sin parar (bloques de
 // tamaño variable, notas, voz) mientras el hilo
 // de mensajes guarda / carga el estado y cambia parámetros, como hace FL Studio.
@@ -844,12 +1509,19 @@ void testConcurrency (const String& path, double seconds)
     Host host;
     if (! host.load (path)) { check (false, "cargar el plugin"); return; }
 
+    // 2.0: con el instrumento de prueba en la ranura (se carga, se quita, se cambia y
+    // se pone en BYPASS mientras el audio corre)
+    const auto synth = testSynthDescription();
+    if (synth.fileOrIdentifier.isNotEmpty())
+        loadInSlot (host, synth);
+
     host.setText ("Strum Speed", "70");
     host.setBool ("Mic Voice Controller", true);
     host.eventsOutOfRange = 0;
+    host.nonFiniteSamples = 0;
 
     std::atomic<bool> stop { false };
-    std::atomic<long> blocks { 0 };
+    std::atomic<long> blocks { 0 }, stateReads { 0 };
     std::thread audio ([&]
     {
         std::mt19937 rng (11);
@@ -902,6 +1574,20 @@ void testConcurrency (const String& path, double seconds)
                     ++portToggles;
                 }
             }
+            if (synth != nullptr && rng() % 5 == 0)
+            {
+                // La ranura: cargar, quitar, BYPASS, un instrumento que falta, cargar dos veces seguidas
+                ++slotChanges;
+                switch (rng() % 6)
+                {
+                    case 0:  setSlot (host, synth); break;
+                    case 1:  setSlot (host, nullptr); break;
+                    case 2:  setSlotBypass (host, rng() % 2 == 0); break;
+                    case 3:  setSlot (host, &ghost); break;
+                    case 4:  setSlot (host, synth); setSlot (host, nullptr); setSlot (host, synth); break;
+                    default: setSlot (host, synth, rng() % 2 == 0); break;
+                }
+            }
             if (Time::getMillisecondCounterHiRes() > endMs)
             {
                 stopTimer();
@@ -910,22 +1596,55 @@ void testConcurrency (const String& path, double seconds)
         }
         Host& host;
         double endMs;
-        int iterations = 0, portToggles = 0;
+        int iterations = 0, portToggles = 0, slotChanges = 0;
         MemoryBlock previous;
         std::mt19937 rng { 5 };
+        const PluginDescription* synth = nullptr;
+        PluginDescription ghost;
     };
 
     Hammer hammer (host, Time::getMillisecondCounterHiRes() + seconds * 1000.0);
+    if (synth.fileOrIdentifier.isNotEmpty())
+        hammer.synth = &synth;
+    hammer.ghost.name = "Ghost Synth";
+    hammer.ghost.pluginFormatName = "VST3";
+    hammer.ghost.fileOrIdentifier = File::getSpecialLocation (File::tempDirectory).getChildFile ("NoExiste").getChildFile ("Ghost.vst3").getFullPathName();
+
+    // Algunos DAW guardan el estado desde otro hilo: SmartKeys contesta con su copia
+    std::thread stateReader ([&]
+    {
+        while (! stop.load())
+        {
+            MemoryBlock mb;
+            host.getState (mb);
+            ++stateReads;
+            std::this_thread::sleep_for (std::chrono::milliseconds (9));
+        }
+    });
+
     hammer.startTimer (7);
     MessageManager::getInstance()->runDispatchLoop();
     stop = true;
     audio.join();
+    stateReader.join();
 
     std::cout << "     " << blocks.load() << " bloques de audio, " << hammer.iterations
               << " rondas de estado/parámetros en el hilo de mensajes (" << hammer.portToggles
-              << " veces encendido/apagado el teclado SmartKeys Chords)" << std::endl;
+              << " veces encendido/apagado el teclado SmartKeys Chords, " << hammer.slotChanges
+              << " cambios de la ranura de instrumento), " << stateReads.load() << " estados leídos desde otro hilo" << std::endl;
     check (blocks.load() > 200 && hammer.iterations > 20, "los dos hilos trabajaron a la vez");
     check (host.eventsOutOfRange == 0, "con todo a la vez, ningún evento MIDI fuera de su bloque");
+    check (host.nonFiniteSamples == 0, "y nunca sale NaN / infinito");
+    if (synth.fileOrIdentifier.isNotEmpty())
+    {
+        check (hammer.slotChanges > 10, "el instrumento se cargó, quitó y cambió con el audio corriendo");
+        setSlot (host, &synth);
+        check (waitForSlot (host, "loaded"), "y al final se carga y suena como siempre");
+        auto r = host.run ({ MidiMessage::noteOn (1, 60, (uint8) 100) });
+        auto tail = host.runBlocks (6);
+        check (jmax (r.outputRms, tail.outputRms) > 1.0e-3f, "suena");
+        host.run ({ MidiMessage::noteOff (1, 60) });
+    }
     host.unload();
 }
 
@@ -944,6 +1663,10 @@ void testSystemMic (const String& path)
     Host host;
     if (! host.load (path)) { check (false, "cargar el plugin"); return; }
 
+    const auto synth = testSynthDescription();
+    if (synth.fileOrIdentifier.isEmpty() || ! loadInSlot (host, synth))
+        check (false, "el instrumento de prueba se carga en la ranura");
+
     host.setChoice ("Key", 0);
     host.setChoice ("Scale", 0);
     host.setChoice ("Mode", 0);
@@ -956,7 +1679,7 @@ void testSystemMic (const String& path)
     std::cout << "     entrada del plugin en silencio, micrófono del sistema con La3 -> " << describe (on) << std::endl;
     check (on.size() == 3 && pitchClasses (on) == std::set<int> { 9, 0, 4 },
            "MIC VOICE lee el micrófono del sistema sin ruteo: La3 -> La menor completo por MIDI");
-    check (sing.outputRms > 1.0e-3f, "y el piano interno lo toca");
+    check (sing.outputRms > 1.0e-3f, "y el instrumento cargado lo toca");
     check (sing.channelsUsed() == std::set<int> { 1 }, "por el canal 1");
 
     // Si el DAW manda voz por la entrada del plugin, manda esa: Do4 -> Do mayor
@@ -1656,7 +2379,7 @@ void testChordPort (const String& path)
         auto portCounts = countPortNoteOns (sc.port);
         std::cout << "     salida MIDI: " << describeCounts (outCounts) << "   teclado: " << describeCounts (portCounts) << std::endl;
         check (outCounts == outBoth,
-               "la salida MIDI y el piano tocan las dos vueltas (F, F otra vez y La menor)");
+               "la salida MIDI y el instrumento tocan las dos vueltas (F, F otra vez y La menor)");
         check (portCounts == portOnce && hangingPortNotes (sc.port) == 0,
                "por el teclado, el acorde que FL repite en la vuelta 2 no sale otra vez; la tecla nueva sí (nada se graba doble)");
 
@@ -1795,7 +2518,7 @@ void testChordPort (const String& path)
         check (singPort == std::map<int, int> { { 57, 1 }, { 60, 1 }, { 64, 1 } } && hangingPortNotes (sing.port) == 0,
                "el acorde completo (La menor) sale una vez por el teclado: es lo que FL graba en el Piano Roll de SmartKeys");
         check (sing.echoes >= 6 && singOut == std::map<int, int> { { 57, 1 }, { 60, 1 }, { 64, 1 } } && hangingNotes (sing.out.midi) == 0,
-               "el acorde vuelve de FL (eco) y no suena otra vez: el piano y la salida MIDI lo tocan una sola vez");
+               "el acorde vuelve de FL (eco) y no suena otra vez: el instrumento y la salida MIDI lo tocan una sola vez");
 
         // b) Al reproducir, el Piano Roll de SmartKeys le manda el acorde grabado
         auto play = runPortScenario (host, *tap, 0.8, { { 100.0, MidiMessage::noteOn (1, 57, (uint8) 95) },
@@ -1949,30 +2672,77 @@ int main (int argc, char* argv[])
 
     if (argc < 2)
     {
-        std::cout << "Uso: SmartKeysHostTests <SmartKeys.vst3> [--stress <segundos>] [--system-mic-only] [--port-only]" << std::endl;
+        std::cout << "Uso: SmartKeysHostTests <SmartKeys.vst3> --synth <SmartKeysTestSynth.vst3> [--synth-au] "
+                     "[--stress <segundos>] [--system-mic-only] [--port-only] [--host-only]" << std::endl;
         return 2;
     }
 
     // Rutas absolutas (juce::File no admite rutas relativas)
     const auto cwd = File::getCurrentWorkingDirectory();
     double stressSeconds = 4.0;
-    bool systemMicOnly = false, portOnly = false;
+    bool systemMicOnly = false, portOnly = false, hostOnly = false, instrumentOnly = false;
     StringArray paths;
     for (int i = 1; i < argc; ++i)
     {
         const auto arg = String::fromUTF8 (argv[i]);
         if (arg == "--stress" && i + 1 < argc)
             stressSeconds = String::fromUTF8 (argv[++i]).getDoubleValue();
+        else if (arg == "--synth" && i + 1 < argc)
+            gSynthPath = cwd.getChildFile (String::fromUTF8 (argv[++i])).getFullPathName();
+        else if (arg == "--synth-au")
+            gSynthAU = true;
         else if (arg == "--system-mic-only")
             systemMicOnly = true;
         else if (arg == "--port-only")
             portOnly = true;
+        else if (arg == "--host-only")
+            hostOnly = true;
+        else if (arg == "--instrument-only")
+            instrumentOnly = true;
         else
             paths.add (cwd.getChildFile (arg).getFullPathName());
     }
 
-    if (! systemMicOnly && ! portOnly)
+    // Lo que apunta el instrumento de prueba, su latencia, y la carpeta de datos de
+    // SmartKeys (catálogo, presets, carga protegida) aparte de la del usuario
+    const auto workDir = File::createTempFile ("smartkeys-hosttests");
+    workDir.createDirectory();
+    gSynthLog = workDir.getChildFile ("testsynth.log");
+   #if JUCE_WINDOWS
+    _putenv_s ("SMARTKEYS_TESTSYNTH_LOG", gSynthLog.getFullPathName().toRawUTF8());
+    _putenv_s ("SMARTKEYS_TESTSYNTH_LATENCY", String (kSynthLatency).toRawUTF8());
+    _putenv_s ("SMARTKEYS_USER_DATA", workDir.getChildFile ("userdata").getFullPathName().toRawUTF8());
+   #else
+    setenv ("SMARTKEYS_TESTSYNTH_LOG", gSynthLog.getFullPathName().toRawUTF8(), 1);
+    setenv ("SMARTKEYS_TESTSYNTH_LATENCY", String (kSynthLatency).toRawUTF8(), 1);
+    setenv ("SMARTKEYS_USER_DATA", workDir.getChildFile ("userdata").getFullPathName().toRawUTF8(), 1);
+   #endif
+
+    if (instrumentOnly)
+    {
         testInstrument (paths[0]);
+        std::cout << "\n" << numChecks << " comprobaciones, " << numFailures << " fallos" << std::endl;
+        workDir.deleteRecursively();
+        return numFailures == 0 ? 0 : 1;
+    }
+
+    if (hostOnly)
+    {
+        testHostedInstrument (paths[0]);
+        testCrashProtection (paths[0]);
+        if (stressSeconds > 0.0)
+            testConcurrency (paths[0], stressSeconds);
+        std::cout << "\n" << numChecks << " comprobaciones, " << numFailures << " fallos" << std::endl;
+        workDir.deleteRecursively();
+        return numFailures == 0 ? 0 : 1;
+    }
+
+    if (! systemMicOnly && ! portOnly)
+    {
+        testInstrument (paths[0]);
+        testHostedInstrument (paths[0]);
+        testCrashProtection (paths[0]);
+    }
 
     if (! portOnly)
         testSystemMic (paths[0]);
@@ -2000,5 +2770,6 @@ int main (int argc, char* argv[])
     }
 
     std::cout << "\n" << numChecks << " comprobaciones, " << numFailures << " fallos" << std::endl;
+    workDir.deleteRecursively();
     return numFailures == 0 ? 0 : 1;
 }

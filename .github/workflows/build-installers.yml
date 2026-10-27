@@ -21,6 +21,14 @@
 #  comprueba los acordes completos, el STRUM y el eco (el teclado devuelto al
 #  propio SmartKeys no dispara acordes ni deja notas colgadas).
 #
+#  2.0 — ranura de instrumento (SmartKeys como contenedor de plugins): un
+#  instrumento de prueba (Tests/TestSynth.cpp) se carga DENTRO del VST3 de
+#  SmartKeys como VST3 y, en la Mac, también como Audio Unit registrado en el
+#  sistema (el formato que usa FL Studio en Mac). Apunta exactamente lo que
+#  recibe: el acorde completo en la muestra exacta, el STRUM, la latencia, el
+#  BYPASS, su sonido guardado con el proyecto, y cargas / descargas con el
+#  audio corriendo. En Windows, lo mismo con VST3.
+#
 #  Se ejecuta en cada push a main o manualmente desde la pestaña "Actions".
 #  Los instaladores se publican en la Release v<versión> y en la rama "installers".
 # ==============================================================================
@@ -35,7 +43,7 @@ permissions:
   contents: write
 
 env:
-  SK_VERSION: "1.7.0"
+  SK_VERSION: "2.0.0"
 
 jobs:
   macos:
@@ -121,6 +129,10 @@ jobs:
             plutil -extract CFBundleIdentifier raw "$b/Contents/Info.plist" | grep -x "com.miwn.smartkeys"
             plutil -extract NSMicrophoneUsageDescription raw "$b/Contents/Info.plist"
           done
+          # 2.0: la app carga plugins de otros fabricantes en su ranura (Hardened Runtime lo permite)
+          codesign -d --entitlements - "/Applications/SmartKeys.app" 2>/dev/null | tee "$RUNNER_TEMP/app-entitlements.txt"
+          grep -q "com.apple.security.cs.disable-library-validation" "$RUNNER_TEMP/app-entitlements.txt"
+          grep -q "com.apple.security.device.audio-input" "$RUNNER_TEMP/app-entitlements.txt"
           plutil -extract NSHumanReadableCopyright raw "/Library/Audio/Plug-Ins/Components/SmartKeys.component/Contents/Info.plist" | grep MIWN
           plutil -p "/Library/Audio/Plug-Ins/Components/SmartKeys.component/Contents/Info.plist" | grep -i "MIWN: SmartKeys"
 
@@ -225,9 +237,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   macos-mic:
-    name: macOS — MIC VOICE (CoreAudio) y SmartKeys Chords (CoreMIDI) reales
+    name: macOS — MIC VOICE (CoreAudio), SmartKeys Chords (CoreMIDI) y la ranura de instrumento (VST3 + AU) reales
     runs-on: macos-15-intel
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -242,14 +254,52 @@ jobs:
           SwitchAudioSource -t output -s "BlackHole 2ch"
           echo "entrada: $(SwitchAudioSource -c -t input)   salida: $(SwitchAudioSource -c -t output)"
 
-      - name: Compilar el VST3, la sonda del micrófono y las pruebas (Intel)
+      - name: Compilar el VST3, la sonda del micrófono, el instrumento de prueba y las pruebas (Intel)
         run: |
           cmake -S . -B build-mic -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 \
                 -DSMARTKEYS_BUILD_MIC_PROBE=ON -DSMARTKEYS_BUILD_HOST_TESTS=ON -DSMARTKEYS_BUILD_TESTS=ON
-          cmake --build build-mic --target SmartKeys_VST3 SmartKeysMicProbe SmartKeysHostTests SmartKeysTests
+          cmake --build build-mic --target SmartKeys_VST3 SmartKeysMicProbe SmartKeysHostTests SmartKeysTests \
+                SmartKeysTestSynth_VST3 SmartKeysTestSynth_AU SmartKeysCatalogTests
 
       - name: Pruebas del núcleo
         run: ./build-mic/SmartKeysTests_artefacts/Release/SmartKeysTests | tail -n 5
+
+      - name: Instrumento de prueba registrado como Audio Unit (auval)
+        run: |
+          mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+          cp -R build-mic/SmartKeysTestSynth_artefacts/Release/AU/SmartKeysTestSynth.component "$HOME/Library/Audio/Plug-Ins/Components/"
+          killall -9 AudioComponentRegistrar || true
+          sleep 3
+          auval -a | grep -i -e Tsyn -e "MIWN Test" || true
+          auval -v aumu Tsyn Miwt | tail -n 12
+
+      - name: Catálogo de instrumentos (Audio Unit del sistema y búsqueda de VST3)
+        env:
+          SMARTKEYS_EXPECT_TEST_AU: "1"
+        run: |
+          mkdir -p "$RUNNER_TEMP/vst3scan"
+          cp -R build-mic/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3 \
+                build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 "$RUNNER_TEMP/vst3scan/"
+          set +e
+          ./build-mic/SmartKeysCatalogTests_artefacts/Release/SmartKeysCatalogTests "$RUNNER_TEMP/vst3scan" | tee catalog.txt
+          code=${PIPESTATUS[0]}
+          echo "::notice title=Catálogo::$(grep -E 'ok|FALLO|comprobaciones|instrumentos AU' catalog.txt | tr '\n' ' ')"
+          exit $code
+
+      - name: SmartKeys (VST3) — ranura de instrumento con el instrumento de prueba (VST3 y AU)
+        env:
+          SMARTKEYS_ASSUME_MIC_PERMISSION: "1"
+          NSZombieEnabled: "YES"
+          MallocScribble: "1"
+        run: |
+          set +e
+          ./build-mic/SmartKeysHostTests_artefacts/Release/SmartKeysHostTests \
+            build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 \
+            --synth build-mic/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3 --synth-au \
+            --host-only --stress 10 2>&1 | tee host-hosting.txt
+          code=${PIPESTATUS[0]}
+          echo "::notice title=Ranura de instrumento::$(grep -E 'ok|FALLO|comprobaciones|instrumento|ASC|DESC' host-hosting.txt | tr '\n' ' ' | cut -c1-3900)"
+          exit $code
 
       - name: Sonda — con el micrófono en silencio (nada cambia en el dispositivo)
         env:
@@ -288,7 +338,8 @@ jobs:
           kill -0 $(cat afplay.pid) 2>/dev/null || { afplay la3.wav & echo $! > afplay.pid; sleep 2; }
           set +e
           ./build-mic/SmartKeysHostTests_artefacts/Release/SmartKeysHostTests \
-            build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 --system-mic-only | tee host-mic.txt
+            build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 \
+            --synth build-mic/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3 --system-mic-only | tee host-mic.txt
           code=${PIPESTATUS[0]}
           echo "::notice title=MIC VOICE en el VST3::$(grep -E 'ok|FALLO|comprobaciones|->' host-mic.txt | tr '\n' ' ')"
           kill $(cat afplay.pid) 2>/dev/null || true
@@ -302,7 +353,8 @@ jobs:
         run: |
           set +e
           ./build-mic/SmartKeysHostTests_artefacts/Release/SmartKeysHostTests \
-            build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 --port-only 2>&1 | tee host-port.txt
+            build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 \
+            --synth build-mic/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3 --port-only 2>&1 | tee host-port.txt
           code=${PIPESTATUS[0]}
           echo "::notice title=SmartKeys Chords (CoreMIDI)::$(grep -E 'ok|FALLO|comprobaciones|->|teclado:|trozos|ecos|disponible|SmartKeys Chords\]' host-port.txt | tr '\n' ' ')"
           exit $code
@@ -313,7 +365,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p "$RUNNER_TEMP/logs"
-          cp host-*.txt probe-*.txt "$RUNNER_TEMP/logs/" 2>/dev/null || true
+          cp host-*.txt probe-*.txt catalog.txt "$RUNNER_TEMP/logs/" 2>/dev/null || true
           cd "$RUNNER_TEMP/logs"
           git init -q -b ci-logs
           git config user.name "github-actions[bot]"
@@ -321,9 +373,60 @@ jobs:
           git add -A && git commit -q -m "Registro de pruebas macOS (${GITHUB_SHA::7})"
           git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-logs || true
 
+  windows-host:
+    name: Windows — ranura de instrumento (VST3 dentro de SmartKeys)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilar SmartKeys, el instrumento de prueba y las pruebas
+        run: |
+          cmake -B build-host -A x64 -DSMARTKEYS_BUILD_HOST_TESTS=ON -DSMARTKEYS_COPY_AFTER_BUILD=OFF
+          cmake --build build-host --config Release --parallel --target SmartKeys_VST3 SmartKeysTestSynth_VST3 SmartKeysHostTests SmartKeysCatalogTests
+
+      - name: Catálogo (búsqueda de VST3)
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/vst3scan"
+          cp -R build-host/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3 \
+                build-host/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 "$RUNNER_TEMP/vst3scan/"
+          set +e
+          ./build-host/SmartKeysCatalogTests_artefacts/Release/SmartKeysCatalogTests.exe "$RUNNER_TEMP/vst3scan" | tee catalog-win.txt
+          code=${PIPESTATUS[0]}
+          echo "::notice title=Catálogo (Windows)::$(grep -E 'ok|FALLO|comprobaciones' catalog-win.txt | tr '\n' ' ')"
+          exit $code
+
+      - name: SmartKeys con el instrumento de prueba cargado
+        shell: bash
+        run: |
+          set +e
+          ./build-host/SmartKeysHostTests_artefacts/Release/SmartKeysHostTests.exe \
+            build-host/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 \
+            --synth build-host/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3 \
+            --host-only --stress 8 2>&1 | tee host-win.txt
+          code=${PIPESTATUS[0]}
+          echo "::notice title=Ranura de instrumento (Windows)::$(grep -E 'ok|FALLO|comprobaciones' host-win.txt | tr '\n' ' ' | cut -c1-3900)"
+          exit $code
+
+      - name: Guardar el registro de las pruebas (si algo falló)
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          cp host-win.txt catalog-win.txt "$RUNNER_TEMP/logs/" 2>/dev/null || true
+          cd "$RUNNER_TEMP/logs"
+          git init -q -b ci-logs-win
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "Registro de pruebas Windows (${GITHUB_SHA::7})"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-logs-win || true
+
   publish:
     name: Publicar instaladores
-    needs: [ macos, windows, macos-mic ]
+    needs: [ macos, windows, macos-mic, windows-host ]
     # Sólo se publica desde main (las ramas de prueba compilan y prueban, nada más)
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -344,7 +447,7 @@ jobs:
           NOTES="Instaladores de SmartKeys $SK_VERSION (MIWN) compilados y probados automáticamente (commit ${GITHUB_SHA::7}).
           - macOS: SmartKeys-$SK_VERSION-macOS.pkg (Apple Silicon + Intel; VST3, AU y Standalone)
           - Windows: SmartKeys-$SK_VERSION-Windows-Setup.exe (VST3 y Standalone)
-          Un único plugin de instrumento: MIC VOICE lee el micrófono de macOS sin sidechain.
+          2.0: SmartKeys es un contenedor de instrumentos (estilo Kontakt / PatchWork). Carga un VST3 o un Audio Unit en su ranura (+ LOAD PLUGIN), le toca los acordes completos (con STRUM) y su sonido sale por SmartKeys; SHOW PLUGIN GUI abre la ventana del instrumento; BYPASS / UNLOAD; presets propios de SmartKeys. Ya no tiene piano interno.
           Ambos instaladores borran automáticamente cualquier versión anterior (y la vieja SmartKeys FX) antes de instalar."
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"

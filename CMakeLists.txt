@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SmartKeys VERSION 1.7.0 LANGUAGES C CXX)
+project(SmartKeys VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -58,9 +58,16 @@ endif()
 # Teclado MIDI virtual "SmartKeys Chords" (CoreMIDI en macOS; ALSA o archivo de prueba en Linux)
 set(SMARTKEYS_PORT_SOURCES Source/ChordMidiPort.cpp)
 
+# 2.0: ranura de instrumento (carga VST3 en todos los sistemas y Audio Unit en macOS)
+set(SMARTKEYS_HOST_SOURCES Source/HostedInstrument.cpp Source/PluginCatalog.cpp Source/Presets.cpp)
+if(APPLE)
+    list(APPEND SMARTKEYS_HOST_SOURCES Source/HostingMac.mm)
+endif()
+
 #-------------------------------------------------------------------------------
 # SmartKeys — un único plugin de instrumento (Channel Rack de FL Studio / pista
-# MIDI de Ableton). Fabricante: MIWN.
+# MIDI de Ableton). Fabricante: MIWN. 2.0: no tiene sonido propio; toca el
+# instrumento VST3 / Audio Unit cargado en su ranura (es un contenedor).
 #   Los códigos PLUGIN_MANUFACTURER_CODE / PLUGIN_CODE NO cambian: de ellos salen
 #   los identificadores VST3 y AU, así los proyectos guardados con versiones
 #   anteriores siguen encontrando el plugin.
@@ -78,7 +85,7 @@ juce_add_plugin(SmartKeys
     PLUGIN_MANUFACTURER_CODE      Jpau
     PLUGIN_CODE                   Smk1
     PRODUCT_NAME                  "SmartKeys"
-    DESCRIPTION                   "Smart Piano, Chord Generator & Live Voice Controller"
+    DESCRIPTION                   "Smart Chord & Scale Host: Chord Generator, Live Voice Controller and Instrument Slot"
     VERSION                       ${PROJECT_VERSION}
     FORMATS                       VST3 AU Standalone
 
@@ -92,11 +99,17 @@ juce_add_plugin(SmartKeys
     AU_MAIN_TYPE                  kAudioUnitType_MusicDevice
     AU_SANDBOX_SAFE               TRUE
 
+    # Carga instrumentos Audio Unit (macOS) dentro de su ranura
+    PLUGINHOST_AU                 TRUE
+
     # NSMicrophoneUsageDescription en el Info.plist de cada formato
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT    "SmartKeys usa el micrófono para convertir tu voz en notas y acordes MIDI en tiempo real."
     HARDENED_RUNTIME_ENABLED      TRUE
+    # La app (Standalone) carga plugins de otros fabricantes en su ranura
     HARDENED_RUNTIME_OPTIONS      com.apple.security.device.audio-input
+                                  com.apple.security.cs.disable-library-validation
+                                  com.apple.security.cs.allow-unsigned-executable-memory
 
     COPY_PLUGIN_AFTER_BUILD       ${SMARTKEYS_COPY_AFTER_BUILD}
     ${copy_args})
@@ -105,14 +118,16 @@ target_sources(SmartKeys PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     ${SMARTKEYS_MIC_SOURCES}
-    ${SMARTKEYS_PORT_SOURCES})
+    ${SMARTKEYS_PORT_SOURCES}
+    ${SMARTKEYS_HOST_SOURCES})
 target_include_directories(SmartKeys PRIVATE Source)
 
 target_compile_definitions(SmartKeys PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0)
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    JUCE_PLUGINHOST_VST3=1)
 
 target_link_libraries(SmartKeys
     PRIVATE
@@ -183,6 +198,53 @@ endif()
 #-------------------------------------------------------------------------------
 option(SMARTKEYS_BUILD_HOST_TESTS "Compilar la prueba de integración que carga el VST3" OFF)
 if(SMARTKEYS_BUILD_HOST_TESTS)
+    # Instrumento de prueba que SmartKeys carga en su ranura (VST3; también AU en macOS).
+    # Apunta lo que recibe (SMARTKEYS_TESTSYNTH_LOG) para comprobar acordes, STRUM y latencia.
+    juce_add_plugin(SmartKeysTestSynth
+        COMPANY_NAME                  "MIWN Test"
+        BUNDLE_ID                     com.miwn.smartkeys.testsynth
+        PLUGIN_MANUFACTURER_CODE      Miwt
+        PLUGIN_CODE                   Tsyn
+        PRODUCT_NAME                  "SmartKeysTestSynth"
+        DESCRIPTION                   "SmartKeys test instrument (not distributed)"
+        VERSION                       ${PROJECT_VERSION}
+        FORMATS                       VST3 AU
+        IS_SYNTH                      TRUE
+        NEEDS_MIDI_INPUT              TRUE
+        NEEDS_MIDI_OUTPUT             FALSE
+        VST3_CATEGORIES               Instrument Synth
+        AU_MAIN_TYPE                  kAudioUnitType_MusicDevice
+        COPY_PLUGIN_AFTER_BUILD       FALSE)
+    target_sources(SmartKeysTestSynth PRIVATE Tests/TestSynth.cpp)
+    target_compile_definitions(SmartKeysTestSynth PUBLIC
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
+    target_link_libraries(SmartKeysTestSynth
+        PRIVATE
+            juce::juce_audio_utils
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
+
+    # El catálogo de instrumentos de SmartKeys y la ranura por dentro, por separado (Audio Unit del
+    # sistema, búsqueda VST3, bloques más grandes que el preparado, cambios con el audio corriendo)
+    juce_add_console_app(SmartKeysCatalogTests PRODUCT_NAME "SmartKeysCatalogTests" PLUGINHOST_AU TRUE)
+    target_sources(SmartKeysCatalogTests PRIVATE Tests/CatalogTests.cpp Source/PluginCatalog.cpp Source/Presets.cpp
+                                                 Source/HostedInstrument.cpp)
+    if(APPLE)
+        target_sources(SmartKeysCatalogTests PRIVATE Source/HostingMac.mm)
+    endif()
+    target_include_directories(SmartKeysCatalogTests PRIVATE Source)
+    target_compile_definitions(SmartKeysCatalogTests PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_STANDALONE_APPLICATION=1 JUCE_PLUGINHOST_VST3=1
+        JUCE_MODAL_LOOPS_PERMITTED=1)
+    target_link_libraries(SmartKeysCatalogTests
+        PRIVATE
+            juce::juce_audio_processors
+            juce::juce_audio_utils
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
+
     juce_add_console_app(SmartKeysHostTests PRODUCT_NAME "SmartKeysHostTests")
     target_sources(SmartKeysHostTests PRIVATE Tests/HostTests.cpp)
     target_compile_definitions(SmartKeysHostTests PRIVATE

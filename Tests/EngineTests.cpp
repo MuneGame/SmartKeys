@@ -12,7 +12,6 @@
 #include <set>
 #include "ScaleChordEngine.h"
 #include "VoicePitchTracker.h"
-#include "FlKeysPianoSynth.h"
 #include "MidiOutputRouter.h"
 #include "StrumScheduler.h"
 #include "MicRingBuffer.h"
@@ -414,97 +413,6 @@ static void testPitchTracker()
 }
 
 //==============================================================================
-static float goertzel (const float* x, int n, double sr, double f)
-{
-    const double w = 2.0 * juce::MathConstants<double>::pi * f / sr;
-    const double coeff = 2.0 * std::cos (w);
-    double s1 = 0, s2 = 0;
-    for (int i = 0; i < n; ++i)
-    {
-        const double s = x[i] + coeff * s1 - s2;
-        s2 = s1; s1 = s;
-    }
-    return (float) std::sqrt (s1 * s1 + s2 * s2 - coeff * s1 * s2) / (float) n;
-}
-
-static void testSynth()
-{
-    std::printf ("[9] Sintetizador de piano interno\n");
-    const double sr = 48000.0;
-    const int block = 256;
-    FlKeysPianoSynth synth;
-    synth.prepare (sr, block);
-    synth.setReferencePitch (440.0f);
-
-    juce::AudioBuffer<float> buf (2, block);
-    std::vector<float> capture;
-    capture.reserve ((size_t) sr * 2);
-    juce::MidiBuffer midi;
-
-    float peak = 0.0f;
-    bool finite = true;
-    const int blocks = (int) (1.5 * sr / block);
-    for (int b = 0; b < blocks; ++b)
-    {
-        midi.clear();
-        if (b == 0)
-            for (int n : { 60, 64, 67 })
-                midi.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 110), 0);
-        if (b == (int) (1.0 * sr / block))
-            for (int n : { 60, 64, 67 })
-                midi.addEvent (juce::MidiMessage::noteOff (1, n), 0);
-        buf.clear();
-        synth.render (buf, midi, 0, block);
-        for (int i = 0; i < block; ++i)
-        {
-            const float l = buf.getSample (0, i), r = buf.getSample (1, i);
-            finite = finite && std::isfinite (l) && std::isfinite (r);
-            peak = std::max (peak, std::max (std::abs (l), std::abs (r)));
-            capture.push_back (l);
-        }
-    }
-
-    const int analysisStart = (int) (0.05 * sr), analysisLen = (int) (0.5 * sr);
-    const float* a = capture.data() + analysisStart;
-    const float c = goertzel (a, analysisLen, sr, 261.63), e = goertzel (a, analysisLen, sr, 329.63),
-                g = goertzel (a, analysisLen, sr, 392.00), off = goertzel (a, analysisLen, sr, 300.0);
-    std::printf ("    pico=%.3f  C=%.4f E=%.4f G=%.4f  (fuera de acorde 300 Hz=%.5f)  voces activas al final=%d\n",
-                 peak, c, e, g, off, synth.getNumActiveVoices());
-    CHECK (finite, "sin NaN/Inf");
-    CHECK (peak > 0.05f && peak < 1.0f, "nivel audible sin clip");
-    CHECK (c > off * 20 && e > off * 20 && g > off * 20, "el espectro contiene C-E-G");
-    CHECK (synth.getNumActiveVoices() == 0, "las voces terminan tras el release");
-
-    // Robo de voces sin memoria dinámica: 41 notas pulsadas con 32 voces
-    {
-        juce::MidiBuffer burst;
-        for (int n = 40; n <= 80; ++n)
-            burst.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), n - 40);
-        juce::AudioBuffer<float> b2 (2, 512);
-        b2.clear();
-        long allocs = 0;
-        {
-            AllocationGuard guard;
-            synth.render (b2, burst, 0, 512);
-            allocs = guard.count();
-        }
-        bool lowAndTop = false, bothFound[2] = { false, false };
-        auto& sy = synth.getSynthesiser();
-        for (int i = 0; i < sy.getNumVoices(); ++i)
-        {
-            const int note = sy.getVoice (i)->getCurrentlyPlayingNote();
-            if (note == 40) bothFound[0] = true;
-            if (note == 80) bothFound[1] = true;
-        }
-        lowAndTop = bothFound[0] && bothFound[1];
-        CHECK (synth.getNumActiveVoices() == FlKeysPianoSynth::kNumVoices, "41 notas: las 32 voces suenan (se roban las más antiguas)");
-        CHECK (lowAndTop, "la nota más grave y la más aguda pulsadas se protegen del robo");
-        CHECK (allocs == 0, "robar voces no pide memoria (StealSafeSynthesiser)");
-        synth.allNotesOff();
-    }
-}
-
-//==============================================================================
 static void testChordNamer()
 {
     std::printf ("[11] Nombrador de acordes con extensiones\n");
@@ -798,14 +706,9 @@ static void testComplexRouterAndVoice()
     CHECK (voiceOns == 7 && vecToString (voiceNotes) == "45 52 57 60 67 74 76", "tararear A3 dispara el acorde complejo completo (Am7(11))");
 }
 
-static void testComplexPolyphonyAndLevel()
+static void testComplexChordSizes()
 {
-    std::printf ("[15] Polifonía (>= 24 voces sin cortes) y nivel con acordes de 7 notas\n");
-    const double sr = 48000.0;
-    const int block = 256;
-    FlKeysPianoSynth synth;
-    synth.prepare (sr, block);
-    CHECK (synth.getSynthesiser().getNumVoices() >= 24, "al menos 24 voces");
+    std::printf ("[15] COMPLEX CHORDS a la vez: 4 acordes de 5-7 notas sostenidos (lo que recibe el instrumento)\n");
 
     ScaleChordEngine e;
     e.setState (5, 0, ScaleChordEngine::getPitchClassMask (5, 0));
@@ -815,60 +718,35 @@ static void testComplexPolyphonyAndLevel()
     MidiOutputRouter router;
     juce::MidiBuffer midi;
     midi.ensureSize (8192);
-    juce::AudioBuffer<float> buf (2, block);
 
-    // a) Capacidad pura: 28 notas distintas a la vez (4 acordes de 7) -> 28 voces sin robo
-    {
-        FlKeysPianoSynth s;
-        s.prepare (sr, block);
-        juce::MidiBuffer m28;
-        for (int n = 36; n < 64; ++n)
-            m28.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0);
-        buf.clear();
-        s.render (buf, m28, 0, block);
-        std::printf ("    28 notas distintas simultáneas -> %d voces sonando\n", s.getNumActiveVoices());
-        CHECK (s.getNumActiveVoices() == 28, "28 notas simultáneas sin robar voces (mínimo exigido: 24)");
-    }
-
-    // b) 4 acordes complejos reales mantenidos a la vez (las notas compartidas se cuentan una vez)
+    // 4 acordes complejos reales mantenidos a la vez (las notas compartidas se cuentan una vez)
     for (int key : { 41, 57, 72, 88 })   // F2, A3, C5, E6
         router.handleNoteOn (MidiOutputRouter::Source::Midi, key, 1, 127, 0, e, midi);
-    int requested = 0;
+    int requested = 0, maxVelocity = 0;
+    std::set<int> distinct;
     for (const auto m : midi)
-        if (m.getMessage().isNoteOn()) ++requested;
-
-    float peak = 0.0f;
-    buf.clear();
-    synth.render (buf, midi, 0, block);
-    const int activeAfterOn = synth.getNumActiveVoices();
-    for (int b = 0; b < 40; ++b)
     {
-        midi.clear();
-        if (b > 0) buf.clear();
-        if (b > 0) synth.render (buf, midi, 0, block);
-        peak = std::max (peak, buf.getMagnitude (0, block));
+        const auto msg = m.getMessage();
+        if (msg.isNoteOn())
+        {
+            ++requested;
+            distinct.insert (msg.getNoteNumber());
+            maxVelocity = std::max (maxVelocity, (int) msg.getVelocity());
+        }
     }
-    std::printf ("    notas pedidas=%d  voces sonando=%d  pico=%.3f\n", requested, activeAfterOn, peak);
-    CHECK (requested >= 20 && activeAfterOn == requested, "4 acordes complejos sostenidos sin robar voces");
-    CHECK (peak < 1.0f, "sin clip con 4 acordes complejos a velocidad 127");
+    std::printf ("    notas pedidas=%d (distintas=%d)  velocidad máxima=%d\n", requested, (int) distinct.size(), maxVelocity);
+    CHECK (requested >= 20 && requested == (int) distinct.size(), "4 acordes complejos: >= 20 notas, cada una una sola vez");
+    CHECK (maxVelocity <= 127 && maxVelocity > 0, "velocidades válidas para el instrumento");
 
-    // Un acorde de 7 notas a velocidad máxima
-    FlKeysPianoSynth synth2;
-    synth2.prepare (sr, block);
-    MidiOutputRouter r2;
     midi.clear();
-    r2.handleNoteOn (MidiOutputRouter::Source::Midi, 62, 1, 127, 0, e, midi);
-    float peak7 = 0.0f;
-    for (int b = 0; b < 40; ++b)
-    {
-        buf.clear();
-        synth2.render (buf, midi, 0, block);
-        midi.clear();
-        peak7 = std::max (peak7, buf.getMagnitude (0, block));
-    }
-    std::printf ("    acorde de 7 notas a vel 127: pico=%.3f\n", peak7);
-    CHECK (peak7 > 0.1f && peak7 < 1.0f, "nivel audible y sin clip");
+    for (int key : { 41, 57, 72, 88 })
+        router.handleNoteOff (MidiOutputRouter::Source::Midi, key, 0, midi);
+    int offs = 0;
+    for (const auto m : midi)
+        offs += m.getMessage().isNoteOff() ? 1 : 0;
+    CHECK (offs == requested, "al soltar las 4 teclas salen todos los NoteOff");
 }
+
 //==============================================================================
 static void testStrumScheduler()
 {
@@ -1354,8 +1232,6 @@ static void testRealtimeAllocations()
     engine.setState (5, 0, ScaleChordEngine::getPitchClassMask (5, 0));
     VoicePitchTracker tracker;
     tracker.prepare (sr);
-    FlKeysPianoSynth synth;
-    synth.prepare (sr, block);
     MidiOutputRouter router;
     StrumScheduler strum;
     strum.prepare (sr);
@@ -1363,7 +1239,6 @@ static void testRealtimeAllocations()
     juce::MidiBuffer routed, out;
     routed.ensureSize (16384);
     out.ensureSize (16384);
-    juce::AudioBuffer<float> audio (2, block);
     std::vector<float> mic ((size_t) block);
 
     auto runBlock = [&] (int b)
@@ -1389,17 +1264,6 @@ static void testRealtimeAllocations()
         if (b % 50 == 0) engine.setState ((b / 50) % 12, (b / 50) % kNumScales, ScaleChordEngine::getPitchClassMask ((b / 50) % 12, (b / 50) % kNumScales));
         if (b % 90 == 0) engine.setMode ((OperationMode) ((b / 90) % 3));                 // Smart / Single / Complex
         if (b % 130 == 0) engine.setComplexVariation ((ComplexVariation) ((b / 130) % 3));
-        if (b % 37 == 0)
-        {
-            // Ráfaga de 40 notas con 32 voces: obliga a robar voces (sin memoria dinámica)
-            for (int n = 0; n < 40; ++n)
-                out.addEvent (juce::MidiMessage::noteOn (1, 36 + n, (juce::uint8) 90), n);
-        }
-        if (b % 37 == 20)
-            for (int n = 0; n < 40; ++n)
-                out.addEvent (juce::MidiMessage::noteOff (1, 36 + n), n);
-        audio.clear();
-        synth.render (audio, out, 0, block);
     };
 
     for (int b = 0; b < 64; ++b) runBlock (b);   // calentamiento
@@ -1410,7 +1274,7 @@ static void testRealtimeAllocations()
         for (int b = 64; b < 2000; ++b) runBlock (b);
         allocs = guard.count();
     }
-    std::printf ("    1936 bloques (tracker + router + STRUM + motor + sinte con robo de voces): %ld asignaciones\n", allocs);
+    std::printf ("    1936 bloques (tracker + router + STRUM + motor): %ld asignaciones\n", allocs);
     CHECK (allocs == 0, "cero asignaciones en el hilo de audio");
 }
 
@@ -1427,12 +1291,11 @@ int main()
     testMicrotuning();
     testRouter();
     testPitchTracker();
-    testSynth();
     testChordNamer();
     testComplexChords();
     testComplexExhaustive();
     testComplexRouterAndVoice();
-    testComplexPolyphonyAndLevel();
+    testComplexChordSizes();
     testStrumScheduler();
     testRealtimeAllocations();
     testMicRingBuffer();
