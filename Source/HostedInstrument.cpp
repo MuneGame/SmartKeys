@@ -96,6 +96,12 @@ namespace
         return d;
     }
 
+    // Copia de un bloque (vacío incluido: el operator= de JUCE haría memcpy con punteros nulos)
+    void copyBlock (juce::MemoryBlock& to, const juce::MemoryBlock& from)
+    {
+        to.replaceAll (from.getData(), from.getSize());
+    }
+
     // El sonido guardado del instrumento (texto base64 de JUCE; también base64 estándar)
     juce::MemoryBlock decodeState (const juce::String& text)
     {
@@ -340,7 +346,7 @@ void HostedInstrument::retry()
         if (! cacheHasPlugin)
             return;
         d = cacheDescription;
-        data = cacheState;
+        copyBlock (data, cacheState);
     }
 
     catalog->forgetCrash (d);
@@ -354,7 +360,7 @@ void HostedInstrument::startLoad (const juce::PluginDescription& d, const juce::
 
     const auto generation = ++loadGeneration;
     loadingDescription = d;
-    loadingState = stateToApply;
+    copyBlock (loadingState, stateToApply);
     loadingByUser = userAction;
     errorText = {};
 
@@ -363,7 +369,7 @@ void HostedInstrument::startLoad (const juce::PluginDescription& d, const juce::
         const juce::ScopedLock sl (cacheLock);
         cacheHasPlugin = true;
         cacheDescription = d;
-        cacheState = stateToApply;
+        copyBlock (cacheState, stateToApply);
         cacheError = {};
     }
 
@@ -747,12 +753,12 @@ void HostedInstrument::restoreState (const juce::XmlElement* xml)
         const juce::ScopedLock sl (cacheLock);
         cacheHasPlugin = hasPlugin;
         cacheDescription = d;
-        cacheState = data;
+        copyBlock (cacheState, data);
         cacheError = {};
         restorePending = true;
         restoreHasPlugin = hasPlugin;
         restoreDescription = d;
-        restoreStateData = data;
+        copyBlock (restoreStateData, data);
     }
     changed();
 
@@ -772,7 +778,7 @@ void HostedInstrument::applyPendingRestore()
         restorePending = false;
         hasPlugin = restoreHasPlugin;
         d = restoreDescription;
-        data = restoreStateData;
+        copyBlock (data, restoreStateData);
         restoreStateData.reset();
     }
 
