@@ -1343,6 +1343,7 @@ void SmartKeysAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("stateVersion", 6, nullptr);
     state.setProperty ("customMask", (int) customMask.load(), nullptr);
     state.setProperty ("editorScale", (double) editorScale.load(), nullptr);
+    state.setProperty ("view", synthViewWanted.load() ? "synth" : "smartkeys", nullptr);
     state.setProperty ("chordKeyboard", chordPortEnabled.load(), nullptr);
     state.setProperty ("pianoRollChords", pianoRollChords.load(), nullptr);
     state.setProperty ("presetName", getPresetName(), nullptr);
@@ -1396,6 +1397,7 @@ void SmartKeysAudioProcessor::setStateInformation (const void* data, int sizeInB
         customMask.store (ScaleChordEngine::getPitchClassMask ((int) pRootKey->load(), (int) pScale->load()));
 
     setEditorScale ((float) (double) tree.getProperty ("editorScale", 1.0));
+    synthViewWanted.store (tree.getProperty ("view", "smartkeys").toString() == "synth");
 
     // Teclado "SmartKeys Chords": lo que se guardó con el proyecto (1.6+)
     if (tree.hasProperty ("chordKeyboard"))

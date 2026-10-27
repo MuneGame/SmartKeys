@@ -16,11 +16,14 @@
         programa al examinarlo, la próxima búsqueda lo salta ("dead man's
         pedal"). El resultado se guarda en disco.
       - SÓLO GENERADORES DE SONIDO: la búsqueda apunta únicamente los plugins
-        que se declaran instrumento (isInstrument); un archivo que sólo trae
-        efectos (EQ, reverb, compresor…) se aparta y no se vuelve a abrir en las
-        búsquedas de "nuevos". Tampoco se ofrecen los anfitriones de plugins,
-        patchers y navegadores de samples (se declaran instrumento, pero no
-        suenan por sí mismos), ni el propio SmartKeys.
+        que se declaran instrumento (isInstrument) y suenan por sí mismos. Un
+        archivo que sólo trae efectos (EQ, reverb, compresor…) se aparta y no se
+        vuelve a abrir en las búsquedas de "nuevos". Tampoco se ofrecen, aunque
+        se declaren instrumento: los anfitriones de plugins (AudioGridder,
+        Element, PatchWork, Unify, Carla…), patchers, navegadores de samples y
+        los que dicen en su nombre o categoría efecto, analizador, ruteo, MIDI,
+        utilidad o control; ni los que no tienen salida de audio (si al
+        cargarlo resulta que no tiene, sale de la lista); ni el propio SmartKeys.
       - Carga protegida: si el programa se cerró mientras se creaba un plugin,
         al abrir otra vez el proyecto ese plugin no se carga solo (se avisa y
         se puede reintentar a mano). Así un plugin roto no deja el proyecto
@@ -73,10 +76,18 @@ public:
     // SmartKeys no se carga dentro de sí mismo
     static bool isSmartKeysItself (const juce::PluginDescription&);
 
-    // ¿Se puede cargar en la ranura? Un instrumento (isInstrument) que no sea SmartKeys ni un
-    // anfitrión de plugins / patcher / navegador de samples
+    // ¿Se puede cargar en la ranura? Un instrumento (isInstrument) que no sea SmartKeys, ni un
+    // anfitrión de plugins / patcher / navegador de samples, cuyo nombre y categoría no digan
+    // efecto, analizador, ruteo, MIDI, utilidad o control y, si se saben sus canales, con
+    // salida de audio
     static bool isLoadableInstrument (const juce::PluginDescription&);
-    static bool isHostOrBrowser (const juce::PluginDescription&);
+    static bool isHostOrBrowser (const juce::PluginDescription&);       // nombre / fabricante
+    static bool hasNonGeneratorName (const juce::PluginDescription&);   // nombre / categoría
+
+    // Al cargarlo no tenía salida de audio: ya no se ofrece (se guarda; "Volver a buscar
+    // todos" le da otra oportunidad)
+    void excludeNonGenerator (const juce::PluginDescription&);
+    bool isExcluded (const juce::PluginDescription&) const;
 
     // "Audio Unit" / "VST3"
     static juce::String getFormatDisplayName (const juce::PluginDescription&);
@@ -90,6 +101,7 @@ private:
     bool pruneNonInstruments();   // la lista guardada por una versión anterior podía traer efectos
     static juce::String loadKey (const juce::PluginDescription&);
     void writeLoadMarkers();
+    void saveExcluded();
 
     juce::AudioPluginFormatManager formats;
     juce::KnownPluginList vst3List;
@@ -101,6 +113,7 @@ private:
 
     juce::StringArray loadsInProgress;      // cargas en curso en este proceso
     juce::StringArray crashedLastTime;      // cargas que no terminaron la última vez
+    juce::StringArray excluded;             // sin salida de audio al cargarlos
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginCatalog)
 };

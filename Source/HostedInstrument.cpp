@@ -225,61 +225,6 @@ struct HostedInstrument::Slot
 };
 
 //==============================================================================
-// Ventana flotante con la interfaz del plugin cargado
-class HostedInstrument::Window final : public juce::DocumentWindow
-{
-public:
-    Window (HostedInstrument& o, juce::AudioProcessorEditor* editor, const juce::String& title)
-        : juce::DocumentWindow (title, juce::Colour (0xFF1B1D21),
-                                juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton),
-          owner (o)
-    {
-        setUsingNativeTitleBar (true);
-        setContentOwned (editor, true);
-        setResizable (editor->isResizable(), false);
-        setAlwaysOnTop (true);   // no se esconde detrás de la ventana del DAW
-    }
-
-    ~Window() override
-    {
-        clearContentComponent();   // el editor del plugin se destruye antes que la ventana
-    }
-
-    void closeButtonPressed() override   { owner.windowCloseRequested(); }
-
-    // El teclado de la PC sigue tocando acordes con esta ventana delante: lo que el plugin no
-    // usa (escribir el nombre de un preset sí lo usa) va a la ventana de SmartKeys
-    bool keyPressed (const juce::KeyPress& key) override
-    {
-        if (auto* target = owner.keyTarget.getComponent())
-            if (target->keyPressed (key))
-                return true;
-        return juce::DocumentWindow::keyPressed (key);
-    }
-
-    bool keyStateChanged (bool isKeyDown) override
-    {
-        if (auto* target = owner.keyTarget.getComponent())
-            if (target->keyStateChanged (isKeyDown))
-                return true;
-        return juce::DocumentWindow::keyStateChanged (isKeyDown);
-    }
-
-    void activeWindowStatusChanged() override
-    {
-        juce::DocumentWindow::activeWindowStatusChanged();
-        if (! isActiveWindow())
-            if (auto* target = dynamic_cast<KeyboardTarget*> (owner.keyTarget.getComponent()))
-                target->hostedWindowLostKeyboard();
-    }
-
-private:
-    HostedInstrument& owner;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Window)
-};
-
-//==============================================================================
 HostedInstrument::HostedInstrument()
 {
     startTimerHz (kTimerHz);
@@ -304,7 +249,7 @@ void HostedInstrument::shutdown()
         masterReference.clear();        // ni llega ninguna respuesta pendiente
         onLatencyChanged = nullptr;
 
-        closeWindow();                  // 1) el editor del plugin
+        releaseEditor();                // 1) la interfaz del plugin
         detach();                       // 2) el audio lo suelta
         destroySlot (std::move (current));   // 3) el plugin
 
@@ -462,8 +407,10 @@ void HostedInstrument::finishLoad (uint32_t generation, const juce::PluginDescri
         configureBuses (*instance);
         if (instance->getMainBusNumOutputChannels() <= 0)
         {
-            problem = juce::String::fromUTF8 ("no tiene salida de audio");
+            // No genera sonido (una herramienta MIDI, un anfitrión sin salidas): fuera de la lista
+            problem = juce::String::fromUTF8 ("no genera sonido (no tiene salida de audio)");
             instance.reset();
+            catalog->excludeNonGenerator (requested);
         }
     }
 
@@ -505,10 +452,9 @@ void HostedInstrument::finishLoad (uint32_t generation, const juce::PluginDescri
         prepareSlot (*slot, targetRate.load(), targetBlock.load());
     slot->instance->addListener (this);
 
-    // Cambio: la ventana del anterior se cierra antes de destruirlo; si estaba abierta,
-    // se abre la del nuevo
-    const bool hadWindow = window != nullptr;
-    closeWindow();
+    // Cambio: la interfaz del anterior se destruye antes que él (la ventana de SmartKeys pide
+    // después la del nuevo si estaba en la vista SYNTH)
+    releaseEditor();
 
     auto old = std::move (current);
     current = std::move (slot);
@@ -521,9 +467,6 @@ void HostedInstrument::finishLoad (uint32_t generation, const juce::PluginDescri
     setStatus (Status::Loaded);
     refreshStateCache();
     updateLatency();
-
-    if (hadWindow)
-        reopenWindow = true;
 }
 
 void HostedInstrument::forgetLoadMark (const juce::PluginDescription& d)
@@ -557,8 +500,7 @@ void HostedInstrument::unload()
 
 void HostedInstrument::unloadInternal()
 {
-    closeWindow();
-    reopenWindow = false;
+    releaseEditor();
     detach();
     destroySlot (std::move (current));
     updateLatency();
@@ -567,7 +509,7 @@ void HostedInstrument::unloadInternal()
 
 void HostedInstrument::destroySlot (std::unique_ptr<Slot> s)
 {
-    // Precondición: su ventana está cerrada y el audio ya no lo ve (detach / attach)
+    // Precondición: su interfaz ya no existe y el audio ya no lo ve (detach / attach)
     if (s == nullptr || s->instance == nullptr)
         return;
 
@@ -820,7 +762,7 @@ void HostedInstrument::applyPendingRestore()
         return;
     }
 
-    // El mismo instrumento ya cargado: sólo su sonido (más rápido; su ventana sigue abierta)
+    // El mismo instrumento ya cargado: sólo su sonido (más rápido; su interfaz sigue a la vista)
     if (current != nullptr && getStatus() == Status::Loaded && current->description.isDuplicateOf (d))
     {
         if (data.getSize() > 0)
@@ -834,106 +776,38 @@ void HostedInstrument::applyPendingRestore()
 }
 
 //==============================================================================
-// Ventana del plugin
-void HostedInstrument::showWindow (juce::Component* nextTo)
+// La interfaz del plugin (dentro de la ventana de SmartKeys)
+juce::AudioProcessorEditor* HostedInstrument::getEditor (bool createIfNeeded)
 {
-    if (window != nullptr)
-    {
-        window->setVisible (true);
-        window->toFront (false);
-        return;
-    }
+    if (editor != nullptr || ! createIfNeeded)
+        return editor.get();
 
     if (current == nullptr || getStatus() != Status::Loaded || shuttingDown)
-        return;
+        return nullptr;
 
-    // createEditorAndMakeActive() es el nombre en JUCE 8 de createEditorIfNeeded(): devuelve el
-    // editor activo del plugin o lo crea (la ventana es su dueña y lo destruye al cerrarse)
+    // createEditorAndMakeActive() es el nombre en JUCE 8 de createEditorIfNeeded(): crea la
+    // interfaz del plugin (HostedInstrument es su dueño y la destruye antes que el plugin).
+    // Sin preguntar antes hasEditor(): en un VST3 eso crea y destruye otra interfaz completa
+    // sólo para saber si tiene (algunos plugins se cuelgan con dos seguidas).
     auto& p = *current->instance;
-    juce::AudioProcessorEditor* editor = p.hasEditor() ? p.createEditorAndMakeActive() : nullptr;
+    juce::AudioProcessorEditor* created = p.createEditorAndMakeActive();
+    if (created == nullptr)
+        created = new juce::GenericAudioProcessorEditor (p);   // un plugin sin interfaz: sus parámetros
+
+    editor.reset (created);
+    changed();
+    return editor.get();
+}
+
+void HostedInstrument::releaseEditor()
+{
     if (editor == nullptr)
-        editor = new juce::GenericAudioProcessorEditor (p);   // un plugin sin interfaz: sus parámetros
-
-    window = std::make_unique<Window> (*this, editor, juce::String::fromUTF8 ("SmartKeys  ·  ") + current->description.name);
-    placeWindow (*window, nextTo);
-    window->setVisible (true);
-   #if JUCE_MAC
-    if (auto* peer = window->getPeer())
-        configureHostedPluginWindow (peer->getNativeHandle());
-   #endif
-    window->toFront (false);   // el teclado se queda en SmartKeys (y en el DAW)
-
-    if (nextTo != nullptr)
-        reopenNextTo = nextTo;
-    changed();
-}
-
-void HostedInstrument::closeWindow()
-{
-    if (window == nullptr)
         return;
 
-    window = nullptr;   // ~Window destruye primero el editor del plugin
+    editor = nullptr;   // ~Component la quita de donde se mostraba
     if (! shuttingDown)
-        refreshStateCache();   // lo que se tocó en la ventana queda guardado
+        refreshStateCache();   // lo que se tocó en su interfaz queda guardado
     changed();
-}
-
-void HostedInstrument::windowCloseRequested()
-{
-    reopenWindow = false;
-    juce::WeakReference<HostedInstrument> weak (this);
-    juce::MessageManager::callAsync ([weak]
-    {
-        if (auto* self = weak.get())
-            self->closeWindow();
-    });
-}
-
-void HostedInstrument::smartKeysEditorOpened (juce::Component& editor)
-{
-    reopenNextTo = &editor;
-    keyTarget = &editor;
-}
-
-void HostedInstrument::smartKeysEditorClosing()
-{
-    const bool wasOpen = window != nullptr;
-    closeWindow();
-    reopenWindow = wasOpen;   // al abrir otra vez SmartKeys, vuelve a abrirse
-    reopenNextTo = nullptr;
-    keyTarget = nullptr;
-}
-
-bool HostedInstrument::isWindowActive() const noexcept
-{
-    return window != nullptr && window->isVisible() && window->isActiveWindow();
-}
-
-void HostedInstrument::placeWindow (Window& w, juce::Component* nextTo)
-{
-    const int width = w.getWidth(), height = w.getHeight();
-
-    if (nextTo == nullptr || ! nextTo->isShowing())
-    {
-        w.centreWithSize (width, height);
-        return;
-    }
-
-    // Al lado de la ventana de SmartKeys (a la derecha si cabe; si no, a la izquierda)
-    const auto anchor = nextTo->getScreenBounds();
-    const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (anchor);
-    const auto area = display != nullptr ? display->userBounds.toNearestInt() : anchor;
-
-    int x = anchor.getRight() + 12;
-    if (x + width > area.getRight())
-        x = anchor.getX() - width - 12;
-    if (x < area.getX())
-        x = anchor.getCentreX() - width / 2;
-
-    x = juce::jlimit (area.getX(), juce::jmax (area.getX(), area.getRight() - width), x);
-    const int y = juce::jlimit (area.getY(), juce::jmax (area.getY(), area.getBottom() - height), anchor.getY());
-    w.setTopLeftPosition (x, y);
 }
 
 //==============================================================================
@@ -960,16 +834,6 @@ void HostedInstrument::timerCallback()
     }
     if (stateRefreshPending && stateReadOffMessageThread.load() && now - lastStateChangeMs > 1500.0)
         refreshStateCache();
-
-    // La ventana del plugin vuelve a abrirse con la de SmartKeys (o tras cambiar de instrumento)
-    if (reopenWindow && window == nullptr && getStatus() == Status::Loaded)
-    {
-        if (auto* next = reopenNextTo.getComponent(); next != nullptr && next->isShowing())
-        {
-            reopenWindow = false;
-            showWindow (next);
-        }
-    }
 }
 
 void HostedInstrument::audioProcessorParameterChanged (juce::AudioProcessor*, int, float)
