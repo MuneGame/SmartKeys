@@ -15,6 +15,12 @@
         moduleinfo.json y se describen sin cargarlos. Si un plugin cerrara el
         programa al examinarlo, la próxima búsqueda lo salta ("dead man's
         pedal"). El resultado se guarda en disco.
+      - SÓLO GENERADORES DE SONIDO: la búsqueda apunta únicamente los plugins
+        que se declaran instrumento (isInstrument); un archivo que sólo trae
+        efectos (EQ, reverb, compresor…) se aparta y no se vuelve a abrir en las
+        búsquedas de "nuevos". Tampoco se ofrecen los anfitriones de plugins,
+        patchers y navegadores de samples (se declaran instrumento, pero no
+        suenan por sí mismos), ni el propio SmartKeys.
       - Carga protegida: si el programa se cerró mientras se creaba un plugin,
         al abrir otra vez el proyecto ese plugin no se carga solo (se avisa y
         se puede reintentar a mano). Así un plugin roto no deja el proyecto
@@ -67,6 +73,11 @@ public:
     // SmartKeys no se carga dentro de sí mismo
     static bool isSmartKeysItself (const juce::PluginDescription&);
 
+    // ¿Se puede cargar en la ranura? Un instrumento (isInstrument) que no sea SmartKeys ni un
+    // anfitrión de plugins / patcher / navegador de samples
+    static bool isLoadableInstrument (const juce::PluginDescription&);
+    static bool isHostOrBrowser (const juce::PluginDescription&);
+
     // "Audio Unit" / "VST3"
     static juce::String getFormatDisplayName (const juce::PluginDescription&);
 
@@ -76,6 +87,7 @@ private:
     void saveVst3List();
     juce::AudioPluginFormat* findFormat (const juce::String& name) const;
     int countVst3Instruments() const;
+    bool pruneNonInstruments();   // la lista guardada por una versión anterior podía traer efectos
     static juce::String loadKey (const juce::PluginDescription&);
     void writeLoadMarkers();
 

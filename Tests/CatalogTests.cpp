@@ -5,11 +5,15 @@
     SmartKeys — prueba del catálogo de instrumentos de la ranura (2.0) y de los
     presets propios:
 
+      0. Qué se puede cargar en la ranura: sólo instrumentos (isInstrument), ni
+         SmartKeys ni anfitriones de plugins / patchers / navegadores de samples.
       1. Audio Unit (macOS): la lista de instrumentos del sistema sale sin abrir
          ningún plugin (DLSMusicDevice de Apple siempre está; el instrumento de
-         prueba si se instaló) y SmartKeys no se ofrece a sí mismo.
+         prueba si se instaló; el efecto de prueba nunca) y SmartKeys no se
+         ofrece a sí mismo.
       2. VST3: la búsqueda (VST3_PATH) encuentra el instrumento de prueba, se
-         salta SmartKeys.vst3, se guarda en disco y la próxima vez ya se sabe.
+         salta SmartKeys.vst3, deja fuera el efecto de prueba (y lo aparta),
+         se guarda en disco y la próxima vez ya se sabe.
       3. Un plugin que cerró el programa al examinarlo no se vuelve a examinar.
       4. Carga protegida: una carga que no terminó (el programa se cerró) se
          recuerda al abrir otra vez.
@@ -18,9 +22,12 @@
          que el preparado llega al instrumento en trozos con cada nota en su
          muestra; y un hilo de audio procesa sin parar mientras el hilo de
          mensajes carga, quita, pone en BYPASS y vuelve a preparar el instrumento.
+      7. Sólo instrumentos: "Buscar nuevos" no vuelve a abrir un efecto apartado
+         (aunque cambie), "Volver a buscar todos" sí; y una lista guardada por
+         una versión anterior con efectos o anfitriones se limpia al abrir.
 
-    Uso: SmartKeysCatalogTests <carpeta con SmartKeysTestSynth.vst3 [y SmartKeys.vst3]>
-         (SMARTKEYS_EXPECT_TEST_AU=1: el AU de prueba debe estar registrado)
+    Uso: SmartKeysCatalogTests <carpeta con SmartKeysTestSynth.vst3 y SmartKeysTestFx.vst3 [y SmartKeys.vst3]>
+         (SMARTKEYS_EXPECT_TEST_AU=1: el AU de prueba y el AU de efecto de prueba deben estar registrados)
 
   ==============================================================================
 */
@@ -56,12 +63,68 @@ bool contains (const Array<PluginDescription>& list, const String& name, const S
     return false;
 }
 
+bool listedByName (const Array<PluginDescription>& list, const String& name)
+{
+    for (const auto& d : list)
+        if (d.name == name)
+            return true;
+    return false;
+}
+
 void scanAndWait (PluginCatalog& catalog, bool everything)
 {
     catalog.startVst3Scan (everything);
     const auto end = Time::getMillisecondCounterHiRes() + 60000.0;
     while (catalog.isScanning() && Time::getMillisecondCounterHiRes() < end)
         MessageManager::getInstance()->runDispatchLoopUntil (20);
+}
+
+// La lista VST3 que SmartKeys guarda en disco (la misma que lee al abrir)
+File savedListFile()
+{
+    return PluginCatalog::getUserDataFolder().getChildFile ("Instrumentos VST3.xml");
+}
+
+// Archivos apartados (la búsqueda de "nuevos" no los vuelve a abrir)
+StringArray savedBlacklist()
+{
+    StringArray ids;
+    if (auto xml = XmlDocument::parse (savedListFile()))
+        for (auto* e : xml->getChildWithTagNameIterator ("BLACKLISTED"))
+            ids.add (e->getStringAttribute ("id"));
+    return ids;
+}
+
+// Tipos guardados (todos, sin filtrar)
+Array<PluginDescription> savedTypes()
+{
+    Array<PluginDescription> types;
+    if (auto xml = XmlDocument::parse (savedListFile()))
+        for (auto* e : xml->getChildIterator())
+        {
+            PluginDescription d;
+            if (! e->hasTagName ("BLACKLISTED") && d.loadFromXml (*e))
+                types.add (d);
+        }
+    return types;
+}
+
+bool sameFile (const String& a, const File& b)
+{
+    return File::createFileWithoutCheckingPath (a) == b;
+}
+
+PluginDescription describe (const String& name, const String& maker, bool instrument)
+{
+    PluginDescription d;
+    d.name = name;
+    d.descriptiveName = name;
+    d.manufacturerName = maker;
+    d.pluginFormatName = "VST3";
+    d.isInstrument = instrument;
+    d.category = instrument ? "Instrument|Synth" : "Fx";
+    d.fileOrIdentifier = "/Library/Audio/Plug-Ins/VST3/" + name + ".vst3";
+    return d;
 }
 }
 
@@ -102,6 +165,37 @@ int main (int argc, char* argv[])
     check (PluginCatalog::isSmartKeysItself (self), "SmartKeys (VST3) se reconoce a sí mismo");
 
     //==========================================================================
+    std::cout << "\n-- 0. Qué se puede cargar en la ranura (sólo generadores de sonido)" << std::endl;
+    {
+        using C = PluginCatalog;
+        check (C::isLoadableInstrument (describe ("Serum", "Xfer Records", true))
+                 && C::isLoadableInstrument (describe ("PAPU", "Test", true))
+                 && C::isLoadableInstrument (describe ("Kontakt 8", "Native Instruments", true))
+                 && C::isLoadableInstrument (describe ("Vital", "Vital Audio", true)),
+               "sintes y romplers (isInstrument) se pueden cargar");
+        check (! C::isLoadableInstrument (describe ("Pro-Q 4", "FabFilter", false))
+                 && ! C::isLoadableInstrument (describe ("ValhallaRoom", "Valhalla DSP, LLC", false))
+                 && ! C::isLoadableInstrument (describe ("Pro-C 2", "FabFilter", false)),
+               "EQ, reverb y compresor (efectos, isInstrument falso) no");
+        check (! C::isLoadableInstrument (self), "SmartKeys no se carga dentro de sí mismo");
+        check (C::isHostOrBrowser (describe ("Blue Cat's PatchWork Synth", "Blue Cat Audio", true))
+                 && C::isHostOrBrowser (describe ("Unify", "PlugInGuru", true))
+                 && C::isHostOrBrowser (describe ("Carla-Rack", "falkTX", true))
+                 && C::isHostOrBrowser (describe ("Vienna Ensemble Pro", "VSL", true))
+                 && C::isHostOrBrowser (describe ("FL Studio", "Image-Line", true))
+                 && C::isHostOrBrowser (describe ("Loopcloud 7", "Loopmasters", true))
+                 && C::isHostOrBrowser (describe ("Sample Manager", "ADSR Sounds", true)),
+               "anfitriones de plugins, patchers y navegadores de samples se reconocen");
+        check (! C::isLoadableInstrument (describe ("Blue Cat's PatchWork Synth", "Blue Cat Audio", true)),
+               "aunque se declaren instrumento, no se ofrecen");
+        check (! C::isHostOrBrowser (describe ("Dispatcher", "Acme", true))
+                 && ! C::isHostOrBrowser (describe ("Sytrus", "Image-Line", true))
+                 && ! C::isHostOrBrowser (describe ("Unifyer Pad", "Acme", true))
+                 && ! C::isHostOrBrowser (describe ("Serum", "Xfer Records", true)),
+               "palabras enteras: Dispatcher, Unifyer o Sytrus no son anfitriones");
+    }
+
+    //==========================================================================
    #if JUCE_MAC
     std::cout << "\n-- 1. Instrumentos Audio Unit del sistema (sin abrirlos)" << std::endl;
     {
@@ -127,7 +221,10 @@ int main (int argc, char* argv[])
         check (ms < 2000.0, "la lista sale al instante (no se abre ningún plugin)");
 
         if (SystemStats::getEnvironmentVariable ("SMARTKEYS_EXPECT_TEST_AU", {}) == "1")
+        {
             check (contains (list, "SmartKeysTestSynth", "AudioUnit"), "el instrumento de prueba instalado como AU aparece");
+            check (! listedByName (list, "SmartKeysTestFx"), "el efecto de prueba instalado como AU (aufx) no aparece");
+        }
     }
    #endif
 
@@ -148,6 +245,19 @@ int main (int argc, char* argv[])
             selfListed |= PluginCatalog::isSmartKeysItself (d);
         check (! selfListed, "SmartKeys.vst3 no se ofrece a sí mismo");
         check (catalog.getLastScanNewInstruments() >= 1, "cuenta los instrumentos nuevos");
+
+        // Sólo instrumentos: el efecto de prueba (VST3 "Fx|EQ") está en la misma carpeta
+        const auto fx = pluginFolder.getChildFile ("SmartKeysTestFx.vst3");
+        check (fx.isDirectory(), "el efecto de prueba está en la carpeta (SmartKeysTestFx.vst3)");
+        check (! listedByName (list, "SmartKeysTestFx"), "el efecto no aparece en la lista: sólo instrumentos");
+        bool fxBlacklisted = false;
+        for (const auto& id : savedBlacklist())
+            fxBlacklisted |= sameFile (id, fx);
+        check (fxBlacklisted, "su archivo queda apartado: \"Buscar nuevos\" no lo vuelve a abrir");
+        bool onlyInstruments = savedTypes().size() > 0;
+        for (const auto& d : savedTypes())
+            onlyInstruments &= PluginCatalog::isLoadableInstrument (d);
+        check (onlyInstruments, "la lista guardada en disco sólo trae instrumentos");
     }
     {
         PluginCatalog catalog;   // otra instancia (otro proyecto, otro día)
@@ -364,6 +474,72 @@ int main (int argc, char* argv[])
         AudioBuffer<float> after (2, 64);
         MidiBuffer none;
         check (! slot.process (after, 0, 2, none, 64, nullptr), "al cerrar, el instrumento se destruye y el audio ya no lo toca");
+    }
+
+    //==========================================================================
+    std::cout << "\n-- 7. Sólo instrumentos: lo apartado no se vuelve a abrir; las listas antiguas se limpian" << std::endl;
+    {
+        const auto fx = pluginFolder.getChildFile ("SmartKeysTestFx.vst3");
+        const auto info = fx.getChildFile ("Contents").getChildFile ("Resources").getChildFile ("moduleinfo.json");
+        const auto original = info.loadFileAsString();
+        check (original.contains ("\"Fx\"") && ! original.contains ("\"Instrument\""),
+               "el efecto de prueba se describe como efecto (moduleinfo.json: Fx)");
+
+        auto fxBlacklisted = [&]
+        {
+            for (const auto& id : savedBlacklist())
+                if (sameFile (id, fx))
+                    return true;
+            return false;
+        };
+
+        {
+            PluginCatalog catalog;   // la lista de antes: el efecto está apartado
+            check (fxBlacklisted() && ! listedByName (catalog.getInstruments(), "SmartKeysTestFx"),
+                   "al abrir, el efecto sigue fuera y apartado");
+
+            // El archivo cambia (p. ej. una actualización) y ahora se declararía instrumento:
+            // "Buscar nuevos" ni lo mira (no se vuelve a abrir un archivo apartado)
+            info.replaceWithText (original.replace ("\"Fx\"", "\"Instrument\""), false, false, nullptr);
+            scanAndWait (catalog, false);
+            check (! listedByName (catalog.getInstruments(), "SmartKeysTestFx") && fxBlacklisted(),
+                   "\"Buscar nuevos\" no vuelve a abrir el archivo apartado");
+
+            // "Volver a buscar todos" revisa todo otra vez: ahora sí se declara instrumento
+            scanAndWait (catalog, true);
+            check (listedByName (catalog.getInstruments(), "SmartKeysTestFx") && ! fxBlacklisted(),
+                   "\"Volver a buscar todos\" lo revisa otra vez (declarado instrumento, entra)");
+
+            // Y vuelve a ser un efecto: fuera otra vez
+            info.replaceWithText (original, false, false, nullptr);
+            scanAndWait (catalog, true);
+            check (! listedByName (catalog.getInstruments(), "SmartKeysTestFx") && fxBlacklisted()
+                     && contains (catalog.getInstruments(), "SmartKeysTestSynth", "VST3"),
+                   "efecto otra vez: fuera y apartado; el instrumento sigue");
+        }
+        check (info.loadFileAsString() == original, "el efecto de prueba queda como estaba");
+
+        // Una lista guardada por una versión anterior (2.0.0 guardaba también efectos)
+        if (auto xml = XmlDocument::parse (savedListFile()))
+        {
+            xml->addChildElement (describe ("Old Reverb", "Acme", false).createXml().release());
+            xml->addChildElement (describe ("Old EQ", "Acme", false).createXml().release());
+            xml->addChildElement (describe ("Blue Cat's PatchWork Synth", "Blue Cat Audio", true).createXml().release());
+            xml->writeTo (savedListFile());
+        }
+        check (savedTypes().size() >= 4, "lista antigua con dos efectos y un anfitrión de plugins");
+        {
+            PluginCatalog catalog;
+            const auto list = catalog.getInstruments();
+            check (! listedByName (list, "Old Reverb") && ! listedByName (list, "Old EQ")
+                     && ! listedByName (list, "Blue Cat's PatchWork Synth")
+                     && contains (list, "SmartKeysTestSynth", "VST3"),
+                   "al abrir no se ofrecen (el instrumento sigue)");
+        }
+        bool clean = true;
+        for (const auto& d : savedTypes())
+            clean &= PluginCatalog::isLoadableInstrument (d);
+        check (clean && contains (savedTypes(), "SmartKeysTestSynth", "VST3"), "y la lista se guarda limpia en disco");
     }
 
     userData.deleteRecursively();

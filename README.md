@@ -15,6 +15,15 @@
 
 ---
 
+## Novedades de la versión 2.0.1
+
+- **Una tecla, un acorde.** Si llegaba otra vez el NoteOn de una tecla que seguía pulsada (un controlador que rebota, el mismo teclado entrando dos veces al DAW, la misma tecla por dos canales), SmartKeys soltaba el acorde y lo volvía a atacar: un tartamudeo o dos acordes encimados. Ahora SmartKeys lleva el estado de las 128 teclas: un NoteOn repetido sin su NoteOff se ignora y el acorde se suelta con un solo NoteOff. Vale para el teclado MIDI, el Piano Roll, el LIVE KEYBOARD y las teclas de la computadora, y se nota en el instrumento cargado, en la salida MIDI y en el teclado *SmartKeys Chords* (FL no graba nada doble). Ver [Una tecla, un acorde](#una-tecla-un-acorde-201).
+- **LIVE KEYBOARD sin rebotes.** Un temblor del ratón o del trackpad en el borde entre dos teclas ya no salta de una a otra (dos acordes seguidos): hay que moverse unos píxeles y entrar en la tecla vecina.
+- **Panel KEY nuevo:** 12 botones separados, con espacio entre ellos. Arriba, los 5 oscuros (C#/Db, D#/Eb, F#/Gb, G#/Ab, A#/Bb); abajo, los 7 claros (C D E F G A B). Sólo la tónica elegida se ilumina en magenta (`#EC1368`). Un clic sólo cambia la tonalidad: **nunca toca notas**, y suelta lo que el ratón o el teclado de la computadora tuvieran pulsado. Si sigues con una tecla de la computadora pulsada, no vuelve a sonar hasta que la sueltes y la pulses otra vez.
+- **La ventana del instrumento ya no te quita el teclado.** `SHOW PLUGIN GUI` la abre sin quitarle el foco a SmartKeys. Si haces clic en ella, las teclas de la computadora que el instrumento no usa siguen llegando a SmartKeys. Con la ventana abierta, minimizada o cerrada, todo el MIDI que llega (controlador o Piano Roll) y el LIVE KEYBOARD pasan siempre por el motor de acordes y tocan el instrumento. Si cambias de ventana con una tecla pulsada, su nota se suelta y no se queda colgada.
+- **Sólo instrumentos en la lista.** La búsqueda de VST3 sólo apunta los plugins que se declaran instrumento (`isInstrument`): los efectos (EQ, reverb, compresor…) se descartan y no se vuelven a abrir en las búsquedas de nuevos. Tampoco se ofrecen anfitriones de plugins, patchers ni navegadores de samples (PatchWork, Bidule, Unify, Carla, Metaplugin, Gig Performer, Vienna Ensemble Pro, FL Studio como plugin, ADSR Sample Manager, Loopcloud, Splice Bridge), aunque se declaren instrumento. Una lista guardada por la 2.0.0 se limpia sola. Los Audio Unit ya eran sólo instrumentos (`aumu`).
+- **VST2 no:** SmartKeys carga instrumentos VST3 y Audio Unit. Para cargar un VST2, JUCE necesita el kit de desarrollo de VST2, que Steinberg dejó de distribuir y no volvió a publicar cuando liberó el de VST3 (licencia MIT, octubre de 2025). Casi todos los instrumentos actuales se instalan también como VST3 o AU: elige esa versión.
+
 ## Novedades de la versión 2.0.0
 
 **SmartKeys pasa a ser un contenedor de instrumentos.** El piano interno desaparece: en su lugar, una **ranura** en la que cargas cualquier instrumento VST3 o Audio Unit instalado. Todo lo demás sigue igual (KEY y las 43 escalas, SMART / SINGLE / COMPLEX con Lush, Neo-Soul y Cinematic, MIC VOICE con su GATE, STRUM con ASC / DESC, el LIVE KEYBOARD, el teclado *SmartKeys Chords* y los acordes al Piano Roll): ahora todo eso lo toca el instrumento que elijas.
@@ -52,10 +61,10 @@ La 1.5.0 trajo `MIC VOICE` sin sidechain (SmartKeys lee él mismo el micrófono 
 
 ## Descargar los instaladores (sin compilar nada)
 
-GitHub compila y prueba SmartKeys en cada cambio y publica los instaladores en la página **Releases** de este repositorio (**SmartKeys 2.0.0**):
+GitHub compila y prueba SmartKeys en cada cambio y publica los instaladores en la página **Releases** de este repositorio (**SmartKeys 2.0.1**):
 
-- **Mac:** `SmartKeys-2.0.0-macOS.pkg`. Funciona en Mac con chip Apple e Intel. Instala SmartKeys (VST3, AU y app).
-- **Windows:** `SmartKeys-2.0.0-Windows-Setup.exe`. Instala SmartKeys (VST3 y app).
+- **Mac:** `SmartKeys-2.0.1-macOS.pkg`. Funciona en Mac con chip Apple e Intel. Instala SmartKeys (VST3, AU y app).
+- **Windows:** `SmartKeys-2.0.1-Windows-Setup.exe`. Instala SmartKeys (VST3 y app).
 
 **Los dos instaladores eliminan automáticamente la versión anterior** (y la vieja SmartKeys FX) antes de copiar la nueva. No hace falta borrar nada a mano. El registro de lo que se borró en Mac queda en `/tmp/smartkeys-install.log`.
 
@@ -73,7 +82,7 @@ bash Installer/install_mac.sh
 
 1. Comprueba las Command Line Tools de Apple y CMake (si falta CMake, lo instala con Homebrew o solo para tu usuario).
 2. Borra SmartKeys y la vieja SmartKeys FX (`.vst3`, `.component`, `.app`) de `/Library`, de `~/Library` de cada usuario y de `/Applications`. También borra la caché de Audio Units y la ficha de FL Studio.
-3. Compila en `Release` el binario Universal y genera `Installer/Output/SmartKeys-2.0.0-macOS.pkg`.
+3. Compila en `Release` el binario Universal y genera `Installer/Output/SmartKeys-2.0.1-macOS.pkg`.
 4. Instala el `.pkg` y reinicia `AudioComponentRegistrar` para que FL Studio y Ableton vean el binario nuevo.
 
 Te pide la contraseña de administrador en los pasos 2 y 4. Para desinstalar todo: `bash Installer/uninstall_mac.sh`.
@@ -84,7 +93,7 @@ Te pide la contraseña de administrador en los pasos 2 y 4. Para desinstalar tod
 Installer\build_windows.bat
 ```
 
-Compila, genera `SmartKeys-2.0.0-Windows-Setup.exe` y lo ejecuta. El instalador borra antes la versión anterior. Requisitos: Visual Studio 2022 con "Desarrollo para escritorio con C++", CMake 3.22+, Git e [Inno Setup 6.3+](https://jrsoftware.org/isdl.php). Añade `noinstall` para solo generar el `.exe`.
+Compila, genera `SmartKeys-2.0.1-Windows-Setup.exe` y lo ejecuta. El instalador borra antes la versión anterior. Requisitos: Visual Studio 2022 con "Desarrollo para escritorio con C++", CMake 3.22+, Git e [Inno Setup 6.3+](https://jrsoftware.org/isdl.php). Añade `noinstall` para solo generar el `.exe`.
 
 ### Para desarrolladores: copiar al compilar
 
@@ -120,9 +129,9 @@ SmartKeys no tiene sonido propio: suena el instrumento que cargues en su ranura,
 
 `GAIN` ajusta el volumen del instrumento (−60 a +6 dB). El instrumento cargado, su sonido (el preset que elegiste en su ventana) y su `BYPASS` se guardan con el proyecto. Si el proyecto se abre en una computadora que no tiene ese instrumento, la ranura lo dice (`no está instalado`) y lo **conserva**: al guardar no se pierde, y en la computadora que lo tenga sonará con su sonido.
 
-**Abrir la ventana del instrumento en FL Studio:** abre SmartKeys (clic en su botón del Channel Rack) → fila **INSTRUMENT** → **`SHOW PLUGIN GUI`**. La ventana flota sobre FL Studio, se oculta cuando cambias a otra aplicación y se cierra con la de SmartKeys; si la tenías abierta, vuelve a abrirse la próxima vez que abras SmartKeys.
+**Abrir la ventana del instrumento en FL Studio:** abre SmartKeys (clic en su botón del Channel Rack) → fila **INSTRUMENT** → **`SHOW PLUGIN GUI`**. La ventana flota sobre FL Studio, se oculta cuando cambias a otra aplicación y se cierra con la de SmartKeys; si la tenías abierta, vuelve a abrirse la próxima vez que abras SmartKeys. Abrirla no le quita el teclado a SmartKeys, y abierta, minimizada o cerrada, todo lo que tocas (teclado MIDI, Piano Roll, LIVE KEYBOARD, teclas de la Mac) sigue sonando en el instrumento. En FL Studio, el teclado MIDI va al canal **seleccionado** del Channel Rack: deja seleccionado SmartKeys.
 
-**Qué instrumentos:** cualquier instrumento **VST3** (Mac y Windows) o **Audio Unit** (Mac). Los instrumentos propios de FL Studio (FLEX, Sytrus, FPC, 3x Osc…) no son plugins y no se pueden cargar en ningún otro plugin: para tocarlos con SmartKeys, usa la [forma B](#b-en-otro-instrumento-flex-serum-kontakt). En Mac siempre tienes un piano General MIDI: `Apple › DLSMusicDevice`.
+**Qué instrumentos:** cualquier instrumento **VST3** (Mac y Windows) o **Audio Unit** (Mac): sintetizadores, romplers y samplers que generan sonido. La lista **sólo trae instrumentos**: los efectos (EQ, reverb, compresor…) no aparecen, y tampoco los anfitriones de plugins, patchers ni navegadores de samples (PatchWork, Bidule, Unify, Carla, Gig Performer, Vienna Ensemble Pro, ADSR Sample Manager, Loopcloud…), que se declaran instrumento pero no suenan por sí mismos. **VST2 no:** JUCE necesita el kit de desarrollo de VST2 para cargarlos, y Steinberg ya no lo distribuye; casi todos los instrumentos se instalan también como VST3 o AU. Los instrumentos propios de FL Studio (FLEX, Sytrus, FPC, 3x Osc…) no son plugins y no se pueden cargar en ningún otro plugin: para tocarlos con SmartKeys, usa la [forma B](#b-en-otro-instrumento-flex-serum-kontakt). En Mac siempre tienes un piano General MIDI: `Apple › DLSMusicDevice`.
 
 **Si algo falla:** `No se pudo cargar…` en la ranura (el que había sigue sonando). Si FL Studio se cerrara mientras se carga un instrumento, al volver a abrir el proyecto SmartKeys **no lo vuelve a cargar solo** (`Se cerró el programa al cargarlo`): clic en la ranura → **Reintentar**. Si un instrumento devuelve audio no válido (NaN), SmartKeys silencia ese momento en lugar de pasarlo a la mezcla.
 
@@ -233,7 +242,7 @@ La perilla **STRUM SPEED** (debajo del display) va de `OFF` a 200 ms:
 | `MIDI ● SmartKeys Chords` | Teclado MIDI virtual (macOS): `●` activo, `○` esperando a que suene el plugin, `· en uso` (otra app lo tiene), `· eco` (FL lo devuelve a SmartKeys), `· REC` (FL graba y se lo dice a SmartKeys: lo que repite el bucle no sale otra vez), `· Piano Roll` (los acordes se graban en el Piano Roll de SmartKeys), `· FL no lo recibe`, `· toca en SmartKeys`, `· OFF` apagado. Clic: menú (acordes al Piano Roll de SmartKeys / a otro instrumento / apagado). Pasa el ratón para ver los pasos de FL Studio |
 | `MIC VOICE` | Activa la voz: el micrófono de macOS (o la entrada sidechain si el DAW la manda) |
 | Medidor · `GATE` · `Mic: A3 -> Acorde: Am` | Nivel de la voz, umbral del gate y la nota y el acorde que dispara en vivo |
-| `KEY` · `SCALE` · barra `ESCALA` | Tónica, escala (`Más escalas`: Occidentales / Árabes / Indias) y notas activas una a una |
+| `KEY` · `SCALE` · barra `ESCALA` | Tónica (12 botones: arriba los 5 oscuros, abajo los 7 claros; la elegida en magenta; un clic nunca toca notas), escala (`Más escalas`: Occidentales / Árabes / Indias) y notas activas una a una |
 | `TRIAD / +8VA / 7TH` | Grados k, k+2, k+4 · + octava · + séptima (en SMART CHORDS) |
 | `LUSH 7/9 / NEO-SOUL / CINEMATIC` | Variación de COMPLEX CHORDS (aparece en ese modo) |
 | `STRUM SPEED` · `ASC ▲ / DESC ▼` | Entrada progresiva de las notas del acorde (0–200 ms) y su dirección |
@@ -293,10 +302,21 @@ SmartKeys 2.0 carga el instrumento con el sistema de *hosting* de JUCE 8 (`Audio
 - **Latencia:** `setLatencySamples (latencia del instrumento)`, también cuando el instrumento la cambia (lo avisa con `audioProcessorChanged`); el aviso al DAW sale del temporizador, nunca dentro de `prepareToPlay`.
 - **Estado:** el proyecto guarda la descripción del plugin (`PluginDescription`), su estado (base64) y el `BYPASS`, en un nodo `HostedPlugin` aparte de los parámetros. Si el DAW guarda desde otro hilo, SmartKeys contesta con una copia que se renueva cuando se deja de tocar el plugin y al cerrar su ventana. Al abrir un proyecto con el mismo instrumento ya cargado, sólo se le pasa su estado (la ventana sigue abierta). Si falta, se conserva tal cual.
 - **Carga protegida:** antes de crear un plugin se apunta en `Cargando plugin.txt` (carpeta de datos de SmartKeys) y se borra al terminar. Si FL se cierra a mitad, el apunte queda: la próxima vez ese plugin no se vuelve a cargar solo al abrir el proyecto (la ranura lo dice y se puede reintentar). Igual en la búsqueda de VST3 (un plugin que cierra el programa al examinarlo queda en la lista negra).
-- **Catálogo** (`PluginCatalog`, uno por proceso): los Audio Unit salen del registro de componentes (`AudioComponentFindNext`) sin abrir ninguno; los VST3 se examinan uno por tic del temporizador (muchos traen `moduleinfo.json` y se describen sin cargarlos) y la lista se guarda en disco. SmartKeys no se ofrece a sí mismo.
-- **La ventana del instrumento** es una `DocumentWindow` con su editor (`createEditorAndMakeActive()`, el nombre en JUCE 8 de `createEditorIfNeeded()`), siempre encima, junto a la de SmartKeys; en Mac se oculta cuando FL pasa a segundo plano. Un plugin sin interfaz muestra sus parámetros (`GenericAudioProcessorEditor`).
+- **Catálogo** (`PluginCatalog`, uno por proceso): los Audio Unit salen del registro de componentes (`AudioComponentFindNext`, sólo el tipo `kAudioUnitType_MusicDevice`) sin abrir ninguno; los VST3 se examinan uno por tic del temporizador (muchos traen `moduleinfo.json` y se describen sin cargarlos) y la lista se guarda en disco. **Sólo instrumentos (2.0.1):** la búsqueda usa un `KnownPluginList::CustomScanner` que sólo apunta los tipos con `PluginDescription::isInstrument` (en VST3, la subcategoría `Instrument`); un archivo que sólo trae efectos devuelve "no apto", JUCE lo aparta en su lista negra y las búsquedas de nuevos ya no lo abren ("Volver a buscar todos" lo revisa otra vez). Los anfitriones de plugins, patchers y navegadores de samples se reconocen por palabras enteras en el nombre y el fabricante. Una lista guardada por la 2.0.0 se limpia al abrirla. SmartKeys no se ofrece a sí mismo.
+- **La ventana del instrumento** es una `DocumentWindow` con su editor (`createEditorAndMakeActive()`, el nombre en JUCE 8 de `createEditorIfNeeded()`), siempre encima, junto a la de SmartKeys; en Mac se oculta cuando FL pasa a segundo plano. Un plugin sin interfaz muestra sus parámetros (`GenericAudioProcessorEditor`). Se abre con `toFront (false)`: el foco del teclado se queda en SmartKeys. Si la activas, las teclas que llegan a la ventana (las que el plugin no usa) se pasan al editor de SmartKeys, y al perder el foco avisa a SmartKeys para soltar las notas de las teclas que ya no le llegarán. Abrirla, moverla o cerrarla no toca el camino de audio: el `processBlock` toca el instrumento en cada bloque igual.
 - **Audio no válido:** si el instrumento devuelve NaN o infinito, ese bloque sale en silencio.
 - **La app Standalone** está firmada con `com.apple.security.cs.disable-library-validation`: con el Hardened Runtime, macOS no la dejaría cargar plugins de otros fabricantes.
+
+### Una tecla, un acorde (2.0.1)
+
+El síntoma: a veces una sola tecla sonaba como dos acordes encimados o con un tartamudeo. Las causas y lo que hace ahora cada una:
+
+- **NoteOn repetido.** El router (`MidiOutputRouter`) trataba un segundo NoteOn de una tecla que seguía pulsada como un re-disparo: soltaba el acorde y lo volvía a atacar en el mismo instante. Ahora, en el hilo de audio, `triggerHeld` (`std::array<uint8_t, 128>`, un bit por fuente: MIDI, y pantalla o teclado de la computadora) guarda qué teclas están pulsadas. El primer NoteOn de una tecla dispara su acorde. Otro NoteOn de la misma tecla sin su NoteOff (de la misma fuente, de otro canal o de la otra fuente) no hace nada, y el acorde se suelta cuando ya nadie la sostiene. Un NoteOff de una tecla que no estaba pulsada tampoco hace nada. *All Notes Off* (CC 120/123), el bypass, el cambio de modo y `prepareToPlay` lo vacían. Con *Acordes al Piano Roll*, las notas que pasan tal cual llevan su propio estado (`plainOn`, `std::array<bool, 128>`): un NoteOn repetido no la vuelve a atacar.
+- **Sin candados en el audio.** No se usa `juce::MidiKeyboardState`, que toma un `CriticalSection` en cada nota. El LIVE KEYBOARD y las teclas de la computadora llegan al audio por un FIFO lock-free de tamaño fijo, y el estado de las teclas son arreglos fijos.
+- **El instrumento sólo recibe los acordes.** El MIDI de entrada nunca se le pasa: recibe un `MidiBuffer` aparte con los acordes ya expandidos (y su STRUM), y al final el buffer del DAW se reemplaza por esos acordes (`swapWith`). Una tecla fuera de la escala nunca le llega cruda.
+- **El ratón en el LIVE KEYBOARD.** Un temblor al pulsar (menos de 5 px) no cambia de tecla, y para pasar a la vecina hay que entrar 2,5 px en ella: en el borde sigue sonando la que estaba. Así un trackpad no alterna entre dos teclas.
+- **El panel KEY** son 12 componentes separados (`KeySelector::KeyButton`) cuyos rectángulos no se tocan (se comprueba en `resized()`). Un clic sólo cambia el parámetro de la tónica, una vez, y suelta lo que tuvieran pulsado la pantalla y las teclas de la computadora. Una tecla que se suelta así queda "en espera": no vuelve a disparar un acorde hasta que se suelta de verdad y se pulsa otra vez.
+- **El foco del teclado.** En macOS, JUCE sabe qué teclas están pulsadas por los eventos que recibe su ventana. Si la tecla se suelta con otra ventana delante, SmartKeys nunca recibe ese KeyUp y la nota se quedaba colgada. Ahora, si SmartKeys pierde el foco (y no lo tiene la ventana del instrumento), suelta las notas de las teclas de la computadora; la ventana del instrumento se abre sin quitarle el foco y le pasa las teclas que reciba.
 
 ### Por qué se cerraba FL Studio (1.2 – 1.3)
 
@@ -430,7 +450,8 @@ SmartKeys/
 │   ├── EngineTests.cpp            Comprobaciones del núcleo DSP, del búfer y del control del micrófono
 │   ├── HostTests.cpp              Carga el VST3 compilado como un DAW y comprueba su salida (y la ranura)
 │   ├── TestSynth.cpp              Instrumento de prueba (VST3 / AU) que apunta lo que recibe y cuándo
-│   ├── CatalogTests.cpp           Catálogo de instrumentos (AU del sistema, búsqueda VST3) y presets
+│   ├── TestFx.cpp                 Efecto de prueba (VST3 / AU de efecto): la búsqueda nunca debe ofrecerlo
+│   ├── CatalogTests.cpp           Catálogo de instrumentos (AU del sistema, búsqueda VST3 sólo de instrumentos) y presets
 │   ├── MacActivity.h/.mm          Evita App Nap en el host de pruebas (macOS), con la actividad retenida
 │   └── MicProbe.cpp               Sonda del micrófono del sistema para una Mac real (CI con BlackHole)
 └── Installer/

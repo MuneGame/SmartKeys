@@ -17,21 +17,62 @@ namespace
     constexpr const char* kVst3ListFile   = "Instrumentos VST3.xml";
     constexpr const char* kScanCheckFile  = "Buscando VST3.txt";        // dead man's pedal de la búsqueda
     constexpr const char* kLoadCheckFile  = "Cargando plugin.txt";      // cargas en curso (carga protegida)
+
+    // Se declaran "instrumento" pero no generan sonido por sí mismos: anfitriones de plugins,
+    // patchers y navegadores de samples (se busca en el nombre del plugin y del fabricante)
+    constexpr const char* kHostsAndBrowsers[] = {
+        "patchwork",          // Blue Cat's PatchWork
+        "bidule",             // Plogue Bidule
+        "patcher",            // patchers
+        "unify",              // PlugInGuru Unify
+        "carla",              // Carla (KXStudio)
+        "metaplugin",         // DDMF Metaplugin
+        "gig performer",
+        "vienna ensemble",    // Vienna Ensemble Pro (servidor de plugins)
+        "fl studio",          // FL Studio como plugin (un DAW entero)
+        "sample manager",     // ADSR Sample Manager
+        "loopcloud",
+        "splice bridge",
+    };
+
+    // La búsqueda de VST3 sólo apunta instrumentos. Un archivo que sólo trae efectos devuelve
+    // "no apto" (false): JUCE lo aparta y las búsquedas de "nuevos" ya no lo abren (con
+    // "Volver a buscar todos" se revisa otra vez). Un archivo que no se pudo abrir sigue como
+    // siempre (se reintenta la próxima vez).
+    class InstrumentsOnlyScanner final : public juce::KnownPluginList::CustomScanner
+    {
+    public:
+        bool findPluginTypesFor (juce::AudioPluginFormat& format, juce::OwnedArray<juce::PluginDescription>& result,
+                                 const juce::String& fileOrIdentifier) override
+        {
+            juce::OwnedArray<juce::PluginDescription> found;
+            format.findAllTypesForFile (found, fileOrIdentifier);
+
+            for (auto* d : found)
+                if (d != nullptr && PluginCatalog::isLoadableInstrument (*d))
+                    result.add (new juce::PluginDescription (*d));
+
+            return ! result.isEmpty() || found.isEmpty();
+        }
+    };
 }
 
 //==============================================================================
 PluginCatalog::PluginCatalog()
 {
     juce::addDefaultFormatsToManager (formats);
+    vst3List.setCustomScanner (std::make_unique<InstrumentsOnlyScanner>());
 
     const auto folder = getUserDataFolder();
     folder.createDirectory();
 
-    // Instrumentos VST3 de la última búsqueda
+    // Instrumentos VST3 de la última búsqueda (si una versión anterior guardó también efectos, fuera)
     if (auto xml = juce::XmlDocument::parse (folder.getChildFile (kVst3ListFile)))
     {
         vst3List.recreateFromXml (*xml);
         everScanned = true;
+        if (pruneNonInstruments())
+            saveVst3List();
     }
 
     // Lo que se estaba cargando cuando el programa se cerró la última vez
@@ -76,6 +117,39 @@ bool PluginCatalog::isSmartKeysItself (const juce::PluginDescription& d)
     return d.name.equalsIgnoreCase ("SmartKeys") && d.manufacturerName.equalsIgnoreCase ("MIWN");
 }
 
+bool PluginCatalog::isHostOrBrowser (const juce::PluginDescription& d)
+{
+    // Palabras enteras ("Dispatcher" no es "patcher"): todo lo que no es letra o número, espacio
+    juce::String text;
+    for (auto c : (d.name + " " + d.descriptiveName + " " + d.manufacturerName).toLowerCase())
+        text << (juce::CharacterFunctions::isLetterOrDigit (c) ? juce::String::charToString (c) : juce::String (" "));
+    text = " " + text + " ";
+
+    for (auto* words : kHostsAndBrowsers)
+        if (text.contains (" " + juce::String (words) + " "))
+            return true;
+    return false;
+}
+
+bool PluginCatalog::isLoadableInstrument (const juce::PluginDescription& d)
+{
+    return d.isInstrument && ! isSmartKeysItself (d) && ! isHostOrBrowser (d);
+}
+
+bool PluginCatalog::pruneNonInstruments()
+{
+    bool changed = false;
+    for (const auto& d : vst3List.getTypes())
+    {
+        if (! isLoadableInstrument (d))
+        {
+            vst3List.removeType (d);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 juce::String PluginCatalog::getFormatDisplayName (const juce::PluginDescription& d)
 {
     return d.pluginFormatName == "AudioUnit" ? juce::String ("Audio Unit") : d.pluginFormatName;
@@ -96,13 +170,13 @@ juce::Array<juce::PluginDescription> PluginCatalog::getInstruments()
 
    #if JUCE_MAC
     if (findFormat ("AudioUnit") != nullptr)
-        for (const auto& d : listAudioUnitInstruments())
-            if (! isSmartKeysItself (d))
+        for (const auto& d : listAudioUnitInstruments())   // sólo kAudioUnitType_MusicDevice
+            if (isLoadableInstrument (d))
                 result.add (d);
    #endif
 
     for (const auto& d : vst3List.getTypes())
-        if (d.isInstrument && d.pluginFormatName == "VST3" && ! isSmartKeysItself (d))
+        if (d.pluginFormatName == "VST3" && isLoadableInstrument (d))
             result.add (d);
 
     std::sort (result.begin(), result.end(), [] (const juce::PluginDescription& a, const juce::PluginDescription& b)
@@ -131,7 +205,7 @@ int PluginCatalog::countVst3Instruments() const
 {
     int n = 0;
     for (const auto& d : vst3List.getTypes())
-        n += (d.isInstrument && ! isSmartKeysItself (d)) ? 1 : 0;
+        n += isLoadableInstrument (d) ? 1 : 0;
     return n;
 }
 

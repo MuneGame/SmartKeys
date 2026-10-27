@@ -29,6 +29,11 @@
 #  BYPASS, su sonido guardado con el proyecto, y cargas / descargas con el
 #  audio corriendo. En Windows, lo mismo con VST3.
 #
+#  2.0.1 — una tecla, un acorde (un NoteOn repetido nunca dispara un segundo
+#  acorde ni re-ataca) y búsqueda sólo de instrumentos: un efecto de prueba
+#  (Tests/TestFx.cpp, VST3 y AU de efecto) está en la misma carpeta y nunca
+#  aparece en la lista de la ranura.
+#
 #  Se ejecuta en cada push a main o manualmente desde la pestaña "Actions".
 #  Los instaladores se publican en la Release v<versión> y en la rama "installers".
 # ==============================================================================
@@ -43,7 +48,7 @@ permissions:
   contents: write
 
 env:
-  SK_VERSION: "2.0.0"
+  SK_VERSION: "2.0.1"
 
 jobs:
   macos:
@@ -259,19 +264,21 @@ jobs:
           cmake -S . -B build-mic -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 \
                 -DSMARTKEYS_BUILD_MIC_PROBE=ON -DSMARTKEYS_BUILD_HOST_TESTS=ON -DSMARTKEYS_BUILD_TESTS=ON
           cmake --build build-mic --target SmartKeys_VST3 SmartKeysMicProbe SmartKeysHostTests SmartKeysTests \
-                SmartKeysTestSynth_VST3 SmartKeysTestSynth_AU SmartKeysCatalogTests
+                SmartKeysTestSynth_VST3 SmartKeysTestSynth_AU SmartKeysTestFx_VST3 SmartKeysTestFx_AU SmartKeysCatalogTests
 
       - name: Pruebas del núcleo
         run: ./build-mic/SmartKeysTests_artefacts/Release/SmartKeysTests | tail -n 5
 
-      - name: Instrumento de prueba registrado como Audio Unit (auval)
+      - name: Instrumento y efecto de prueba registrados como Audio Unit (auval)
         run: |
           mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
-          cp -R build-mic/SmartKeysTestSynth_artefacts/Release/AU/SmartKeysTestSynth.component "$HOME/Library/Audio/Plug-Ins/Components/"
+          cp -R build-mic/SmartKeysTestSynth_artefacts/Release/AU/SmartKeysTestSynth.component \
+                build-mic/SmartKeysTestFx_artefacts/Release/AU/SmartKeysTestFx.component "$HOME/Library/Audio/Plug-Ins/Components/"
           killall -9 AudioComponentRegistrar || true
           sleep 3
-          auval -a | grep -i -e Tsyn -e "MIWN Test" || true
+          auval -a | grep -i -e Tsyn -e Tsfx -e "MIWN Test" || true
           auval -v aumu Tsyn Miwt | tail -n 12
+          auval -v aufx Tsfx Miwt | tail -n 4
 
       - name: Catálogo de instrumentos (Audio Unit del sistema y búsqueda de VST3)
         env:
@@ -279,11 +286,12 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/vst3scan"
           cp -R build-mic/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3 \
+                build-mic/SmartKeysTestFx_artefacts/Release/VST3/SmartKeysTestFx.vst3 \
                 build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 "$RUNNER_TEMP/vst3scan/"
           set +e
           ./build-mic/SmartKeysCatalogTests_artefacts/Release/SmartKeysCatalogTests "$RUNNER_TEMP/vst3scan" | tee catalog.txt
           code=${PIPESTATUS[0]}
-          echo "::notice title=Catálogo::$(grep -E 'ok|FALLO|comprobaciones|instrumentos AU' catalog.txt | tr '\n' ' ')"
+          echo "::notice title=Catálogo::$(grep -E 'FALLO|comprobaciones|instrumentos AU' catalog.txt | tr '\n' ' ' | cut -c1-3900)"
           exit $code
 
       - name: SmartKeys (VST3) — ranura de instrumento con el instrumento de prueba (VST3 y AU)
@@ -383,18 +391,19 @@ jobs:
       - name: Compilar SmartKeys, el instrumento de prueba y las pruebas
         run: |
           cmake -B build-host -A x64 -DSMARTKEYS_BUILD_HOST_TESTS=ON -DSMARTKEYS_COPY_AFTER_BUILD=OFF
-          cmake --build build-host --config Release --parallel --target SmartKeys_VST3 SmartKeysTestSynth_VST3 SmartKeysHostTests SmartKeysCatalogTests
+          cmake --build build-host --config Release --parallel --target SmartKeys_VST3 SmartKeysTestSynth_VST3 SmartKeysTestFx_VST3 SmartKeysHostTests SmartKeysCatalogTests
 
       - name: Catálogo (búsqueda de VST3)
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/vst3scan"
           cp -R build-host/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3 \
+                build-host/SmartKeysTestFx_artefacts/Release/VST3/SmartKeysTestFx.vst3 \
                 build-host/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 "$RUNNER_TEMP/vst3scan/"
           set +e
           ./build-host/SmartKeysCatalogTests_artefacts/Release/SmartKeysCatalogTests.exe "$RUNNER_TEMP/vst3scan" | tee catalog-win.txt
           code=${PIPESTATUS[0]}
-          echo "::notice title=Catálogo (Windows)::$(grep -E 'ok|FALLO|comprobaciones' catalog-win.txt | tr '\n' ' ')"
+          echo "::notice title=Catálogo (Windows)::$(grep -E 'FALLO|comprobaciones' catalog-win.txt | tr '\n' ' ' | cut -c1-3900)"
           exit $code
 
       - name: SmartKeys con el instrumento de prueba cargado
@@ -447,6 +456,7 @@ jobs:
           NOTES="Instaladores de SmartKeys $SK_VERSION (MIWN) compilados y probados automáticamente (commit ${GITHUB_SHA::7}).
           - macOS: SmartKeys-$SK_VERSION-macOS.pkg (Apple Silicon + Intel; VST3, AU y Standalone)
           - Windows: SmartKeys-$SK_VERSION-Windows-Setup.exe (VST3 y Standalone)
+          2.0.1: una tecla, un acorde (un NoteOn repetido, un rebote del ratón en el borde de una tecla o la misma tecla por dos canales ya no disparan dos acordes ni tartamudean); panel KEY con 12 botones separados (sólo la tónica en magenta, nunca toca notas); la ventana del instrumento ya no le quita el teclado a SmartKeys; la búsqueda sólo ofrece instrumentos (sin efectos, patchers ni navegadores de samples).
           2.0: SmartKeys es un contenedor de instrumentos (estilo Kontakt / PatchWork). Carga un VST3 o un Audio Unit en su ranura (+ LOAD PLUGIN), le toca los acordes completos (con STRUM) y su sonido sale por SmartKeys; SHOW PLUGIN GUI abre la ventana del instrumento; BYPASS / UNLOAD; presets propios de SmartKeys. Ya no tiene piano interno.
           Ambos instaladores borran automáticamente cualquier versión anterior (y la vieja SmartKeys FX) antes de instalar."
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

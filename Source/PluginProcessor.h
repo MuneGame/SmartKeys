@@ -135,6 +135,10 @@ public:
     // Teclado en pantalla / teclado de la PC -> FIFO lock-free -> hilo de audio
     void pushScreenNote (int note, int velocity, bool isNoteOn) noexcept;
 
+    // Suelta todo lo que tocan el teclado en pantalla y el de la PC (al elegir otra KEY):
+    // ninguna nota de la interfaz queda colgada. Lo que llega del DAW no se toca.
+    void releaseScreenNotes() noexcept              { releaseScreenRequested.store (true, std::memory_order_release); }
+
     // Notas de salida que suenan de verdad (con STRUM se encienden una a una)
     uint64_t getActiveNotesLo() const noexcept  { return activeNotesBitmask[0].load (std::memory_order_acquire); }
     uint64_t getActiveNotesHi() const noexcept  { return activeNotesBitmask[1].load (std::memory_order_acquire); }
@@ -225,6 +229,15 @@ private:
     void playPlainNoteOn (int note, int velocity, int pos) noexcept;
     void playPlainNoteOff (int note, int pos) noexcept;
     void releasePlainNotes (int pos, juce::MidiBuffer& out) noexcept;
+
+    // UNA TECLA, UN ACORDE (sólo hilo de audio). Cada tecla disparadora recuerda desde dónde
+    // está pulsada (el DAW / un teclado MIDI, o la pantalla / el teclado de la PC). Un NoteOn
+    // repetido sin su NoteOff, o la misma tecla pulsada a la vez en el DAW y en la pantalla, no
+    // dispara un segundo acorde; un NoteOff de una tecla que no estaba pulsada no hace nada.
+    static constexpr uint8_t kHeldMidi = 1, kHeldScreen = 2;
+    bool pressTrigger (uint8_t sourceBit, int note) noexcept;     // true: disparar el acorde
+    bool releaseTrigger (uint8_t sourceBit, int note) noexcept;   // true: soltarlo (nadie más la pulsa)
+    void releaseHeldScreenTriggers (int pos);
 
     void updateChordPort();
     void disconnectChordPort();
@@ -348,7 +361,11 @@ private:
     std::atomic<uint32_t> dawLiveNotes { 0 };
     bool appliedPianoRollChords = false;          // sólo hilo de audio: al cambiar de modo se suelta todo
     const bool testPianoRollInApp = juce::SystemStats::getEnvironmentVariable ("SMARTKEYS_TEST_PIANO_ROLL", {}) == "1";
-    std::array<uint8_t, 128> plainOnCount {};     // notas del DAW que suenan tal cual
+    std::array<bool, 128> plainOn {};             // notas del DAW que suenan tal cual (una vez cada una)
+
+    // Una tecla, un acorde
+    std::array<uint8_t, 128> triggerHeld {};      // kHeldMidi | kHeldScreen
+    std::atomic<bool> releaseScreenRequested { false };
 
     static constexpr double kLoopEchoWindowMs = 600.0;   // con el bucle confirmado
     static constexpr double kLoopMemoryMs = 10000.0;     // el bucle se da por confirmado 10 s (cada eco lo renueva)
