@@ -1,0 +1,21 @@
+  ok     SmartKeys (VST3) se carga en el "DAW"
+  ok     el instrumento de prueba (VST3) se puede describir
+
+-- Instrumento VST3 dentro de SmartKeys
+  ok     el instrumento de prueba se carga en la ranura
+  ok     VIEW: SYNTH: la ventana de SmartKeys toma el tamaño del instrumento (850 x 106+320)
+  ok     la interfaz del instrumento se crea una sola vez
+  ok     ninguna ventana aparte para el instrumento (una sola ventana: la de SmartKeys)
+  ok     un clic en el ZOOM del instrumento: la ventana de SmartKeys crece con él (1000 x 106+640)
+     D con el foco en el instrumento: 64 67 71
+  ok     con el foco en la interfaz del instrumento, el teclado de la computadora toca acordes (E4 -> E G B)
+  ok     y vuelve a encoger con él
+     (tamaño de la ventana de SmartKeys: 850 x 426, se esperaba 850 x 658)
+  FALLO  VIEW: SMARTKEYS: 850 x 658 al instante
+  ok     la interfaz del instrumento no se destruye (queda oculta)
+  ok     VIEW: SYNTH otra vez: la misma interfaz, sin crearla de nuevo
+  ok     al cerrar SmartKeys se cierra la interfaz del instrumento
+  ok     y el instrumento sigue tocando los acordes (C4 -> C E G)
+  ok     al abrir SmartKeys otra vez vuelve a la vista SYNTH
+
+15 comprobaciones, 1 fallos
