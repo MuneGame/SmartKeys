@@ -1526,7 +1526,7 @@ void testConcurrency (const String& path, double seconds)
     host.eventsOutOfRange = 0;
     host.nonFiniteSamples = 0;
 
-    std::atomic<bool> stop { false };
+    std::atomic<bool> stop { false }, audioDone { false }, readerDone { false };
     std::atomic<long> blocks { 0 }, stateReads { 0 };
     std::thread audio ([&]
     {
@@ -1549,6 +1549,7 @@ void testConcurrency (const String& path, double seconds)
         for (int note : held)
             offs.push_back ({ 0, MidiMessage::noteOff (1, note) });
         host.runSized (256, offs);
+        audioDone = true;
     });
 
     struct Hammer : public Timer
@@ -1627,6 +1628,7 @@ void testConcurrency (const String& path, double seconds)
             ++stateReads;
             std::this_thread::sleep_for (std::chrono::milliseconds (9));
         }
+        readerDone = true;
     });
 
     // (runDispatchLoop + stopDispatchLoop dejaría el bucle de mensajes parado para siempre:
@@ -1635,6 +1637,11 @@ void testConcurrency (const String& path, double seconds)
     while (! hammer.done)
         MessageManager::getInstance()->runDispatchLoopUntil (20);
     stop = true;
+
+    // El host VST3 de JUCE bloquea el hilo de mensajes (MessageManagerLock) para leer el
+    // estado desde otro hilo: los mensajes siguen corriendo hasta que los dos hilos terminan
+    while (! audioDone.load() || ! readerDone.load())
+        MessageManager::getInstance()->runDispatchLoopUntil (10);
     audio.join();
     stateReader.join();
 
