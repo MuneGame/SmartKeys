@@ -58,6 +58,11 @@ bool click (juce::Component& inWindow, juce::Point<int> screenPosition)
     [window makeKeyAndOrderFront: nil];
     [NSApp activateIgnoringOtherApps: YES];
 
+    // El cursor de verdad también (JUCE comprueba con él que el ratón sigue sobre el botón al
+    // soltarlo). Coordenadas de Quartz: como las de JUCE, origen arriba a la izquierda.
+    CGWarpMouseCursorPosition (CGPointMake ((CGFloat) screenPosition.x, (CGFloat) screenPosition.y));
+    pump (40);
+
     // Pantalla de JUCE (origen arriba a la izquierda) -> ventana de AppKit (origen abajo a la izquierda)
     const CGFloat mainHeight = [[[NSScreen screens] objectAtIndex: 0] frame].size.height;
     const NSPoint inScreen = NSMakePoint ((CGFloat) screenPosition.x, mainHeight - (CGFloat) screenPosition.y);

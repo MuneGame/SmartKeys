@@ -540,7 +540,10 @@ static Point<int> toPhysical (Point<int> p)
 
 bool click (Component&, Point<int> screenPosition)
 {
+    // El cursor de verdad también (JUCE comprueba con él que el ratón sigue sobre el botón)
     const auto p = toPhysical (screenPosition);
+    SetCursorPos (p.x, p.y);
+    MessageManager::getInstance()->runDispatchLoopUntil (40);
     POINT pt { p.x, p.y };
     HWND target = WindowFromPoint (pt);
     if (target == nullptr)
