@@ -1655,6 +1655,12 @@ void testConcurrency (const String& path, double seconds)
     if (synth.fileOrIdentifier.isNotEmpty())
     {
         check (hammer.slotChanges > 10, "el instrumento se cargó, quitó y cambió con el audio corriendo");
+
+        // Lo que el martilleo dejó al azar (GAIN hasta -39 dB, una sola nota, STRUM, MIC VOICE): como al principio
+        host.setText ("Master Gain", "-3");
+        host.setChoice ("Mode", 0);
+        host.setText ("Strum Speed", "0");
+        host.setBool ("Mic Voice Controller", false);
         setSlot (host, &synth);
         check (waitForSlot (host, "loaded"), "y al final se carga y suena como siempre");
         auto r = host.run ({ MidiMessage::noteOn (1, 60, (uint8) 100) });
