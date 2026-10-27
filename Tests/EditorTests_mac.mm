@@ -29,14 +29,14 @@
 
 namespace edtest
 {
-using namespace juce;
+// (sin "using namespace juce": en macOS, Point y Component también son tipos de Carbon)
 
 static void pump (int ms)
 {
-    MessageManager::getInstance()->runDispatchLoopUntil (ms);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (ms);
 }
 
-static NSWindow* windowOf (Component& c)
+static NSWindow* windowOf (juce::Component& c)
 {
     if (auto* peer = c.getTopLevelComponent()->getPeer())
         return [(NSView*) peer->getNativeHandle() window];
@@ -49,7 +49,7 @@ void prepareApplication()
     [NSApp activateIgnoringOtherApps: YES];
 }
 
-bool click (Component& inWindow, Point<int> screenPosition)
+bool click (juce::Component& inWindow, juce::Point<int> screenPosition)
 {
     NSWindow* window = windowOf (inWindow);
     if (window == nil)
@@ -94,7 +94,7 @@ static NSEvent* keyEvent (NSWindow* window, NSEventType type, NSString* characte
                              keyCode: 0];
 }
 
-bool key (Component& inWindow, char c, bool isDown)
+bool key (juce::Component& inWindow, char c, bool isDown)
 {
     NSWindow* window = windowOf (inWindow);
     if (window == nil)
@@ -139,10 +139,10 @@ void runKeyboardUnitTests (const std::function<void (bool, const char*)>& check)
     [other setReleasedWhenClosed: NO];
 
     // La interfaz de SmartKeys (un componente de JUCE dentro de la vista del DAW)
-    Component editor;
+    juce::Component editor;
     editor.setSize (700, 500);
     editor.setWantsKeyboardFocus (true);
-    TextEditor presetName;   // un campo de texto de SmartKeys
+    juce::TextEditor presetName;   // un campo de texto de SmartKeys
     presetName.setBounds (400, 10, 200, 24);
     editor.addAndMakeVisible (presetName);
     editor.addToDesktop (0, (void*) holder);
