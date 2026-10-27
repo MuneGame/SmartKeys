@@ -339,7 +339,8 @@ void SmartKeysAudioProcessor::releaseSuspectTriggers() noexcept
         {
             suspectTrigger[(size_t) n] = false;
             midiKeyDown[(size_t) n] = false;
-            routeNoteOff (MidiOutputRouter::Source::Midi, n, 0);
+            if (releaseTrigger (kHeldMidi, n))
+                routeNoteOff (MidiOutputRouter::Source::Midi, n, 0);
         }
     }
 }
@@ -536,6 +537,8 @@ void SmartKeysAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     hosted.prepare (currentSampleRate, samplesPerBlock);   // y suelta lo que sonara en el instrumento
 
     router.reset();
+    triggerHeld.fill (0);
+    releaseScreenRequested.store (false);
     strum.prepare (currentSampleRate);
     routedMidi.ensureSize (kMidiReserveBytes);
     routedMidi.clear();
@@ -552,7 +555,7 @@ void SmartKeysAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     hostRecording.store (false);
     plainMidi.ensureSize (kMidiReserveBytes);
     plainMidi.clear();
-    plainOnCount.fill (0);
+    plainOn.fill (false);
     appliedPianoRollChords = pianoRollChords.load();
 
     gainSmoothed.reset (currentSampleRate, 0.03);
@@ -710,9 +713,10 @@ void SmartKeysAudioProcessor::rememberLoopTrigger (int note, double ppq, int pas
 // el router ni por el teclado virtual: no se convierte otra vez en acorde ni se graba doble.
 void SmartKeysAudioProcessor::playPlainNoteOn (int note, int velocity, int pos) noexcept
 {
-    auto& count = plainOnCount[(size_t) note];
-    if (count < 255)
-        ++count;
+    auto& on = plainOn[(size_t) note];
+    if (on)
+        return;   // una tecla, una nota: un NoteOn repetido sin su NoteOff no la vuelve a atacar
+    on = true;
     const juce::uint8 msg[3] = { (juce::uint8) (0x90 | (kMidiChannel - 1)), (juce::uint8) note,
                                  (juce::uint8) juce::jlimit (1, 127, velocity) };
     plainMidi.addEvent (msg, 3, pos);
@@ -720,10 +724,10 @@ void SmartKeysAudioProcessor::playPlainNoteOn (int note, int velocity, int pos) 
 
 void SmartKeysAudioProcessor::playPlainNoteOff (int note, int pos) noexcept
 {
-    auto& count = plainOnCount[(size_t) note];
-    if (count == 0)
-        return;   // nada que apagar (p. ej. el NoteOff de un eco)
-    --count;
+    auto& on = plainOn[(size_t) note];
+    if (! on)
+        return;   // nada que apagar (p. ej. el NoteOff de un eco, o uno repetido)
+    on = false;
     const juce::uint8 msg[3] = { (juce::uint8) (0x80 | (kMidiChannel - 1)), (juce::uint8) note, 0 };
     plainMidi.addEvent (msg, 3, pos);
 }
@@ -732,9 +736,9 @@ void SmartKeysAudioProcessor::releasePlainNotes (int pos, juce::MidiBuffer& out)
 {
     for (int n = 0; n < 128; ++n)
     {
-        if (plainOnCount[(size_t) n] == 0)
+        if (! plainOn[(size_t) n])
             continue;
-        plainOnCount[(size_t) n] = 0;
+        plainOn[(size_t) n] = false;
         const juce::uint8 msg[3] = { (juce::uint8) (0x80 | (kMidiChannel - 1)), (juce::uint8) n, 0 };
         out.addEvent (msg, 3, pos);
     }
@@ -753,13 +757,46 @@ void SmartKeysAudioProcessor::drainScreenNotes()
         {
             const auto& e = screenEvents[(size_t) (start + i)];
             if (e.on)
-                routeNoteOn (MidiOutputRouter::Source::Screen, e.note, (juce::uint8) e.velocity, 0, true);
-            else
+            {
+                if (pressTrigger (kHeldScreen, e.note))
+                    routeNoteOn (MidiOutputRouter::Source::Screen, e.note, (juce::uint8) e.velocity, 0, true);
+            }
+            else if (releaseTrigger (kHeldScreen, e.note))
+            {
                 routeNoteOff (MidiOutputRouter::Source::Screen, e.note, 0);
+            }
         }
     };
     handle (scope.startIndex1, scope.blockSize1);
     handle (scope.startIndex2, scope.blockSize2);
+}
+
+//==============================================================================
+// UNA TECLA, UN ACORDE
+bool SmartKeysAudioProcessor::pressTrigger (uint8_t sourceBit, int note) noexcept
+{
+    auto& held = triggerHeld[(size_t) note];
+    if ((held & sourceBit) != 0)
+        return false;            // ya pulsada desde aquí: NoteOn repetido sin su NoteOff
+    const bool first = held == 0;
+    held = (uint8_t) (held | sourceBit);
+    return first;                // si ya la pulsaba la otra fuente, su acorde ya suena
+}
+
+bool SmartKeysAudioProcessor::releaseTrigger (uint8_t sourceBit, int note) noexcept
+{
+    auto& held = triggerHeld[(size_t) note];
+    if ((held & sourceBit) == 0)
+        return false;            // no estaba pulsada desde aquí
+    held = (uint8_t) (held & ~sourceBit);
+    return held == 0;            // nadie más la sostiene: se suelta su acorde
+}
+
+void SmartKeysAudioProcessor::releaseHeldScreenTriggers (int pos)
+{
+    for (int n = 0; n < 128; ++n)
+        if (releaseTrigger (kHeldScreen, n))
+            routeNoteOff (MidiOutputRouter::Source::Screen, n, pos);
 }
 
 //==============================================================================
@@ -820,6 +857,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         appliedPianoRollChords = pianoRollMode;
         routeReleaseAll (0);
         releasePlainNotes (0, plainMidi);
+        triggerHeld.fill (0);
         midiKeyDown.fill (false);
         suspectTrigger.fill (false);
     }
@@ -1006,6 +1044,8 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     //          (MIDI / Piano Roll, teclado en pantalla / PC y voz, en orden de muestra)
     //==========================================================================
     drainScreenNotes();
+    if (releaseScreenRequested.exchange (false, std::memory_order_acq_rel))
+        releaseHeldScreenTriggers (0);   // se eligió otra KEY: nada de la pantalla queda colgado
 
     const int routedVoiceEvents = micOn ? numVoiceEvents : 0;
     const int lastSample = numSamples - 1;
@@ -1099,6 +1139,9 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                 }
 
                 midiKeyDown[(size_t) note] = true;
+                if (! pressTrigger (kHeldMidi, note))
+                    continue;   // una tecla, un acorde: NoteOn repetido, o la tecla ya suena desde la pantalla
+
                 const bool toPort = ! recordingNow || ! isLoopRepeat (note, blockPpq + (double) pos * ppqPerSample);
                 routeNoteOn (MidiOutputRouter::Source::Midi, note, (juce::uint8) velocity, pos, toPort);
             }
@@ -1111,7 +1154,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                     continue;
                 }
 
-                if (plainOnCount[(size_t) note] > 0 || pianoRollMode)
+                if (plainOn[(size_t) note] || pianoRollMode)
                 {
                     playPlainNoteOff (note, pos);
                     continue;
@@ -1119,7 +1162,8 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
                 midiKeyDown[(size_t) note] = false;
                 suspectTrigger[(size_t) note] = false;
-                routeNoteOff (MidiOutputRouter::Source::Midi, note, pos);
+                if (releaseTrigger (kHeldMidi, note))
+                    routeNoteOff (MidiOutputRouter::Source::Midi, note, pos);
             }
             else if (status >= 0x80 && status < 0xF0 && size <= 3)
             {
@@ -1128,6 +1172,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
                 {
                     routeReleaseAll (pos);   // All Sound Off / All Notes Off del DAW
                     releasePlainNotes (pos, plainMidi);
+                    triggerHeld.fill (0);
                     midiKeyDown.fill (false);
                     suspectTrigger.fill (false);
                 }
@@ -1224,7 +1269,7 @@ void SmartKeysAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     uint64_t lo = 0, hi = 0;
     strum.getSoundingBitmask (lo, hi);
     for (int n = 0; n < 128; ++n)
-        if (plainOnCount[(size_t) n] > 0)
+        if (plainOn[(size_t) n])
             (n < 64 ? lo : hi) |= (uint64_t) 1 << (n & 63);
     activeNotesBitmask[0].store (lo, std::memory_order_release);
     activeNotesBitmask[1].store (hi, std::memory_order_release);
@@ -1246,6 +1291,7 @@ void SmartKeysAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& bu
     routedMidi.clear();
     expandedChordMidi.clear();
     routeReleaseAll (0);
+    triggerHeld.fill (0);
     portRoutedMidi.clear();   // el teclado lo apaga requestReleaseAll()
     portStrum.reset();
     voiceTracker.forceRelease (0);
@@ -1267,7 +1313,7 @@ void SmartKeysAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& bu
     else
     {
         strum.reset();
-        plainOnCount.fill (0);
+        plainOn.fill (false);
     }
 
     portFeed.requestReleaseAll();

@@ -247,6 +247,32 @@ public:
 
     void closeButtonPressed() override   { owner.windowCloseRequested(); }
 
+    // El teclado de la PC sigue tocando acordes con esta ventana delante: lo que el plugin no
+    // usa (escribir el nombre de un preset sí lo usa) va a la ventana de SmartKeys
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        if (auto* target = owner.keyTarget.getComponent())
+            if (target->keyPressed (key))
+                return true;
+        return juce::DocumentWindow::keyPressed (key);
+    }
+
+    bool keyStateChanged (bool isKeyDown) override
+    {
+        if (auto* target = owner.keyTarget.getComponent())
+            if (target->keyStateChanged (isKeyDown))
+                return true;
+        return juce::DocumentWindow::keyStateChanged (isKeyDown);
+    }
+
+    void activeWindowStatusChanged() override
+    {
+        juce::DocumentWindow::activeWindowStatusChanged();
+        if (! isActiveWindow())
+            if (auto* target = dynamic_cast<KeyboardTarget*> (owner.keyTarget.getComponent()))
+                target->hostedWindowLostKeyboard();
+    }
+
 private:
     HostedInstrument& owner;
 
@@ -814,7 +840,7 @@ void HostedInstrument::showWindow (juce::Component* nextTo)
     if (window != nullptr)
     {
         window->setVisible (true);
-        window->toFront (true);
+        window->toFront (false);
         return;
     }
 
@@ -835,7 +861,7 @@ void HostedInstrument::showWindow (juce::Component* nextTo)
     if (auto* peer = window->getPeer())
         configureHostedPluginWindow (peer->getNativeHandle());
    #endif
-    window->toFront (true);
+    window->toFront (false);   // el teclado se queda en SmartKeys (y en el DAW)
 
     if (nextTo != nullptr)
         reopenNextTo = nextTo;
@@ -867,6 +893,7 @@ void HostedInstrument::windowCloseRequested()
 void HostedInstrument::smartKeysEditorOpened (juce::Component& editor)
 {
     reopenNextTo = &editor;
+    keyTarget = &editor;
 }
 
 void HostedInstrument::smartKeysEditorClosing()
@@ -875,6 +902,12 @@ void HostedInstrument::smartKeysEditorClosing()
     closeWindow();
     reopenWindow = wasOpen;   // al abrir otra vez SmartKeys, vuelve a abrirse
     reopenNextTo = nullptr;
+    keyTarget = nullptr;
+}
+
+bool HostedInstrument::isWindowActive() const noexcept
+{
+    return window != nullptr && window->isVisible() && window->isActiveWindow();
 }
 
 void HostedInstrument::placeWindow (Window& w, juce::Component* nextTo)
@@ -962,12 +995,21 @@ bool HostedInstrument::process (juce::AudioBuffer<float>& buffer, int firstChann
 
     const juce::SpinLock::ScopedTryLockType lock (processLock);
     if (! lock.isLocked())
-        return false;   // el hilo de mensajes está cambiando el instrumento: este bloque, silencio
+    {
+        noteMissedBlock (midi);   // el hilo de mensajes está cambiando el instrumento: este bloque, silencio
+        return false;
+    }
 
     auto* s = live;
-    if (s == nullptr || ! s->prepared || ! active.load (std::memory_order_relaxed)
-          || std::abs (s->sampleRate - targetRate.load (std::memory_order_relaxed)) > 0.5)
+    if (s == nullptr)
         return false;
+
+    if (! s->prepared || ! active.load (std::memory_order_relaxed)
+          || std::abs (s->sampleRate - targetRate.load (std::memory_order_relaxed)) > 0.5)
+    {
+        noteMissedBlock (midi);   // se está preparando (otro búfer o frecuencia): silencio
+        return false;
+    }
 
     s->instance->setPlayHead (playHead);
 
@@ -994,6 +1036,24 @@ bool HostedInstrument::process (juce::AudioBuffer<float>& buffer, int firstChann
         for (int ch = 0; ch < numChannels; ++ch)
             buffer.applyGainRamp (firstChannel + ch, 0, numSamples, 0.0f, 1.0f);
     return true;
+}
+
+void HostedInstrument::noteMissedBlock (const juce::MidiBuffer& midi) noexcept
+{
+    for (const auto meta : midi)
+    {
+        const auto* d = meta.data;
+        if (d == nullptr || meta.numBytes < 3)
+            continue;
+        const int type = d[0] & 0xF0;
+        const bool noteOff = type == 0x80 || (type == 0x90 && (d[2] & 0x7F) == 0);
+        const bool releaseCc = type == 0xB0 && ((d[1] == 64 && d[2] < 64) || d[1] == 120 || d[1] == 123);
+        if (noteOff || releaseCc)
+        {
+            releaseRequested.store (true, std::memory_order_release);
+            return;
+        }
+    }
 }
 
 void HostedInstrument::render (Slot& s, juce::AudioBuffer<float>& out, int firstChannel, int numChannels,

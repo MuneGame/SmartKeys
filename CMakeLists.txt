@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SmartKeys VERSION 2.0.0 LANGUAGES C CXX)
+project(SmartKeys VERSION 2.0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -219,6 +219,33 @@ if(SMARTKEYS_BUILD_HOST_TESTS)
     target_compile_definitions(SmartKeysTestSynth PUBLIC
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
     target_link_libraries(SmartKeysTestSynth
+        PRIVATE
+            juce::juce_audio_utils
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
+
+    # Efecto de prueba (VST3 "Fx|EQ"; también AU de efecto en macOS): la búsqueda de
+    # instrumentos de SmartKeys no debe ofrecerlo nunca (sólo generadores de sonido)
+    juce_add_plugin(SmartKeysTestFx
+        COMPANY_NAME                  "MIWN Test"
+        BUNDLE_ID                     com.miwn.smartkeys.testfx
+        PLUGIN_MANUFACTURER_CODE      Miwt
+        PLUGIN_CODE                   Tsfx
+        PRODUCT_NAME                  "SmartKeysTestFx"
+        DESCRIPTION                   "SmartKeys test effect (not distributed)"
+        VERSION                       ${PROJECT_VERSION}
+        FORMATS                       VST3 AU
+        IS_SYNTH                      FALSE
+        NEEDS_MIDI_INPUT              FALSE
+        NEEDS_MIDI_OUTPUT             FALSE
+        VST3_CATEGORIES               Fx EQ
+        AU_MAIN_TYPE                  kAudioUnitType_Effect
+        COPY_PLUGIN_AFTER_BUILD       FALSE)
+    target_sources(SmartKeysTestFx PRIVATE Tests/TestFx.cpp)
+    target_compile_definitions(SmartKeysTestFx PUBLIC
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
+    target_link_libraries(SmartKeysTestFx
         PRIVATE
             juce::juce_audio_utils
         PUBLIC

@@ -1099,6 +1099,9 @@ void testInstrument (const String& path)
     host.unload();
 }
 
+std::map<int, int> countNoteOns (const std::vector<MidiMessage>& midi);
+String describeCounts (const std::map<int, int>& c);
+
 //==============================================================================
 // 2.0: LA RANURA DE INSTRUMENTO. SmartKeys es un contenedor: toca el instrumento
 // cargado con los acordes completos. Aquí se carga el instrumento de prueba,
@@ -1182,6 +1185,76 @@ void testHostedInstrument (const String& path)
         check (off2.notesOff (1) == std::set<int> { 62, 65, 69 } && logOff.notesOff() == std::set<int> { 62, 65, 69 },
                "al soltar, el instrumento recibe los 3 NoteOff");
         host.settle (8);
+    }
+
+    std::cout << "\n-- H3b. Una tecla, un acorde: nunca dos acordes superpuestos ni re-ataques" << std::endl;
+    {
+        auto noteOffCount = [] (const SynthLog& log) { int n = 0; for (auto& e : log.events) n += e.isNoteOff() ? 1 : 0; return n; };
+
+        // a) La misma tecla otra vez sin haberla soltado (un controlador que rebota, dos
+        //    entradas del DAW con el mismo teclado): el acorde sigue, no se corta ni se repite
+        mark = synthLogLines();
+        auto r = host.runAt ({ { 50, MidiMessage::noteOn (1, 62, (uint8) 100) }, { 300, MidiMessage::noteOn (1, 62, (uint8) 100) } });
+        auto r2 = host.runAt ({ { 10, MidiMessage::noteOn (1, 62, (uint8) 90) } });
+        r.midi.insert (r.midi.end(), r2.midi.begin(), r2.midi.end());
+        auto held = host.runBlocks (4);
+        r.midi.insert (r.midi.end(), held.midi.begin(), held.midi.end());
+        auto log = readSynthLog (mark);
+        std::cout << "     D4 tres veces sin soltar: salida MIDI " << describeCounts (countNoteOns (r.midi)) << ", "
+                  << r.countNoteOff() << " NoteOff   instrumento " << log.countNoteOn() << " NoteOn, " << noteOffCount (log) << " NoteOff" << std::endl;
+        check (countNoteOns (r.midi) == std::map<int, int> { { 62, 1 }, { 65, 1 }, { 69, 1 } } && r.countNoteOff() == 0,
+               "NoteOn repetido sin su NoteOff: un solo Dm por MIDI OUT, sin cortes ni re-ataques");
+        check (log.countNoteOn() == 3 && noteOffCount (log) == 0,
+               "el instrumento recibe un solo acorde (3 NoteOn), sin tartamudeo");
+        check (jmax (r.outputRms, held.outputRms) > 1.0e-3f, "y suena sin interrupción");
+
+        mark = synthLogLines();
+        auto off = host.run ({ MidiMessage::noteOff (1, 62) });
+        auto logOff = readSynthLog (mark);
+        check (off.countNoteOff() == 3 && off.notesOff (1) == std::set<int> { 62, 65, 69 } && noteOffCount (logOff) == 3,
+               "un solo NoteOff suelta el acorde entero (nada colgado)");
+        host.settle (4);
+
+        // b) La misma tecla por dos canales a la vez (dos controladores, o el teclado de FL
+        //    y el controlador): un acorde; se suelta una vez
+        mark = synthLogLines();
+        auto both = host.run ({ MidiMessage::noteOn (1, 60, (uint8) 100), MidiMessage::noteOn (2, 60, (uint8) 100) });
+        auto firstOff = host.run ({ MidiMessage::noteOff (2, 60) });
+        auto secondOff = host.run ({ MidiMessage::noteOff (1, 60) });
+        auto logBoth = readSynthLog (mark);
+        check (countNoteOns (both.midi) == std::map<int, int> { { 60, 1 }, { 64, 1 }, { 67, 1 } },
+               "la misma tecla por dos canales: un solo acorde (C E G una vez)");
+        check (firstOff.countNoteOff() == 3 && secondOff.midi.empty() && logBoth.countNoteOn() == 3 && noteOffCount (logBoth) == 3,
+               "se suelta una sola vez; el segundo NoteOff no hace nada");
+
+        // c) NoteOff suelto y NoteOn de velocidad 0 (= NoteOff)
+        auto stray = host.run ({ MidiMessage::noteOff (1, 64) });
+        check (stray.midi.empty(), "un NoteOff sin su NoteOn no saca nada");
+        auto press = host.run ({ MidiMessage::noteOn (1, 67, (uint8) 100) });
+        auto vel0 = host.run ({ MidiMessage (0x90, 67, 0) });
+        check (press.countNoteOn() == 3 && vel0.notesOff (1) == std::set<int> { 67, 71, 74 }, "un NoteOn de velocidad 0 suelta como un NoteOff");
+
+        // d) Soltar y volver a pulsar (aunque sea en el mismo bloque) sí son dos acordes
+        mark = synthLogLines();
+        auto again = host.runAt ({ { 20, MidiMessage::noteOn (1, 65, (uint8) 100) }, { 200, MidiMessage::noteOff (1, 65) },
+                                   { 400, MidiMessage::noteOn (1, 65, (uint8) 100) } });
+        auto logAgain = readSynthLog (mark);
+        check (again.countNoteOn() == 6 && again.countNoteOff() == 3 && logAgain.countNoteOn() == 6,
+               "soltar y volver a pulsar: dos acordes, el segundo después del NoteOff");
+        host.run ({ MidiMessage::noteOff (1, 65) });
+        host.settle (4);
+
+        // e) El instrumento sólo recibe los acordes: el MIDI de entrada se reemplaza (una tecla fuera
+        //    de la escala no le llega tal cual)
+        mark = synthLogLines();
+        auto out = host.run ({ MidiMessage::noteOn (1, 61, (uint8) 100) });   // C#4 en Do mayor
+        auto logOut = readSynthLog (mark);
+        std::cout << "     C#4 (fuera de Do mayor) -> salida MIDI " << describe (out.notesOn (1)) << "   instrumento " << describe (logOut.notesOn()) << std::endl;
+        check (logOut.notesOn().count (61) == 0 && out.notesOn (1).count (61) == 0 && logOut.notesOn() == out.notesOn (1)
+                 && logOut.countNoteOn() == 3,
+               "la tecla cruda nunca llega al instrumento: sólo el acorde de la escala");
+        host.run ({ MidiMessage::noteOff (1, 61) });
+        host.settle (4);
     }
 
     std::cout << "\n-- H4. STRUM: el instrumento recibe el barrido exacto (ASC y DESC)" << std::endl;
@@ -2562,6 +2635,13 @@ void testChordPort (const String& path)
         check (countNoteOns (key.out.midi) == std::map<int, int> { { 54, 1 } } && key.port.empty() && hangingNotes (key.out.midi) == 0,
                "una tecla que llega del DAW suena tal cual, sin acorde, y no sale por el teclado");
 
+        // c2) La misma nota otra vez sin su NoteOff: no se vuelve a atacar
+        auto twice = runPortScenario (host, *tap, 0.6, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                         { 220.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                         { 400.0, MidiMessage::noteOff (1, 54) } }, true);
+        check (countNoteOns (twice.out.midi) == std::map<int, int> { { 54, 1 } } && hangingNotes (twice.out.midi) == 0 && twice.port.empty(),
+               "un NoteOn repetido del Piano Roll no se vuelve a atacar (una nota, un NoteOff)");
+
         // d) Grabando en bucle: vuelta 1 se canta; vuelta 2, FL repite lo que grabó
         host.transport.bpm = 120.0;
         host.transport.loopBeats = 4.0;
@@ -2590,6 +2670,15 @@ void testChordPort (const String& path)
         check (countNoteOns (normal.out.midi) == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } }
                  && countPortNoteOns (normal.port) == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } },
                "con el modo apagado, una tecla del DAW vuelve a ser el acorde completo (también por el teclado)");
+
+        // f) Una tecla repetida sin soltar: un acorde también por el teclado (lo que FL graba)
+        auto repeated = runPortScenario (host, *tap, 0.6, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                            { 230.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                            { 400.0, MidiMessage::noteOff (1, 54) } }, false);
+        check (countNoteOns (repeated.out.midi) == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } }
+                 && countPortNoteOns (repeated.port) == std::map<int, int> { { 53, 1 }, { 57, 1 }, { 60, 1 } }
+                 && hangingNotes (repeated.out.midi) == 0 && hangingPortNotes (repeated.port) == 0,
+               "un NoteOn repetido sin soltar: un solo acorde por la salida MIDI y por el teclado (nada doble en el Piano Roll)");
         runPortScenario (host, *tap, 0.3, {}, false);
     }
 

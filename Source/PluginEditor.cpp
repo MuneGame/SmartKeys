@@ -345,92 +345,137 @@ namespace
     }
 }
 
-KeySelector::KeySelector (juce::RangedAudioParameter& rootParam)
-    : attachment (rootParam, [this] (float v) { selected = juce::jlimit (0, 11, (int) std::lround (v)); repaint(); }, nullptr)
+//==============================================================================
+// Un botón de KEY: su propio componente, con sus propios límites (setBounds)
+class KeySelector::KeyButton : public juce::Component
 {
-    attachment.sendInitialUpdate();
-}
-
-juce::Rectangle<float> KeySelector::getKeyBounds (int pc) const
-{
-    const auto r = getLocalBounds().toFloat().reduced (2.0f);
-    const float gap = 8.0f;
-    const float whiteW = (r.getWidth() - 6.0f * gap) / 7.0f;
-    const float whiteH = r.getHeight() * 0.47f;
-    const float blackW = whiteW * 0.86f;
-    const float blackH = r.getHeight() * 0.40f;
-
-    if (! isBlackPc (pc))
+public:
+    KeyButton (KeySelector& o, int pc) : owner (o), pitchClass (pc)
     {
-        const int wi = kWhiteIndex[pc];
-        return { r.getX() + (float) wi * (whiteW + gap), r.getBottom() - whiteH, whiteW, whiteH };
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setRepaintsOnMouseActivity (false);   // sin brillo al pasar el ratón: sólo la tónica se ilumina
+        setTitle (keyLabel (pc).replace ("\n", " / "));
     }
 
-    const int left = kBlackLeftWhite[pc];
-    const float centre = r.getX() + (float) left * (whiteW + gap) + whiteW + gap * 0.5f;
-    return { centre - blackW * 0.5f, r.getY() + 2.0f, blackW, blackH };
-}
-
-int KeySelector::hitTestKey (juce::Point<float> p) const
-{
-    for (int pc = 0; pc < 12; ++pc)
-        if (getKeyBounds (pc).contains (p))
-            return pc;
-    return -1;
-}
-
-void KeySelector::paint (juce::Graphics& g)
-{
-    for (int pc = 0; pc < 12; ++pc)
+    void paint (juce::Graphics& g) override
     {
-        const auto r = getKeyBounds (pc);
-        const bool black = isBlackPc (pc);
-        const bool sel = (pc == selected);
-        const bool hov = (pc == hovered);
+        const auto r = getLocalBounds().toFloat();
+        const bool black = isBlackPc (pitchClass);
 
-        if (sel)
+        if (owner.selected == pitchClass)
         {
-            drawGlowBox (g, r, 3.0f, Colours::accent, true);
+            g.setColour (Colours::accent);
+            g.fillRoundedRectangle (r, 3.0f);
             g.setColour (Colours::white);
         }
         else if (black)
         {
-            g.setColour (hov ? Colours::charcoal.brighter (0.25f) : Colours::charcoal);
+            g.setColour (Colours::charcoal);
             g.fillRoundedRectangle (r, 3.0f);
             g.setColour (Colours::disabled.darker (0.3f));
-            g.drawRoundedRectangle (r, 3.0f, 1.0f);
+            g.drawRoundedRectangle (r.reduced (0.5f), 3.0f, 1.0f);
             g.setColour (Colours::white);
         }
         else
         {
-            g.setColour (hov ? Colours::white : Colours::softPanel);
+            g.setColour (Colours::softPanel);
             g.fillRoundedRectangle (r, 3.0f);
             g.setColour (Colours::border);
-            g.drawRoundedRectangle (r, 3.0f, 1.0f);
+            g.drawRoundedRectangle (r.reduced (0.5f), 3.0f, 1.0f);
             g.setColour (Colours::text);
         }
 
-        drawTwoLineLabel (g, keyLabel (pc), r, black ? 15.0f : 19.0f);
+        drawTwoLineLabel (g, keyLabel (pitchClass), r, black ? 15.0f : 19.0f);
     }
+
+    // Un clic = una sola elección (al pulsar; arrastrar o soltar no hacen nada)
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! e.mods.isPopupMenu())
+            owner.choose (pitchClass);
+    }
+
+private:
+    KeySelector& owner;
+    const int pitchClass;
+};
+
+KeySelector::KeySelector (juce::RangedAudioParameter& rootParam)
+    : attachment (rootParam, [this] (float v) { setSelected (juce::jlimit (0, 11, (int) std::lround (v))); }, nullptr)
+{
+    for (int pc = 0; pc < 12; ++pc)
+    {
+        buttons[(size_t) pc] = std::make_unique<KeyButton> (*this, pc);
+        addAndMakeVisible (*buttons[(size_t) pc]);
+    }
+    attachment.sendInitialUpdate();
 }
 
-void KeySelector::mouseDown (const juce::MouseEvent& e)
+KeySelector::~KeySelector() = default;
+
+// Fila de abajo: 7 botones claros con 8 px entre ellos. Fila de arriba: los 5 oscuros,
+// cada uno centrado sobre el hueco entre sus dos notas naturales. Entre las dos filas
+// queda una franja libre; entre C#–D# y entre F#–G#–A# también.
+juce::Rectangle<int> KeySelector::layoutKey (juce::Rectangle<int> area, int pc)
 {
-    const int pc = hitTestKey (e.position);
-    if (pc >= 0)
-        attachment.setValueAsCompleteGesture ((float) pc);
+    const auto r = area.reduced (2);
+    constexpr int gap = 8;
+    const float whiteW = (float) (r.getWidth() - 6 * gap) / 7.0f;
+    const int whiteH = juce::roundToInt ((float) r.getHeight() * 0.47f);
+    const int blackW = juce::roundToInt (whiteW * 0.86f);
+    const int blackH = juce::roundToInt ((float) r.getHeight() * 0.40f);
+
+    if (! isBlackPc (pc))
+    {
+        const int wi = kWhiteIndex[pc];
+        const int x0 = r.getX() + juce::roundToInt ((float) wi * (whiteW + (float) gap));
+        const int x1 = r.getX() + juce::roundToInt ((float) wi * (whiteW + (float) gap) + whiteW);
+        return { x0, r.getBottom() - whiteH, x1 - x0, whiteH };
+    }
+
+    const int left = kBlackLeftWhite[pc];
+    const float centre = (float) r.getX() + (float) left * (whiteW + (float) gap) + whiteW + (float) gap * 0.5f;
+    return { juce::roundToInt (centre - (float) blackW * 0.5f), r.getY() + 2, blackW, blackH };
 }
 
-void KeySelector::mouseMove (const juce::MouseEvent& e)
+juce::Rectangle<int> KeySelector::getButtonBounds (int pc) const
 {
-    const int pc = hitTestKey (e.position);
-    if (pc != hovered) { hovered = pc; repaint(); }
+    return buttons[(size_t) juce::jlimit (0, 11, pc)]->getBounds();
 }
 
-void KeySelector::mouseExit (const juce::MouseEvent&)
+void KeySelector::resized()
 {
-    hovered = -1;
+    for (int pc = 0; pc < 12; ++pc)
+        buttons[(size_t) pc]->setBounds (layoutKey (getLocalBounds(), pc));
+
+    // Ningún botón pisa a otro (ni un píxel)
+    for (int a = 0; a < 12; ++a)
+        for (int b = a + 1; b < 12; ++b)
+            jassert (! buttons[(size_t) a]->getBounds().intersects (buttons[(size_t) b]->getBounds()));
+}
+
+void KeySelector::paint (juce::Graphics& g)
+{
+    // El brillo magenta de la tónica (detrás del botón, que pinta su propio fondo encima)
+    drawGlowBox (g, getButtonBounds (selected).toFloat(), 3.0f, Colours::accent, true);
+}
+
+void KeySelector::choose (int pc)
+{
+    attachment.setValueAsCompleteGesture ((float) pc);   // una sola vez (si ya era esa, nada)
+    setSelected (pc);
+    if (onKeyChosen != nullptr)
+        onKeyChosen (pc);
+}
+
+void KeySelector::setSelected (int pc)
+{
+    if (pc == selected)
+        return;
+    selected = pc;
     repaint();
+    for (auto& b : buttons)
+        b->repaint();
 }
 
 //==============================================================================
@@ -840,22 +885,30 @@ void PianoVisualizer::paint (juce::Graphics& g)
     drawArrow (false, above);
 }
 
-int PianoVisualizer::noteAt (juce::Point<float> p, int& velocity) const
+int PianoVisualizer::noteAt (juce::Point<float> p, int& velocity, float edgeMargin) const
 {
+    // Las negras van encima de las blancas: primero las negras. Con margen, el punto tiene que
+    // estar bien dentro de la tecla (no en el borde con la vecina): si no, -1
     for (int n = kLowestNote; n <= kHighestNote; ++n)
     {
-        if (isBlack (n) && getKeyRect (n).contains (p))
+        if (! isBlack (n))
+            continue;
+        const auto r = getKeyRect (n);
+        if (r.reduced (edgeMargin, 0.0f).withTrimmedBottom (edgeMargin).contains (p))
         {
-            const auto r = getKeyRect (n);
             velocity = juce::jlimit (30, 127, (int) (40.0f + 87.0f * (p.y - r.getY()) / r.getHeight()));
             return n;
         }
+        if (edgeMargin > 0.0f && r.expanded (edgeMargin, 0.0f).withTrimmedBottom (-edgeMargin).contains (p))
+            return -1;   // en el borde de una negra
     }
     for (int n = kLowestNote; n <= kHighestNote; ++n)
     {
-        if (! isBlack (n) && getKeyRect (n).contains (p))
+        if (isBlack (n))
+            continue;
+        const auto r = getKeyRect (n);
+        if (r.reduced (edgeMargin, 0.0f).contains (p))
         {
-            const auto r = getKeyRect (n);
             velocity = juce::jlimit (30, 127, (int) (40.0f + 87.0f * (p.y - r.getY()) / r.getHeight()));
             return n;
         }
@@ -876,8 +929,20 @@ void PianoVisualizer::mouseDown (const juce::MouseEvent& e)
 
 void PianoVisualizer::mouseDrag (const juce::MouseEvent& e)
 {
+    // Un temblor al pulsar (ratón o trackpad) no cambia de tecla ni dispara otro acorde
+    if (mouseNote >= 0 && e.getDistanceFromDragStart() < (int) kDragSlopPx)
+        return;
+
     int vel = 100;
-    const int n = noteAt (e.position, vel);
+    int n = noteAt (e.position, vel);
+    if (mouseNote >= 0 && n >= 0 && n != mouseNote)
+    {
+        // Para pasar a la tecla vecina hay que entrar en ella (en el borde sigue la que suena)
+        int strictVel = vel;
+        if (noteAt (e.position, strictVel, kKeyEdgeMarginPx) != n)
+            return;
+    }
+
     if (n != mouseNote)
     {
         if (mouseNote >= 0)
@@ -1679,7 +1744,9 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     content.addAndMakeVisible (voiceReadout);
 
     //--------------------------------------------------------------------------
-    // KEY · SCALE · ESCALA
+    // KEY · SCALE · ESCALA. Elegir otra tónica suelta lo que tocaban el ratón y el teclado de
+    // la PC (nada queda colgado); si una tecla de la PC sigue pulsada, vuelve a sonar en la tónica nueva
+    keySelector.onKeyChosen = [this] (int) { releaseUiNotes(); };
     content.addAndMakeVisible (keySelector);
     content.addAndMakeVisible (scaleSelector);
     content.addAndMakeVisible (scaleBar);
@@ -1786,9 +1853,7 @@ SmartKeysAudioProcessorEditor::~SmartKeysAudioProcessorEditor()
 
     // 3) Ninguna nota tocada con el ratón o el teclado de la PC queda colgada
     piano.releaseMouseNote();
-    for (size_t i = 0; i < computerKeysDown.size(); ++i)
-        if (computerKeysDown[i] && computerKeyNotes[i] >= 0)
-            audioProcessor.pushScreenNote (computerKeyNotes[i], 0, false);
+    releaseComputerKeys();
 
     // 4) La ventana del instrumento cargado se cierra con la de SmartKeys (y lo recuerda)
     audioProcessor.getHostedInstrument().smartKeysEditorClosing();
@@ -2005,6 +2070,20 @@ void SmartKeysAudioProcessorEditor::timerCallback()
     updateStrumLabel();
     updateDisplay();
     updateInstrumentRow();
+
+    // Teclado de la PC: lo que se perdiera entre tecla y tecla se corrige; y si el foco se fue a
+    // otra ventana (el KeyUp ya no llega aquí), sus notas se sueltan
+    auto& hostedForKeys = audioProcessor.getHostedInstrument();
+    const bool keysReachUs = hasKeyboardFocus (true) || hostedForKeys.isWindowActive();
+    if (keysReachUs)
+        pollComputerKeys();
+
+    if (keyFocusCheckAtMs > 0.0 && juce::Time::getMillisecondCounterHiRes() >= keyFocusCheckAtMs)
+    {
+        keyFocusCheckAtMs = 0.0;
+        if (! keysReachUs)
+            releaseComputerKeys();
+    }
 }
 
 void SmartKeysAudioProcessorEditor::updateStrumLabel()
@@ -2544,6 +2623,11 @@ bool SmartKeysAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 
 bool SmartKeysAudioProcessorEditor::keyStateChanged (bool)
 {
+    return pollComputerKeys();
+}
+
+bool SmartKeysAudioProcessorEditor::pollComputerKeys()
+{
     bool handled = false;
     const bool command = juce::ModifierKeys::currentModifiers.isCommandDown() || presetDialog.isVisible();
 
@@ -2570,4 +2654,24 @@ bool SmartKeysAudioProcessorEditor::keyStateChanged (bool)
     }
 
     return handled;
+}
+
+void SmartKeysAudioProcessorEditor::releaseComputerKeys()
+{
+    // Se suelta lo que suena, pero la tecla sigue contando como pulsada: si de verdad lo
+    // está (o el sistema todavía lo cree, porque la soltó en otra ventana), no vuelve a
+    // disparar un acorde por sí sola; tocará otra vez cuando se suelte y se vuelva a pulsar
+    for (size_t i = 0; i < computerKeysDown.size(); ++i)
+    {
+        if (computerKeyNotes[i] >= 0)
+            audioProcessor.pushScreenNote (computerKeyNotes[i], 0, false);
+        computerKeyNotes[i] = -1;
+    }
+}
+
+void SmartKeysAudioProcessorEditor::releaseUiNotes()
+{
+    piano.releaseMouseNote();
+    releaseComputerKeys();
+    audioProcessor.releaseScreenNotes();   // y lo que quedara de la pantalla en el hilo de audio
 }

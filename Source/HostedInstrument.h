@@ -42,6 +42,14 @@ class HostedInstrument : private juce::AudioProcessorListener,
 public:
     enum class Status { Empty = 0, Loading, Loaded, Missing, Failed, Crashed };
 
+    // La ventana de SmartKeys, que toca acordes con el teclado de la PC: se le avisa cuando la
+    // ventana del instrumento deja de tener el teclado (para soltar lo que tocaba la PC)
+    struct KeyboardTarget
+    {
+        virtual ~KeyboardTarget() = default;
+        virtual void hostedWindowLostKeyboard() = 0;
+    };
+
     HostedInstrument();
     ~HostedInstrument() override;
 
@@ -56,9 +64,13 @@ public:
     void setBypassed (bool shouldBypass);
     bool isBypassed() const noexcept                { return bypassed.load (std::memory_order_relaxed); }
 
-    void showWindow (juce::Component* nextTo);      // ventana flotante del plugin
+    // Ventana flotante del plugin. Se abre SIN quitarle el teclado a SmartKeys; y si se hace
+    // clic en ella, lo que el plugin no use del teclado de la PC (A W S E D…) sigue tocando
+    // acordes en SmartKeys. El MIDI nunca depende de la ventana (abierta, minimizada o cerrada).
+    void showWindow (juce::Component* nextTo);
     void closeWindow();
     bool isWindowOpen() const noexcept              { return window != nullptr; }
+    bool isWindowActive() const noexcept;           // tiene el teclado (es la ventana activa)
     void smartKeysEditorOpened (juce::Component& editor);   // reabre la ventana si estaba abierta
     void smartKeysEditorClosing();                          // la cierra y lo recuerda
 
@@ -123,6 +135,10 @@ private:
     void render (Slot&, juce::AudioBuffer<float>&, int firstChannel, int numChannels,
                  const juce::MidiBuffer* midi, int numSamples, bool releaseFirst) noexcept;
 
+    // Un bloque que el instrumento no pudo procesar (se estaba cambiando o preparando): si traía
+    // un NoteOff, el siguiente bloque empieza soltando todo (nunca queda una nota colgada)
+    void noteMissedBlock (const juce::MidiBuffer& midi) noexcept;
+
     void timerCallback() override;
     void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override;
     void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override;
@@ -139,6 +155,7 @@ private:
     std::unique_ptr<Window> window;
     bool reopenWindow = false;
     juce::Component::SafePointer<juce::Component> reopenNextTo;
+    juce::Component::SafePointer<juce::Component> keyTarget;   // la ventana de SmartKeys (teclado de la PC)
     uint32_t loadGeneration = 0;
     juce::PluginDescription loadingDescription;
     juce::MemoryBlock loadingState;

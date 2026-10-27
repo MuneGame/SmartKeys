@@ -17,22 +17,33 @@ namespace smartkeys::ui
 {
 
 //==============================================================================
-// Módulo KEY: 5 bloques oscuros (#) y 7 blancos, la tónica activa en magenta
+// Módulo KEY: 12 botones independientes, 5 oscuros arriba (C#/Db … A#/Bb) y 7 claros
+// abajo (C … B), separados por huecos: ningún botón comparte un solo píxel con otro.
+// Sólo la tónica elegida se ilumina en magenta (#EC1368); los demás se quedan como
+// están (no es un teclado: un clic elige la tónica y nunca toca notas).
 class KeySelector : public juce::Component
 {
 public:
     explicit KeySelector (juce::RangedAudioParameter& rootParam);
-    void paint (juce::Graphics&) override;
-    void mouseDown (const juce::MouseEvent&) override;
-    void mouseMove (const juce::MouseEvent&) override;
-    void mouseExit (const juce::MouseEvent&) override;
+    ~KeySelector() override;
+    void paint (juce::Graphics&) override;   // el brillo de la tónica, detrás de su botón
+    void resized() override;
+
+    // Después de elegir una tónica (SmartKeys suelta lo que tocaban la pantalla y la PC)
+    std::function<void (int pitchClass)> onKeyChosen;
+
+    int getSelected() const noexcept                { return selected; }
+    juce::Rectangle<int> getButtonBounds (int pitchClass) const;
 
 private:
-    juce::Rectangle<float> getKeyBounds (int pitchClass) const;
-    int hitTestKey (juce::Point<float>) const;
+    class KeyButton;
 
+    void choose (int pitchClass);
+    void setSelected (int pitchClass);
+    static juce::Rectangle<int> layoutKey (juce::Rectangle<int> area, int pitchClass);
+
+    std::array<std::unique_ptr<KeyButton>, 12> buttons;
     int selected = 0;
-    int hovered = -1;
     PolledParameterAttachment attachment;
 };
 
@@ -127,14 +138,18 @@ public:
     void setActiveNotes (uint64_t lo, uint64_t hi);
     void setScaleMask (uint16_t mask)    { if (mask != scaleMask) { scaleMask = mask; repaint(); } }
 
-    // Suelta la nota que el ratón mantenía pulsada (al cerrar la ventana)
+    // Suelta la nota que el ratón mantenía pulsada (al cerrar la ventana, al elegir otra KEY)
     void releaseMouseNote();
+
+    // Un temblor del ratón o del trackpad mientras se pulsa no cambia de tecla: hay que
+    // moverse unos píxeles, y meterse en la tecla vecina (no quedarse en el borde)
+    static constexpr float kDragSlopPx = 5.0f, kKeyEdgeMarginPx = 2.5f;
 
 private:
     static bool isBlack (int note) noexcept;
     bool isNoteLit (int note) const noexcept;
     juce::Rectangle<float> getKeyRect (int note) const;
-    int noteAt (juce::Point<float> p, int& velocity) const;
+    int noteAt (juce::Point<float> p, int& velocity, float edgeMargin = 0.0f) const;
 
     SmartKeysAudioProcessor& processor;
     uint64_t activeLo = 0, activeHi = 0;
@@ -276,6 +291,7 @@ private:
 
 //==============================================================================
 class SmartKeysAudioProcessorEditor : public juce::AudioProcessorEditor,
+                                      public smartkeys::HostedInstrument::KeyboardTarget,
                                       private juce::Timer
 {
 public:
@@ -290,8 +306,23 @@ public:
 
     bool keyPressed (const juce::KeyPress&) override;
     bool keyStateChanged (bool isKeyDown) override;
+    void focusLost (FocusChangeType) override                   { scheduleKeyFocusCheck(); }
+    void focusOfChildComponentChanged (FocusChangeType) override { scheduleKeyFocusCheck(); }
+    void hostedWindowLostKeyboard() override                     { scheduleKeyFocusCheck(); }
 
 private:
+    // Teclado de la PC -> notas (con cada tecla; y 60 veces por segundo mientras una ventana de
+    // SmartKeys tiene el teclado, por si se perdió alguna). Si el foco se va a otra ventana que no
+    // es de SmartKeys ni la del instrumento (que le pasa las teclas), ahí no llega el KeyUp: las
+    // notas del teclado de la PC se sueltan (nunca quedan colgadas).
+    bool pollComputerKeys();
+    void releaseComputerKeys();
+    void scheduleKeyFocusCheck() noexcept           { keyFocusCheckAtMs = juce::Time::getMillisecondCounterHiRes() + 60.0; }
+    double keyFocusCheckAtMs = 0.0;
+
+    // Al elegir otra KEY: se suelta lo que tocaban el ratón y el teclado de la PC
+    void releaseUiNotes();
+
     // Todo el contenido vive en un componente de 850 x 658 que se escala al redimensionar
     struct Content : public juce::Component
     {
@@ -362,7 +393,10 @@ private:
     uint64_t shownEvent = ~(uint64_t) 0, shownLo = ~(uint64_t) 0, shownHi = ~(uint64_t) 0;
     int shownVoiceNote = -2;
 
-    // Teclado de la computadora (A W S E D F T G Y H U J K, Z/X = octava)
+    // Teclado de la computadora (A W S E D F T G Y H U J K, Z/X = octava).
+    // computerKeysDown: la tecla se vio pulsada; computerKeyNotes: la nota que suena por ella
+    // (-1: ninguna, p. ej. se soltó a la fuerza al elegir otra KEY: hasta que la tecla se
+    // suelte de verdad no vuelve a tocar nada)
     static constexpr const char* kKeyMap = "awsedftgyhujk";
     std::array<bool, 13> computerKeysDown {};
     std::array<int, 13> computerKeyNotes {};
