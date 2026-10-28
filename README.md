@@ -571,6 +571,7 @@ SmartKeys/
   - F#3 en Fa mayor sale como **F3 A3 C4 a la vez** (las 3 notas en 0,02 ms), 10,4 ms después de la tecla (un bloque de audio).
   - Con STRUM 41 ms DESC salen C4, A3 a +47,3 ms y F3 a +107,2 ms (esperado: +47,1 y +106,6), igual que en la salida MIDI; también con el búfer partido en trozos.
   - Cada nota sale de media menos de 1 ms después de su hora (en una tanda, con la Mac virtual de GitHub atascada, alguna hasta 24 ms).
+  - Si la Mac virtual se atasca (el propio bucle de audio de la prueba llega más de 22 ms tarde), esa medida de tiempo no vale y se repite, hasta 3 veces; los márgenes no cambian. Lo mismo en la prueba de MIC VOICE.
   - Repetir rápido una tecla no pierde ninguna.
   - Con el teclado devuelto al propio SmartKeys (bucle) no hay acordes de más ni notas colgadas.
   - **Grabación en bucle** (un compás que se repite: en la vuelta 1 tocas Fa mayor; en la vuelta 2, FL lo repite y tú añades La menor): la salida MIDI toca las dos vueltas ({F3×2 A3×3 C4×3 E4×1}) y por el teclado sólo sale lo nuevo ({F3×1 A3×2 C4×2 E4×1}), así que FL no graba Fa mayor dos veces. Sin grabar, las dos vueltas salen enteras; en una toma nueva, la primera vuelta sale entera. El acorde de la negra 1 tampoco se repite aunque el bloque de audio cruce el final del bucle.
