@@ -2093,6 +2093,12 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
 
     AudioThread audio ([&]
     {
+        // El tiempo empieza cuando el hilo de audio arranca de verdad (como el de un DAW cuando el
+        // dispositivo empieza a pedir bloques): en la Mac de GitHub, arrancar un hilo de tiempo
+        // real puede tardar ~100 ms, y contar desde antes obligaba a procesar de golpe los
+        // bloques atrasados
+        sc.t0 = Time::getMillisecondCounterHiRes() + 2.0;
+
         size_t nextUser = 0, nextSecond = 0;
         for (int k = 0; k < numBlocks; ++k)
         {
@@ -2167,7 +2173,6 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
         waitUntilMs (sc.t0 + (double) numBlocks * blockMs);
     });
 
-    sc.t0 = Time::getMillisecondCounterHiRes() + 2.0;
     if (! audio.startRealtimeThread (Thread::RealtimeOptions{}.withPeriodMs (blockMs).withMaximumProcessingTimeMs (blockMs * 0.8)))
         audio.startThread (Thread::Priority::highest);
 
