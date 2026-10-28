@@ -804,7 +804,14 @@ void HostedInstrument::releaseEditor()
     if (editor == nullptr)
         return;
 
-    editor = nullptr;   // ~Component la quita de donde se mostraba
+    {
+        // macOS: la vista de un Audio Unit (y con ella su interfaz) se libera aquí mismo, no
+        // cuando el DAW vacíe su "autorelease pool"
+        JUCE_AUTORELEASEPOOL
+        {
+            editor = nullptr;   // ~Component la quita de donde se mostraba
+        }
+    }
     if (! shuttingDown)
         refreshStateCache();   // lo que se tocó en su interfaz queda guardado
     changed();

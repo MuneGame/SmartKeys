@@ -207,8 +207,8 @@ void runKeyboardUnitTests (const std::function<void (bool, const char*)>& check)
     // 2. Foco en la interfaz del plugin (después de tocar una perilla o elegir un preset)
     [window makeFirstResponder: pluginView];
     notes.clear();
-    tap (window, @"s");
-    check (is ({ { 1, true }, { 1, false } }), "foco en la interfaz del plugin (dentro de SmartKeys): S toca igual");
+    tap (window, @"s");   // A W S E D… : S es la tercera tecla (índice 2)
+    check (is ({ { 2, true }, { 2, false } }), "foco en la interfaz del plugin (dentro de SmartKeys): S toca igual");
 
     notes.clear();
     tap (window, @"A");   // con Mayúsculas / Bloq Mayús

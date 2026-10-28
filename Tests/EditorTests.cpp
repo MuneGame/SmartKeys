@@ -408,8 +408,14 @@ void testWithInstrument (Daw& daw, const PluginDescription& synth, const String&
     check (waitForEditorSize (*window, 850, kHeader + 320) && countLines ("EDITOR OPEN") == opened + 1,
            "VIEW: SYNTH otra vez: la misma interfaz, sin crearla de nuevo");
 
-    // 5. Cerrar la ventana de SmartKeys: el instrumento sigue sonando
-    window = nullptr;
+    // 5. Cerrar la ventana de SmartKeys: el instrumento sigue sonando (como en el bucle de
+    //    eventos de un DAW: dentro de un "autorelease pool" en macOS)
+    {
+        JUCE_AUTORELEASEPOOL
+        {
+            window = nullptr;
+        }
+    }
     pump (300);
     check (countLines ("EDITOR CLOSED") == closed + 1, "al cerrar SmartKeys se cierra la interfaz del instrumento");
     {
@@ -424,7 +430,12 @@ void testWithInstrument (Daw& daw, const PluginDescription& synth, const String&
     window = std::make_unique<PluginWindow> (daw.instance().createEditorAndMakeActive());
     check (waitForEditorSize (*window, 850, kHeader + 320) && waitForLines ("EDITOR OPEN", opened + 2),
            "al abrir SmartKeys otra vez vuelve a la vista SYNTH");
-    window = nullptr;
+    {
+        JUCE_AUTORELEASEPOOL
+        {
+            window = nullptr;
+        }
+    }
     pump (300);
 }
 } // namespace
