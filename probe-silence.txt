@@ -1,0 +1,13 @@
+Entrada por defecto: BlackHole 2ch  id=50  48000 Hz  buffer=512  transporte='76697274'
+Permiso de micrófono (AVFoundation): 1  (1 = permitido, 0 = sin preguntar, -1 = denegado)
+  ciclo 0: Running
+  ciclo 1: Running
+  ciclo 2: Running
+  ciclo 3: Running
+  ciclo 4: Running
+  ciclo 5: Running
+Estado: Running  dispositivo: BlackHole 2ch  48000 Hz
+Muestras recibidas: 138752 (~96 % del tiempo)  RMS -150 dBFS
+Frecuencia detectada: 0 Hz en 0 bloques; nota --
+Después: 48000 Hz  buffer=512
+OK

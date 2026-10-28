@@ -1,0 +1,187 @@
+
+=== Teclado MIDI virtual "SmartKeys Chords" (lo que FL Studio graba en el Piano Roll) ===
+Plugin: SmartKeys  (Instrument|Synth|Generator, instrumento)
+Buses: 2 canal(es) de entrada (micrófono), 2 de salida
+
+-- P0. Fuera de FL Studio empieza apagado (Logic / Ableton grabarían ese teclado en la pista)
+  ok     en un DAW que no es FL Studio, el teclado no se crea (y el proyecto lo guarda apagado)
+
+-- P1. Encendido (clic en la etiqueta o proyecto guardado así): aparece en cuanto el plugin suena
+[SmartKeys Chords] teclado abierto, hilo de tiempo real
+     "SmartKeys Chords" disponible a los 345 ms
+  ok     el plugin crea el teclado MIDI "SmartKeys Chords" (FL Studio lo ve como un teclado)
+  ok     el proyecto guarda el teclado encendido
+
+-- P2. Una tecla -> el acorde COMPLETO sale por el teclado, todas las notas a la vez
+[SmartKeys Chords] 3 envíos: retraso medio 0.38 ms, máximo 0.38 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 56.40 ms (el processBlock más largo: 0.12 ms)
+     (la máquina de pruebas se atascó 56.4 ms; el processBlock más largo, 0.12 ms: se repite)
+     [hilo de audio de la prueba] bloque más atrasado: 50.30 ms (el processBlock más largo: 0.06 ms)
+     (la máquina de pruebas se atascó 50.3 ms; el processBlock más largo, 0.06 ms: se repite)
+[SmartKeys Chords] 12 envíos: retraso medio 0.76 ms, máximo 1.10 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 69.01 ms (el processBlock más largo: 0.04 ms)
+     (la máquina de pruebas se atascó 69.0 ms; el processBlock más largo, 0.04 ms: se repite)
+     [hilo de audio de la prueba] bloque más atrasado: 62.07 ms (el processBlock más largo: 0.13 ms)
+     (la máquina de pruebas se atascó 62.1 ms; el processBlock más largo, 0.13 ms: se repite)
+[SmartKeys Chords] 12 envíos: retraso medio 0.62 ms, máximo 0.96 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 86.74 ms (el processBlock más largo: 0.08 ms)
+     (la máquina de pruebas se atascó 86.7 ms; el processBlock más largo, 0.08 ms: se repite)
+     [hilo de audio de la prueba] bloque más atrasado: 46.03 ms (el processBlock más largo: 0.09 ms)
+     (la máquina de pruebas se atascó 46.0 ms; el processBlock más largo, 0.09 ms)
+     F#3 -> salida MIDI {F3 A3 C4}; teclado {F3 A3 C4} en 0.02 ms, 55.7 ms después de la tecla
+  ok     salida MIDI del plugin: F#3 en Fa mayor -> {F3 A3 C4} en la misma muestra
+  ok     por el teclado salen las 3 notas del acorde (no sólo la tecla), canal 1
+  ok     las 3 notas a la vez (±2 ms): FL las dibuja apiladas
+  FALLO  con la latencia de ~1 bloque de audio
+  ok     al soltar, los 3 NoteOff
+
+-- P3. STRUM 41 ms DESC: el mismo desfase en la salida MIDI y en el teclado
+[SmartKeys Chords] 12 envíos: retraso medio 0.27 ms, máximo 0.59 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 55.84 ms (el processBlock más largo: 0.06 ms)
+     (la máquina de pruebas se atascó 55.8 ms; el processBlock más largo, 0.06 ms: se repite)
+[SmartKeys Chords] 9 envíos: retraso medio 0.49 ms, máximo 0.75 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 65.99 ms (el processBlock más largo: 0.10 ms)
+     (la máquina de pruebas se atascó 66.0 ms; el processBlock más largo, 0.10 ms: se repite)
+     [hilo de audio de la prueba] bloque más atrasado: 99.88 ms (el processBlock más largo: 0.12 ms)
+     (la máquina de pruebas se atascó 99.9 ms; el processBlock más largo, 0.12 ms: se repite)
+[SmartKeys Chords] 9 envíos: retraso medio 0.79 ms, máximo 1.08 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 98.65 ms (el processBlock más largo: 0.11 ms)
+     (la máquina de pruebas se atascó 98.6 ms; el processBlock más largo, 0.11 ms: se repite)
+     [hilo de audio de la prueba] bloque más atrasado: 98.73 ms (el processBlock más largo: 0.14 ms)
+     (la máquina de pruebas se atascó 98.7 ms; el processBlock más largo, 0.14 ms: se repite)
+[SmartKeys Chords] 9 envíos: retraso medio 0.49 ms, máximo 0.71 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 31.36 ms (el processBlock más largo: 0.07 ms)
+     (la máquina de pruebas se atascó 31.4 ms; el processBlock más largo, 0.07 ms)
+     teclado: C4 +0, A3 +47.6 ms, F3 +107.2 ms (esperado +47.1 / +106.6)
+  ok     salida MIDI: C4 -> A3 -> F3 con el desfase exacto (±2 muestras)
+  ok     teclado: el mismo desfase (±5 ms): FL graba el acorde rasgueado
+  ok     al soltar, ninguna nota colgada
+[SmartKeys Chords] 12 envíos: retraso medio 0.63 ms, máximo 1.06 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 98.73 ms (el processBlock más largo: 0.11 ms)
+     (la máquina de pruebas se atascó 98.7 ms; el processBlock más largo, 0.11 ms: se repite)
+     [hilo de audio de la prueba] bloque más atrasado: 18.27 ms (el processBlock más largo: 0.14 ms)
+     en 4 trozos de 128 muestras seguidos: A3 +44.7 ms, F3 +101.3 ms
+  FALLO  con el búfer partido en trozos (como FL Studio), el teclado conserva el desfase (±5 ms)
+
+-- P4. Sin bucle (FLEX enganchado al teclado): ninguna tecla se pierde
+[SmartKeys Chords] 12 envíos: retraso medio 0.57 ms, máximo 0.96 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 34.67 ms (el processBlock más largo: 0.08 ms)
+     NoteOn de salida: {F3x10 A3x10 C4x10 E4x1}
+  ok     repetir F3 cada 60 ms: el acorde sale las 8 veces
+  ok     A3 20 ms después de F3 (nota del acorde anterior) también dispara su acorde (La menor)
+  ok     nada queda colgado
+
+-- P5. Bucle: FL devuelve el teclado a SmartKeys -> los ecos no disparan acordes
+[SmartKeys Chords] 59 envíos: retraso medio 0.68 ms, máximo 1.16 ms, 0 con más de 3 ms
+[SmartKeys Chords] 26 envíos: retraso medio 0.58 ms, máximo 1.13 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 98.75 ms (el processBlock más largo: 0.10 ms)
+     50 ecos devueltos; NoteOn de salida: {F3x8 A3x8 C4x8 E4x1}
+  ok     con el bucle: sólo los acordes de las teclas pulsadas (F, legato F -> Am, 6 repeticiones), ni uno más
+  ok     los ecos llegaron de verdad (NoteOn y NoteOff de cada acorde)
+  ok     y nada queda colgado
+[SmartKeys Chords] 27 envíos: retraso medio 0.58 ms, máximo 1.03 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 67.91 ms (el processBlock más largo: 0.08 ms)
+     STRUM 41 ms DESC con el bucle: {F3x1 A3x1 C4x1}
+  ok     con STRUM, los ecos que vuelven de uno en uno tampoco disparan nada
+
+-- P6. El bucle aparece de repente (SmartKeys creía que no había)
+     [hilo de audio de la prueba] bloque más atrasado: 54.84 ms (el processBlock más largo: 0.07 ms)
+[SmartKeys Chords] 9 envíos: retraso medio 0.45 ms, máximo 0.83 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 5.44 ms (el processBlock más largo: 0.12 ms)
+     STRUM 0 ms: {F3x1 A3x1 C4x1}  (0 notas de más)
+  ok     sin STRUM, el acorde que vuelve entero se reconoce al instante
+  ok     y nada queda colgado
+[SmartKeys Chords] 9 envíos: retraso medio 0.89 ms, máximo 1.06 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 3.96 ms (el processBlock más largo: 0.11 ms)
+[SmartKeys Chords] 26 envíos: retraso medio 0.62 ms, máximo 1.08 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 13.09 ms (el processBlock más largo: 0.12 ms)
+     STRUM 41 ms: {F3x1 A3x1 C4x1 E4x1 G4x1 A#4x1 D5x1 F5x1 A5x1 C6x1 E6x1 G6x1 D7x1}  (10 notas de más)
+  ok     con STRUM: tras soltar la tecla no queda ninguna nota colgada
+
+-- P8. Grabación en bucle: lo que FL repite en cada vuelta no sale otra vez (sin notas dobles)
+[SmartKeys Chords] 6 envíos: retraso medio 0.61 ms, máximo 0.69 ms, 0 con más de 3 ms
+[SmartKeys Chords] 3 envíos: retraso medio 0.69 ms, máximo 0.69 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 99.28 ms (el processBlock más largo: 0.12 ms)
+     salida MIDI: {F3x2 A3x3 C4x3 E4x1}   teclado: {F3x1 A3x2 C4x2 E4x1}
+  ok     la salida MIDI y el instrumento tocan las dos vueltas (F, F otra vez y La menor)
+  ok     por el teclado, el acorde que FL repite en la vuelta 2 no sale otra vez; la tecla nueva sí (nada se graba doble)
+[SmartKeys Chords] 6 envíos: retraso medio 0.43 ms, máximo 0.53 ms, 0 con más de 3 ms
+[SmartKeys Chords] 6 envíos: retraso medio 0.63 ms, máximo 0.92 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 98.69 ms (el processBlock más largo: 0.14 ms)
+     sin grabar: salida MIDI {F3x2 A3x3 C4x3 E4x1}   teclado {F3x2 A3x3 C4x3 E4x1}
+  ok     sin grabar (tocando en vivo sobre el bucle), lo que se repite en cada vuelta sale entero por el teclado
+[SmartKeys Chords] 9 envíos: retraso medio 0.72 ms, máximo 0.94 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 61.62 ms (el processBlock más largo: 0.15 ms)
+  ok     en una toma nueva, la primera vuelta vuelve a salir entera
+[SmartKeys Chords] 12 envíos: retraso medio 0.35 ms, máximo 0.56 ms, 0 con más de 3 ms
+[SmartKeys Chords] 6 envíos: retraso medio 0.28 ms, máximo 0.48 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 98.72 ms (el processBlock más largo: 0.11 ms)
+     negra 1, 4 vueltas, sin puntos de bucle: salida MIDI {F3x4 A3x4 C4x4}   teclado {F3x2 A3x2 C4x2}
+  ok     acorde en la negra 1: tras aprender el final del bucle (1.ª vuelta), las vueltas 3 y 4 no lo repiten aunque el bloque cruce el final
+[SmartKeys Chords] 3 envíos: retraso medio 0.85 ms, máximo 0.85 ms, 0 con más de 3 ms
+[SmartKeys Chords] 3 envíos: retraso medio 0.48 ms, máximo 0.48 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 98.75 ms (el processBlock más largo: 0.07 ms)
+     negra 1, 3 vueltas, con puntos de bucle: teclado {F3x1 A3x1 C4x1}
+  ok     con los puntos de bucle del DAW, el acorde de la negra 1 sale una sola vez en todas las vueltas
+[SmartKeys Chords] 3 envíos: retraso medio 0.71 ms, máximo 0.71 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 100.28 ms (el processBlock más largo: 3.65 ms)
+  ok     con FL parado, repetir una tecla la manda otra vez por el teclado
+
+-- P9. Dos SmartKeys a la vez (dos canales seleccionados en FL): cada nota sale una sola vez
+Plugin: SmartKeys  (Instrument|Synth|Generator, instrumento)
+Buses: 2 canal(es) de entrada (micrófono), 2 de salida
+[SmartKeys Chords] 9 envíos: retraso medio 0.84 ms, máximo 1.47 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 92.02 ms (el processBlock más largo: 0.18 ms)
+     teclado: {F3x1 A3x1 C4x1}, primer NoteOff a los 876 ms
+  ok     el acorde que tocan las dos instancias sale una sola vez (FL no recibe notas dobles)
+  ok     y se apaga cuando lo suelta la última que lo tocaba
+
+-- P10. ACORDES AL PIANO ROLL: FL graba en el Piano Roll de SmartKeys el acorde completo, no la tecla
+  ok     el modo se guarda con el proyecto (y deja el teclado encendido)
+[SmartKeys Chords] 15 envíos: retraso medio 0.57 ms, máximo 0.74 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 11.18 ms (el processBlock más largo: 0.53 ms)
+     voz La3: salida MIDI {A3x1 C4x1 E4x1}   teclado {A3x1 C4x1 E4x1}   ecos devueltos: 6
+  ok     el acorde completo (La menor) sale una vez por el teclado: es lo que FL graba en el Piano Roll de SmartKeys
+  ok     el acorde vuelve de FL (eco) y no suena otra vez: el instrumento y la salida MIDI lo tocan una sola vez
+     [hilo de audio de la prueba] bloque más atrasado: 80.43 ms (el processBlock más largo: 0.04 ms)
+     Piano Roll con La menor: salida MIDI {A3x1 C4x1 E4x1}   teclado {}
+  ok     al reproducir, las notas del Piano Roll suenan tal cual (no se convierte cada una en otro acorde)
+  ok     y no salen otra vez por el teclado: nada se graba doble
+[SmartKeys Chords] 3 envíos: retraso medio 0.56 ms, máximo 0.56 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 3.82 ms (el processBlock más largo: 0.04 ms)
+  ok     una tecla que llega del DAW suena tal cual, sin acorde, y no sale por el teclado
+     [hilo de audio de la prueba] bloque más atrasado: 3.15 ms (el processBlock más largo: 0.09 ms)
+  ok     un NoteOn repetido del Piano Roll no se vuelve a atacar (una nota, un NoteOff)
+[SmartKeys Chords] 6 envíos: retraso medio 0.58 ms, máximo 0.97 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 99.47 ms (el processBlock más largo: 0.43 ms)
+     grabando en bucle: salida MIDI {A3x2 C4x2 E4x2}   teclado {A3x1 C4x1 E4x1}
+  ok     grabando en bucle, las dos vueltas suenan y el acorde sale una sola vez por el teclado: queda grabado una vez
+[SmartKeys Chords] 3 envíos: retraso medio 0.75 ms, máximo 0.75 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 99.38 ms (el processBlock más largo: 0.12 ms)
+  ok     con el modo apagado, una tecla del DAW vuelve a ser el acorde completo (también por el teclado)
+     [hilo de audio de la prueba] bloque más atrasado: 21.77 ms (el processBlock más largo: 0.46 ms)
+  ok     un NoteOn repetido sin soltar: un solo acorde por la salida MIDI y por el teclado (nada doble en el Piano Roll)
+
+-- P7. Bypass, exportar y cerrar el plugin con un acorde sonando
+     [hilo de audio de la prueba] bloque más atrasado: 16.83 ms (el processBlock más largo: 0.21 ms)
+[SmartKeys Chords] 12 envíos: retraso medio 2.13 ms, máximo 6.92 ms, 3 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 10.80 ms (el processBlock más largo: 0.27 ms)
+  ok     bypass: el acorde que sonaba recibe sus NoteOff (salida MIDI y teclado)
+     [hilo de audio de la prueba] bloque más atrasado: 98.70 ms (el processBlock más largo: 0.19 ms)
+  ok     al quitar el bypass vuelve a funcionar (A3 -> La menor)
+     [hilo de audio de la prueba] bloque más atrasado: 98.14 ms (el processBlock más largo: 0.06 ms)
+  ok     al exportar (fuera de tiempo real) los acordes salen por MIDI, pero no por el teclado
+     [hilo de audio de la prueba] bloque más atrasado: 12.97 ms (el processBlock más largo: 0.16 ms)
+     [hilo de audio de la prueba] bloque más atrasado: 3.43 ms (el processBlock más largo: 0.18 ms)
+  ok     al apagarlo con un acorde sonando, salen sus NoteOff y nada más
+  ok     y el teclado desaparece del sistema
+     [hilo de audio de la prueba] bloque más atrasado: 7.46 ms (el processBlock más largo: 0.26 ms)
+  ok     apagado: los acordes siguen saliendo por la salida MIDI, pero no por el teclado
+[SmartKeys Chords] teclado abierto, hilo de tiempo real
+  ok     se vuelve a encender
+[SmartKeys Chords] 3 envíos: retraso medio 0.45 ms, máximo 0.45 ms, 0 con más de 3 ms
+     [hilo de audio de la prueba] bloque más atrasado: 5.99 ms (el processBlock más largo: 0.08 ms)
+  ok     al cerrar el plugin con el acorde pulsado, sus NoteOff salen por el teclado
+  ok     y el teclado desaparece del sistema
+
+50 comprobaciones, 2 fallos

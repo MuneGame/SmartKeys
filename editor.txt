@@ -1,0 +1,59 @@
+
+-- Doble clic en una perilla de SmartKeys (STRUM, GAIN, GATE)
+  ok     arrastrar la perilla: un gesto para el DAW y el valor nuevo (150 ms)
+  ok     doble clic: la perilla vuelve a su valor por defecto (0 ms)
+  ok     y el DAW recibe un solo gesto (ninguno dentro de otro)
+  ok     cerrar la ventana a mitad de un arrastre: el gesto termina igual
+  ok     y el final del arrastre no manda otro
+  ok     SmartKeys (VST3) se carga en el "DAW"
+  ok     el instrumento de prueba (VST3) se puede describir
+
+-- Instrumento VST3 dentro de SmartKeys
+  ok     el instrumento de prueba se carga en la ranura
+  ok     VIEW: SYNTH: la ventana de SmartKeys toma el tamaño del instrumento (850 x 106+320)
+  ok     la interfaz del instrumento se crea una sola vez
+  ok     ninguna ventana aparte para el instrumento (una sola ventana: la de SmartKeys)
+objc[15785]: Class _NSZombie_CFReadStream is implemented in both ?? (0x6000020c4900) and ?? (0x6000020e57a0). This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed.
+  ok     un clic en el ZOOM del instrumento: la ventana de SmartKeys crece con él (1000 x 106+640)
+     D con el foco en el instrumento: 64 67 71
+  ok     con el foco en la interfaz del instrumento, el teclado de la computadora toca acordes (E4 -> E G B)
+  ok     y vuelve a encoger con él
+  ok     VIEW: SMARTKEYS: 850 x 658 al instante
+  ok     la interfaz del instrumento no se destruye (queda oculta)
+  ok     VIEW: SYNTH otra vez: la misma interfaz, sin crearla de nuevo
+  ok     al cerrar SmartKeys se cierra la interfaz del instrumento
+  ok     y el instrumento sigue tocando los acordes (C4 -> C E G)
+  ok     al abrir SmartKeys otra vez vuelve a la vista SYNTH
+
+-- Instrumento Audio Unit dentro de SmartKeys
+  ok     el instrumento de prueba se carga en la ranura
+  ok     VIEW: SYNTH: la ventana de SmartKeys toma el tamaño del instrumento (850 x 106+320)
+  ok     la interfaz del instrumento se crea una sola vez
+  ok     ninguna ventana aparte para el instrumento (una sola ventana: la de SmartKeys)
+  ok     un clic en el ZOOM del instrumento: la ventana de SmartKeys crece con él (1000 x 106+640)
+     D con el foco en el instrumento: 64 67 71
+  ok     con el foco en la interfaz del instrumento, el teclado de la computadora toca acordes (E4 -> E G B)
+  ok     y vuelve a encoger con él
+  ok     VIEW: SMARTKEYS: 850 x 658 al instante
+  ok     la interfaz del instrumento no se destruye (queda oculta)
+  ok     VIEW: SYNTH otra vez: la misma interfaz, sin crearla de nuevo
+  ok     al cerrar SmartKeys se cierra la interfaz del instrumento
+  ok     y el instrumento sigue tocando los acordes (C4 -> C E G)
+  ok     al abrir SmartKeys otra vez vuelve a la vista SYNTH
+
+-- El teclado de la computadora, pieza por pieza (macOS)
+  ok     foco en SmartKeys: A toca y suelta (la repetición no dispara otra)
+  ok     foco en la interfaz del plugin (dentro de SmartKeys): S toca igual
+  ok     en mayúscula también
+  ok     escribiendo en un campo de texto del plugin: no toca notas
+  ok     escribiendo en un campo de texto de SmartKeys: no toca notas
+  ok     Cmd / Ctrl / Opción + tecla: atajos, no notas
+  ok     con la ventana de guardar preset abierta: no toca notas
+  ok     foco en otra vista del DAW de la misma ventana: no toca notas
+  ok     teclas en otra ventana: no tocan notas
+  ok     una nota se suelta aunque la tecla se suelte con otra ventana delante
+  ok     Z / X cambian la octava (también con el foco en el plugin)
+  ok     soltar todo (otra KEY): se suelta y la tecla mantenida no vuelve a sonar sola
+  ok     destruido: ya no llega ninguna tecla
+
+46 comprobaciones, 0 fallos

@@ -1,0 +1,120 @@
+
+=== 2.0: instrumento cargado en la ranura de SmartKeys ===
+Plugin: SmartKeys  (Instrument|Synth|Generator, instrumento)
+Buses: 2 canal(es) de entrada (micrófono), 2 de salida
+
+-- H1. Sin instrumento: ya no hay piano propio; el MIDI sale igual
+  ok     D4 sale como Dm completo por MIDI OUT
+  ok     con la ranura vacía SmartKeys no suena (no tiene piano propio)
+  ok     ranura vacía: latencia 0
+
+-- H2. LOAD PLUGIN: el instrumento se carga (en el hilo de mensajes) y se prepara
+     cargado en 58 ms
+  ok     el instrumento de prueba se carga en la ranura
+     PREPARE 48000 512 realtime=1   latencia de SmartKeys: 96
+  ok     se prepara con la frecuencia y el bloque del DAW (48 kHz, 512)
+  ok     SmartKeys declara al DAW la latencia del instrumento (96 muestras): el DAW la compensa
+
+-- H3. Una tecla -> el instrumento recibe el acorde COMPLETO, en la misma muestra
+     MIDI OUT {D4 F4 A4}   instrumento {D4 F4 A4}
+  ok     D4 -> el instrumento recibe D4 F4 A4 (el acorde completo, no sólo la tecla)
+  ok     cada nota le llega en la muestra exacta de la salida MIDI
+     RMS 0.061682   D 0.0177352  F 0.0180633  A 0.0187294  (fuera: 0.000741241)
+  ok     el instrumento suena por la salida de SmartKeys
+  ok     lo que suena es Re menor (D, F, A)
+  ok     al soltar, el instrumento recibe los 3 NoteOff
+
+-- H3b. Una tecla, un acorde: nunca dos acordes superpuestos ni re-ataques
+     D4 tres veces sin soltar: salida MIDI {D4x1 F4x1 A4x1}, 0 NoteOff   instrumento 3 NoteOn, 0 NoteOff
+  ok     NoteOn repetido sin su NoteOff: un solo Dm por MIDI OUT, sin cortes ni re-ataques
+  ok     el instrumento recibe un solo acorde (3 NoteOn), sin tartamudeo
+  ok     y suena sin interrupción
+  ok     un solo NoteOff suelta el acorde entero (nada colgado)
+  ok     la misma tecla por dos canales: un solo acorde (C E G una vez)
+  ok     se suelta una sola vez; el segundo NoteOff no hace nada
+  ok     un NoteOff sin su NoteOn no saca nada
+  ok     un NoteOn de velocidad 0 suelta como un NoteOff
+  ok     soltar y volver a pulsar: dos acordes, el segundo después del NoteOff
+     C#4 (fuera de Do mayor) -> salida MIDI {C4 E4 G4}   instrumento {C4 E4 G4}
+  ok     la tecla cruda nunca llega al instrumento: sólo el acorde de la escala
+
+-- H4. STRUM: el instrumento recibe el barrido exacto (ASC y DESC)
+     ASC : F4 +0  A4 +5520  C5 +12480 muestras (en el instrumento)
+  ok     ASC: F4 -> A4 -> C5 llegan al instrumento en la muestra exacta del STRUM
+  ok     ASC 100 ms: +115 ms y +260 ms (5520 y 12480 muestras), como la salida MIDI
+     DESC: F4 +0  A4 +-6960  C5 +-12480 muestras (en el instrumento)
+  ok     DESC: C5 -> A4 -> F4 llegan al instrumento en la muestra exacta del STRUM
+  ok     NoteOff a mitad del STRUM: el instrumento sólo recibe la nota que ya entró, y su NoteOff
+
+-- H5. COMPLEX CHORDS: el instrumento recibe las 5-7 notas
+     MIDI OUT {D3 A3 D4 F4 C5 E5 G5}   instrumento {D3 A3 D4 F4 C5 E5 G5}
+  ok     el instrumento toca el acorde complejo completo
+
+-- H6. El DAW cambia el tamaño de búfer: el instrumento se prepara otra vez
+     PREPARE 48000 2048 realtime=1   MAXBLOCK 2048 prepared=2048
+  ok     SmartKeys prepara otra vez el instrumento con el búfer nuevo (2048)
+  ok     el instrumento nunca recibe un bloque más grande que el que se le preparó
+  ok     en bloques de 2048, cada nota sigue en su muestra exacta (+1600 la segunda tecla)
+  ok     y de vuelta a 512
+
+-- H7. GAIN: el volumen del instrumento
+     RMS con GAIN -3 dB: 0.0598634   con -30 dB: 0.00267038
+  ok     GAIN -30 dB baja el instrumento ~27 dB
+
+-- H8. BYPASS: suelta sus notas y lo calla; el MIDI sigue saliendo
+  ok     al entrar en BYPASS, el instrumento recibe el NoteOff de lo que sonaba (nada se queda colgado)
+  ok     en BYPASS el instrumento no suena
+  ok     en BYPASS los acordes siguen saliendo por MIDI y el instrumento no recibe nada
+  ok     BYPASS se guarda con el proyecto
+  ok     al quitar BYPASS vuelve a sonar
+
+-- H9. El sonido del instrumento se guarda con el proyecto y vuelve al abrirlo
+     guardado: <?xml version="1.0" encoding="UTF-8"?> <HostedPlugin bypass="0" status="loaded"><PLUGIN name="SmartKeysTestSynth" format="VST3" category="Instrument|Synth" manu...  (STATE_SAVE notes=56)
+  ok     el proyecto guarda qué instrumento hay y su sonido (su propio estado)
+Plugin: SmartKeys  (Instrument|Synth|Generator, instrumento)
+Buses: 2 canal(es) de entrada (micrófono), 2 de salida
+     al abrir: STATE_LOAD notes=56 tone=0.250   latencia 96
+  ok     al abrir el proyecto, el instrumento vuelve con su sonido
+  ok     y SmartKeys vuelve a declarar su latencia
+  ok     y suena
+  ok     cerrar SmartKeys destruye su instrumento
+
+-- H10. UNLOAD: la ranura queda vacía
+  ok     el instrumento se destruye
+  ok     la latencia vuelve a 0
+  ok     silencio, y los acordes siguen saliendo por MIDI
+
+-- H11. Un instrumento que no está instalado no se pierde al guardar
+  ok     falta: la ranura lo dice ("no está instalado")
+  ok     silencio, y los acordes siguen saliendo por MIDI
+  ok     al guardar, el proyecto conserva el instrumento que falta y su sonido (para la computadora que lo tenga)
+
+-- H12. Un instrumento que devuelve NaN no rompe la mezcla del DAW
+  ok     SmartKeys nunca saca NaN / infinito: ese bloque sale en silencio
+  ok     y el siguiente bloque vuelve a sonar
+
+-- H14. Audio Unit: el instrumento de prueba como AU (el formato de FL Studio en Mac)
+     AudioUnit:Synths/aumu,Tsyn,Miwt
+  ok     el AU se carga en la ranura
+  ok     el AU recibe el acorde completo en la muestra exacta
+  ok     y suena por SmartKeys
+
+=== 2.0: carga protegida tras un cierre ===
+Plugin: SmartKeys  (Instrument|Synth|Generator, instrumento)
+Buses: 2 canal(es) de entrada (micrófono), 2 de salida
+  ok     el proyecto no vuelve a crear solo el instrumento que cerró el programa
+  ok     pero lo conserva (se puede reintentar)
+  ok     el apunte se limpia
+
+=== Concurrencia: audio + mensajes durante 10 s ===
+Plugin: SmartKeys  (Instrument|Synth|Generator, instrumento)
+Buses: 2 canal(es) de entrada (micrófono), 2 de salida
+     55751 bloques de audio, 457 rondas de estado/parámetros en el hilo de mensajes (41 veces encendido/apagado el teclado SmartKeys Chords, 94 cambios de la ranura de instrumento), 252 estados leídos desde otro hilo
+  ok     los dos hilos trabajaron a la vez
+  ok     con todo a la vez, ningún evento MIDI fuera de su bloque
+  ok     y nunca sale NaN / infinito
+  ok     el instrumento se cargó, quitó y cambió con el audio corriendo
+  ok     y al final se carga y suena como siempre
+  ok     suena
+
+61 comprobaciones, 0 fallos

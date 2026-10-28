@@ -1,0 +1,126 @@
+Carpeta de datos: /var/folders/20/jp1_0n3n7kndh6rnbqb5344m0000gn/T/SmartKeysCatalogTests/temp_8518fa28.smartkeys-catalog
+  ok     SMARTKEYS_USER_DATA cambia la carpeta de datos
+  ok     SmartKeys (AU) se reconoce a sí mismo
+  ok     SmartKeys (VST3) se reconoce a sí mismo
+
+-- 0. Qué se puede cargar en la ranura (sólo generadores de sonido)
+  ok     sintes y romplers (isInstrument) se pueden cargar
+  ok     EQ, reverb y compresor (efectos, isInstrument falso) no
+  ok     SmartKeys no se carga dentro de sí mismo
+  ok     anfitriones de plugins, patchers y navegadores de samples se reconocen
+  ok     aunque se declaren instrumento, no se ofrecen
+  ok     palabras enteras: Dispatcher, Unifyer o Sytrus no son anfitriones
+  ok     AGridder / AudioGridder (plugins por la red) no se ofrece
+  ok     Element (anfitrión modular) y Komplete Kontrol no se ofrecen
+  ok     nombres con Patcher, MIDI, Control, Analyzer, Routing, Utility, Effect o Fx no se ofrecen
+  ok     categoría con Fx ("Fx|Instrument") no se ofrece
+  ok     un instrumento con entradas y sin salida de audio no se ofrece
+  ok     sintes, samplers y romplers siguen (Kontakt, Analog Lab, Omnisphere, Pigments, Diva…)
+  ok     baterías, cajas de ritmos y percusiones no se ofrecen (Battery, Addictive Drums, EZdrummer, XO, Kick 3, TR-808…)
+  ok     por su categoría: VST3 "Instrument|Drum" o Audio Unit con la etiqueta "Drums"
+  ok     reproductores de loops, frases y samples ya hechos no se ofrecen (Arcade, Stylus RMX, Serato Sample…)
+  ok     pianos, sintes, samplers (Kontakt, HALion) y bajos siguen; los nombres parecidos también (Spark Keys, Punch Bass, Groovy Keys…)
+  ok     la percusión afinada sí toca acordes: marimba, vibráfono, glockenspiel, kalimba, handpan
+  ok     UJAM Beatmaker / Virtual Drummer (BM-DOPE, VD-SOLID) y troceadores de samples (ChopBeast2) no se ofrecen
+  ok     los demás de esa Mac siguen: Kontakt, LABS, Vaults, Orbital, Riot, Splice INSTRUMENT, chipsynth, PolyMAX, UJAM guitarra / bajo / USYNTH
+     Tests/PluginNames.txt: 69 baterías, loops y troceadores; 198 instrumentos que tocan acordes
+  ok     con sus nombres reales, ninguna batería, loop ni troceador se ofrece
+  ok     y todos los instrumentos que tocan acordes se ofrecen
+  ok     etiquetas de Audio Unit: Drums / Percussion (también traducidas: Batería, Percusión); Synthesizer o Sampler no
+
+-- 1. Instrumentos Audio Unit del sistema (sin abrirlos)
+     Apple · AUMIDISynth  (AudioUnit:Synths/aumu,msyn,appl)
+     Apple · AUSampler  (AudioUnit:Synths/aumu,samp,appl)
+     Apple · DLSMusicDevice  (AudioUnit:Synths/aumu,dls ,appl)
+     MIWN Test · SmartKeysTestSynth  (AudioUnit:Synths/aumu,Tsyn,Miwt)
+     4 instrumentos AU en 134.303 ms
+  ok     aparece DLSMusicDevice de Apple (un piano GM siempre disponible)
+  ok     sólo instrumentos (aumu), con el identificador de JUCE
+  ok     SmartKeys no se ofrece a sí mismo
+  ok     la lista sale al instante (no se abre ningún plugin)
+  ok     el instrumento de prueba instalado como AU aparece
+  ok     el efecto de prueba instalado como AU (aufx) no aparece
+     SmartKeysTestTagged: categoría "Synth|Drums"
+  ok     un AU con la etiqueta "Drums" se reconoce sin abrirlo (categoría Synth|Drums)
+  ok     y no se ofrece (el instrumento de prueba, sin esa etiqueta, sí)
+
+-- 2. Búsqueda de instrumentos VST3
+  ok     la primera vez no hay lista guardada
+     VST3: MIWN Test · SmartKeysTestSynth  (/Users/runner/work/_temp/vst3scan/SmartKeysTestSynth.vst3)
+  ok     la búsqueda termina
+  ok     encuentra el instrumento de prueba (VST3_PATH)
+  ok     SmartKeys.vst3 no se ofrece a sí mismo
+  ok     cuenta los instrumentos nuevos
+  ok     el efecto de prueba está en la carpeta (SmartKeysTestFx.vst3)
+  ok     el efecto no aparece en la lista: sólo instrumentos
+  ok     su archivo queda apartado: "Buscar nuevos" no lo vuelve a abrir
+  ok     la lista guardada en disco sólo trae instrumentos
+  ok     la lista se guardó: la próxima vez sale sin buscar
+
+-- 3. Un plugin que cerró el programa al examinarlo no se vuelve a examinar
+  ok     el que cerró el programa queda fuera; los demás se encuentran
+
+-- 4. Carga protegida
+  ok     la carga que no terminó se recuerda al abrir otra vez
+  ok     la que terminó, no
+  ok     reintentarla a mano la olvida
+  ok     el apunte se limpia al abrir
+
+-- 5. Presets de SmartKeys
+  ok     trae presets de fábrica
+  ok     cada preset de fábrica trae sus 9 ajustes
+  ok     el nombre se limpia para el archivo
+  ok     guardar un preset
+  ok     existe en la carpeta del usuario
+  ok     aparece en la lista
+  ok     se vuelve a cargar igual
+  ok     borrar el preset
+  ok     sin nombre no se guarda
+
+-- 6. La ranura por dentro: trozos y cambios con el audio corriendo
+  ok     el instrumento de prueba está en la lista
+  ok     se carga en la ranura
+     notas en el instrumento: C4 en 266, E4 en 956 (diferencia 690)
+  ok     un bloque de 1024 llega en trozos de 256 (nunca más grande que el preparado)
+  ok     y cada nota en su muestra exacta (+690)
+  ok     y suena
+     5191 bloques de audio (650 con sonido) mientras el hilo de mensajes hizo 60 cambios
+  ok     el audio siguió sonando entre cambio y cambio
+  ok     nunca salió NaN / infinito
+  ok     al cerrar, el instrumento se destruye y el audio ya no lo toca
+
+-- 7. Sólo instrumentos: lo apartado no se vuelve a abrir; las listas antiguas se limpian
+  ok     el efecto de prueba se describe como efecto (moduleinfo.json: Fx)
+  ok     al abrir, el efecto sigue fuera y apartado
+  ok     "Buscar nuevos" no vuelve a abrir el archivo apartado
+  ok     "Volver a buscar todos" lo revisa otra vez (declarado instrumento, entra)
+  ok     efecto otra vez: fuera y apartado; el instrumento sigue
+  ok     el efecto de prueba queda como estaba
+  ok     lista antigua con dos efectos y un anfitrión de plugins
+  ok     al abrir no se ofrecen (el instrumento sigue)
+  ok     y la lista se guarda limpia en disco
+
+-- 8. Utilidades que se declaran instrumento (AGridder, Element) y sin salida de audio
+  ok     copia del instrumento de prueba que se llama "AGridder Inst" (se declara instrumento)
+  ok     la búsqueda no ofrece AGridder (el instrumento de verdad sigue)
+  ok     y aparta su archivo ("Buscar nuevos" no lo vuelve a abrir)
+  ok     "Volver a buscar todos": Element tampoco se ofrece
+  ok     el instrumento de prueba está en la lista
+  ok     si al cargarlo no tuviera salida de audio, sale de la lista
+  ok     y lo recuerda al abrir otra vez
+  ok     "Volver a buscar todos" le da otra oportunidad
+
+-- 9. Sólo los que tocan acordes: baterías y loops fuera (VST3 de verdad)
+  ok     copias: "Battery 4", "Nova Kit" (Instrument|Drum), "Arcade" de Output y "Keys Sampler" (Instrument|Sampler)
+     VST3: MIWN Test · Keys Sampler  [Instrument|Sampler]
+     VST3: MIWN Test · SmartKeysTestSynth  [Instrument|Synth]
+  ok     una batería ("Battery 4") no se ofrece
+  ok     un instrumento con la categoría VST3 "Instrument|Drum" tampoco
+  ok     ni un reproductor de loops ("Arcade" de Output)
+  ok     un sampler de instrumentos ("Instrument|Sampler", como Kontakt) y el sinte de prueba sí
+  ok     sus archivos quedan apartados ("Buscar nuevos" no los vuelve a abrir)
+  ok     lista guardada por la 2.0.2 con Addictive Drums, XO y Stylus RMX
+  ok     al abrir no se ofrecen (los instrumentos siguen)
+  ok     y la lista se guarda limpia
+
+91 comprobaciones, 0 fallos

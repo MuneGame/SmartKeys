@@ -1,0 +1,300 @@
+[58/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_2.cpp.o
+[59/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_gui_extra/juce_gui_extra.mm.o
+[60/232] Building C object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_graphics/juce_graphics_Sheenbidi.c.o
+[61/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_5.cpp.o
+[62/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_4.cpp.o
+[63/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_core/juce_core_CompilationTime.cpp.o
+[64/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_3.cpp.o
+[65/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_events/juce_events.mm.o
+[66/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless_ara.cpp.o
+[67/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless_lv2_libs.cpp.o
+[68/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_data_structures/juce_data_structures.mm.o
+[69/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics.mm.o
+In file included from /Users/runner/work/SmartKeys/SmartKeys/build-mic/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics.mm:35:
+/Users/runner/work/SmartKeys/SmartKeys/build-mic/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics.cpp:61:2: warning: This version of JUCE does not use the splash screen, the flag JUCE_DISPLAY_SPLASH_SCREEN is ignored [-W#pragma-messages]
+   61 |  JUCE_COMPILER_WARNING ("This version of JUCE does not use the splash screen, the flag JUCE_DISPLAY_SPLASH_SCREEN is ignored")
+      |  ^
+/Users/runner/work/SmartKeys/SmartKeys/build-mic/_deps/juce-src/modules/juce_core/system/juce_PlatformDefs.h:292:38: note: expanded from macro 'JUCE_COMPILER_WARNING'
+  292 |  #define JUCE_COMPILER_WARNING(msg)  _Pragma (JUCE_STRINGIFY (message (msg)))
+      |                                      ^
+<scratch space>:163:2: note: expanded from here
+  163 |  message ("This version of JUCE does not use the splash screen, the flag JUCE_DISPLAY_SPLASH_SCREEN is ignored")
+      |  ^
+1 warning generated.
+[70/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless.mm.o
+[71/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_audio_basics/juce_audio_basics.mm.o
+[72/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_core/juce_core.mm.o
+[73/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_audio_utils/juce_audio_utils.mm.o
+[74/232] Linking CXX static library SmartKeysTestSynth_artefacts/Release/libSmartKeysTestSynth_SharedCode.a
+/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib: file: SmartKeysTestSynth_artefacts/Release/libSmartKeysTestSynth_SharedCode.a(juce_audio_processors_headless_ara.cpp.o) has no symbols
+/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib: file: SmartKeysTestSynth_artefacts/Release/libSmartKeysTestSynth_SharedCode.a(juce_audio_processors_headless_lv2_libs.cpp.o) has no symbols
+/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib: file: SmartKeysTestSynth_artefacts/Release/libSmartKeysTestSynth_SharedCode.a(juce_audio_processors_headless_ara.cpp.o) has no symbols
+/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib: file: SmartKeysTestSynth_artefacts/Release/libSmartKeysTestSynth_SharedCode.a(juce_audio_processors_headless_lv2_libs.cpp.o) has no symbols
+[75/232] Linking CXX static library SmartKeys_artefacts/Release/libSmartKeys_SharedCode.a
+[76/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_graphics/juce_graphics_Harfbuzz.cpp.o
+[77/232] Building VST3 manifest helper for SmartKeys
+-- The CXX compiler identification is AppleClang 17.0.0.17000013
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (2.5s)
+-- Generating done (0.1s)
+-- Build files have been written to: /Users/runner/work/SmartKeys/SmartKeys/build-mic/vst3_helpers/SmartKeys
+[1/2] Building CXX object CMakeFiles/vst3_helper.dir/Users/runner/work/SmartKeys/SmartKeys/build-mic/_deps/juce-src/modules/juce_audio_plugin_client/VST3/juce_VST3ManifestHelper.cpp.o
+[2/2] Linking CXX executable vst3_helper
+[78/232] Generating SmartKeys_artefacts/JuceLibraryCode/SmartKeys_VST3/PkgInfo
+[79/232] Building VST3 manifest helper for SmartKeysTestSynth
+-- The CXX compiler identification is AppleClang 17.0.0.17000013
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (2.2s)
+-- Generating done (0.1s)
+-- Build files have been written to: /Users/runner/work/SmartKeys/SmartKeys/build-mic/vst3_helpers/SmartKeysTestSynth
+[1/2] Building CXX object CMakeFiles/vst3_helper.dir/Users/runner/work/SmartKeys/SmartKeys/build-mic/_deps/juce-src/modules/juce_audio_plugin_client/VST3/juce_VST3ManifestHelper.cpp.o
+[2/2] Linking CXX executable vst3_helper
+[80/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_graphics/juce_graphics.mm.o
+[81/232] Building CXX object CMakeFiles/SmartKeys_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AAX_utils.cpp.o
+[82/232] Building CXX object CMakeFiles/SmartKeys_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp.o
+[83/232] Building CXX object CMakeFiles/SmartKeys_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_Standalone.cpp.o
+[84/232] Building CXX object CMakeFiles/SmartKeys_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_Unity.cpp.o
+[85/232] Building CXX object CMakeFiles/SmartKeys_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AAX.mm.o
+[86/232] Generating SmartKeysTestSynth_artefacts/JuceLibraryCode/SmartKeysTestSynth_AU/PkgInfo
+[87/232] Building CXX object CMakeFiles/SmartKeys_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm.o
+[88/232] Building CXX object CMakeFiles/SmartKeys_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_2.mm.o
+[89/232] Generating SmartKeysTestSynth_artefacts/JuceLibraryCode/SmartKeysTestSynth_VST3/PkgInfo
+[90/232] Building CXX object CMakeFiles/SmartKeys_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_LV2.mm.o
+[91/232] Building CXX object CMakeFiles/SmartKeys_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AUv3.mm.o
+[92/232] Building CXX object CMakeFiles/SmartKeys_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST2.mm.o
+[93/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_audio_formats/juce_audio_formats.mm.o
+[94/232] Building VST3 manifest helper for SmartKeysTestFx
+-- The CXX compiler identification is AppleClang 17.0.0.17000013
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (1.6s)
+-- Generating done (0.1s)
+-- Build files have been written to: /Users/runner/work/SmartKeys/SmartKeys/build-mic/vst3_helpers/SmartKeysTestFx
+[1/2] Building CXX object CMakeFiles/vst3_helper.dir/Users/runner/work/SmartKeys/SmartKeys/build-mic/_deps/juce-src/modules/juce_audio_plugin_client/VST3/juce_VST3ManifestHelper.cpp.o
+[2/2] Linking CXX executable vst3_helper
+[95/232] Building CXX object CMakeFiles/SmartKeysTests.dir/Source/SystemMicInput.cpp.o
+[96/232] Building CXX object CMakeFiles/SmartKeysTestFx.dir/_deps/juce-src/modules/juce_audio_devices/juce_audio_devices.mm.o
+[97/232] Linking CXX static library SmartKeysTestFx_artefacts/Release/libSmartKeysTestFx_SharedCode.a
+/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib: file: SmartKeysTestFx_artefacts/Release/libSmartKeysTestFx_SharedCode.a(juce_audio_processors_headless_ara.cpp.o) has no symbols
+/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib: file: SmartKeysTestFx_artefacts/Release/libSmartKeysTestFx_SharedCode.a(juce_audio_processors_headless_lv2_libs.cpp.o) has no symbols
+/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib: file: SmartKeysTestFx_artefacts/Release/libSmartKeysTestFx_SharedCode.a(juce_audio_processors_headless_ara.cpp.o) has no symbols
+/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib: file: SmartKeysTestFx_artefacts/Release/libSmartKeysTestFx_SharedCode.a(juce_audio_processors_headless_lv2_libs.cpp.o) has no symbols
+[98/232] Generating SmartKeysTestFx_artefacts/JuceLibraryCode/SmartKeysTestFx_AU/PkgInfo
+[99/232] Building CXX object CMakeFiles/SmartKeysTests.dir/Source/MicPermission_mac.mm.o
+[100/232] Building CXX object CMakeFiles/SmartKeysTests.dir/_deps/juce-src/modules/juce_core/juce_core_CompilationTime.cpp.o
+[101/232] Generating SmartKeysTestFx_artefacts/JuceLibraryCode/SmartKeysTestFx_VST3/PkgInfo
+[102/232] Building CXX object CMakeFiles/SmartKeysTests.dir/Source/ChordMidiPort.cpp.o
+[103/232] Building CXX object CMakeFiles/SmartKeysTests.dir/Tests/EngineTests.cpp.o
+[104/232] Building CXX object CMakeFiles/SmartKeys_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.mm.o
+[105/232] Building CXX object CMakeFiles/SmartKeysTests.dir/_deps/juce-src/modules/juce_events/juce_events.mm.o
+[106/232] Building CXX object CMakeFiles/SmartKeysTestSynth_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AAX_utils.cpp.o
+[107/232] Building CXX object CMakeFiles/SmartKeysTestSynth_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp.o
+[108/232] Building CXX object CMakeFiles/SmartKeysTestSynth_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_Standalone.cpp.o
+[109/232] Building CXX object CMakeFiles/SmartKeysTestSynth_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_Unity.cpp.o
+[110/232] Building CXX object CMakeFiles/SmartKeysTestSynth_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AAX.mm.o
+[111/232] Building CXX object CMakeFiles/SmartKeysTests.dir/_deps/juce-src/modules/juce_audio_basics/juce_audio_basics.mm.o
+[112/232] Building CXX object CMakeFiles/SmartKeysTests.dir/_deps/juce-src/modules/juce_audio_devices/juce_audio_devices.mm.o
+[113/232] Building CXX object CMakeFiles/SmartKeysTestSynth_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AUv3.mm.o
+[114/232] Building CXX object CMakeFiles/SmartKeysTestSynth_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_LV2.mm.o
+[115/232] Building CXX object CMakeFiles/SmartKeysTestSynth_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST2.mm.o
+[116/232] Building CXX object CMakeFiles/SmartKeysTestSynth_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.mm.o
+[117/232] Building CXX object CMakeFiles/SmartKeysTestSynth_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AAX_utils.cpp.o
+[118/232] Building CXX object CMakeFiles/SmartKeysTestSynth_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp.o
+[119/232] Building CXX object CMakeFiles/SmartKeysTestSynth_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_Standalone.cpp.o
+[120/232] Building CXX object CMakeFiles/SmartKeysTestSynth_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_Unity.cpp.o
+[121/232] Building CXX object CMakeFiles/SmartKeysTestSynth_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AAX.mm.o
+[122/232] Building CXX object CMakeFiles/SmartKeysTestSynth_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm.o
+[123/232] Building CXX object CMakeFiles/SmartKeysTestSynth_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_2.mm.o
+[124/232] Building CXX object CMakeFiles/SmartKeysTestSynth_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AUv3.mm.o
+[125/232] Building CXX object CMakeFiles/SmartKeysTestSynth_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_LV2.mm.o
+[126/232] Building CXX object CMakeFiles/SmartKeysTestSynth_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST2.mm.o
+[127/232] Building CXX object CMakeFiles/SmartKeysTestSynth_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_2.mm.o
+[128/232] Building CXX object CMakeFiles/SmartKeysTestFx_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AAX_utils.cpp.o
+[129/232] Building CXX object CMakeFiles/SmartKeysTestFx_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp.o
+[130/232] Building CXX object CMakeFiles/SmartKeysTestFx_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_Standalone.cpp.o
+[131/232] Building CXX object CMakeFiles/SmartKeysTestFx_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_Unity.cpp.o
+[132/232] Building CXX object CMakeFiles/SmartKeysTestFx_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AAX.mm.o
+[133/232] Building CXX object CMakeFiles/SmartKeysTests.dir/_deps/juce-src/modules/juce_dsp/juce_dsp.mm.o
+[134/232] Building CXX object CMakeFiles/SmartKeysTestSynth_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm.o
+[135/232] Building CXX object CMakeFiles/SmartKeysTestFx_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AUv3.mm.o
+[136/232] Building CXX object CMakeFiles/SmartKeysTestFx_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_LV2.mm.o
+[137/232] Building CXX object CMakeFiles/SmartKeysTestFx_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST2.mm.o
+[138/232] Building CXX object CMakeFiles/SmartKeysTestFx_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.mm.o
+[139/232] Building CXX object CMakeFiles/SmartKeysTestFx_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AAX_utils.cpp.o
+[140/232] Building CXX object CMakeFiles/SmartKeysTestFx_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_ARA.cpp.o
+[141/232] Building CXX object CMakeFiles/SmartKeysTestFx_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_Standalone.cpp.o
+[142/232] Building CXX object CMakeFiles/SmartKeysTestFx_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_Unity.cpp.o
+[143/232] Building CXX object CMakeFiles/SmartKeysTestFx_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AAX.mm.o
+[144/232] Building CXX object CMakeFiles/SmartKeysTestFx_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm.o
+[145/232] Building CXX object CMakeFiles/SmartKeysTestFx_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_2.mm.o
+[146/232] Building CXX object CMakeFiles/SmartKeysTestFx_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AUv3.mm.o
+[147/232] Building CXX object CMakeFiles/SmartKeysTestFx_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_LV2.mm.o
+[148/232] Building CXX object CMakeFiles/SmartKeysTestFx_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST2.mm.o
+[149/232] Building CXX object CMakeFiles/SmartKeysTestFx_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_2.mm.o
+[150/232] Building CXX object CMakeFiles/SmartKeysTests.dir/_deps/juce-src/modules/juce_audio_formats/juce_audio_formats.mm.o
+[151/232] Building CXX object CMakeFiles/SmartKeysTestFx_AU.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_AU_1.mm.o
+[152/232] Building CXX object CMakeFiles/SmartKeysTests.dir/_deps/juce-src/modules/juce_core/juce_core.mm.o
+[153/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/Tests/CatalogTests.cpp.o
+[154/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/Source/PluginCatalog.cpp.o
+[155/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/Source/Presets.cpp.o
+[156/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/Source/HostedInstrument.cpp.o
+[157/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/Source/HostingMac.mm.o
+[158/232] Building CXX object CMakeFiles/SmartKeysTestSynth_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.mm.o
+[159/232] Building CXX object CMakeFiles/SmartKeysTestFx_VST3.dir/_deps/juce-src/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.mm.o
+[160/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_2.cpp.o
+[161/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_gui_extra/juce_gui_extra.mm.o
+[162/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_4.cpp.o
+[163/232] Building C object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_graphics/juce_graphics_Sheenbidi.c.o
+[164/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_5.cpp.o
+[165/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_audio_processors/juce_audio_processors.mm.o
+[166/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_core/juce_core_CompilationTime.cpp.o
+[167/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_3.cpp.o
+[168/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_events/juce_events.mm.o
+[169/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless_ara.cpp.o
+[170/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless_lv2_libs.cpp.o
+[171/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_data_structures/juce_data_structures.mm.o
+[172/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics.mm.o
+[173/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_audio_basics/juce_audio_basics.mm.o
+[174/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_core/juce_core.mm.o
+[175/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_audio_utils/juce_audio_utils.mm.o
+[176/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/Tests/EditorTests.cpp.o
+[177/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_graphics/juce_graphics_Harfbuzz.cpp.o
+[178/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless.mm.o
+[179/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/Source/ComputerKeyboard.cpp.o
+[180/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_audio_formats/juce_audio_formats.mm.o
+[181/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/Tests/EditorTests_mac.mm.o
+/Users/runner/work/SmartKeys/SmartKeys/Tests/EditorTests_mac.mm:46:6: warning: no previous prototype for function 'prepareApplication' [-Wmissing-prototypes]
+   46 | void prepareApplication()
+      |      ^
+/Users/runner/work/SmartKeys/SmartKeys/Tests/EditorTests_mac.mm:46:1: note: declare 'static' if the function is not intended to be used outside of this translation unit
+   46 | void prepareApplication()
+      | ^
+      | static 
+/Users/runner/work/SmartKeys/SmartKeys/Tests/EditorTests_mac.mm:54:6: warning: no previous prototype for function 'click' [-Wmissing-prototypes]
+   54 | bool click (juce::Component& inWindow, juce::Point<int> screenPosition)
+      |      ^
+/Users/runner/work/SmartKeys/SmartKeys/Tests/EditorTests_mac.mm:54:1: note: declare 'static' if the function is not intended to be used outside of this translation unit
+   54 | bool click (juce::Component& inWindow, juce::Point<int> screenPosition)
+      | ^
+      | static 
+/Users/runner/work/SmartKeys/SmartKeys/Tests/EditorTests_mac.mm:107:6: warning: no previous prototype for function 'key' [-Wmissing-prototypes]
+  107 | bool key (juce::Component& inWindow, char c, bool isDown)
+      |      ^
+/Users/runner/work/SmartKeys/SmartKeys/Tests/EditorTests_mac.mm:107:1: note: declare 'static' if the function is not intended to be used outside of this translation unit
+  107 | bool key (juce::Component& inWindow, char c, bool isDown)
+      | ^
+      | static 
+/Users/runner/work/SmartKeys/SmartKeys/Tests/EditorTests_mac.mm:122:5: warning: no previous prototype for function 'visibleWindows' [-Wmissing-prototypes]
+  122 | int visibleWindows()
+      |     ^
+/Users/runner/work/SmartKeys/SmartKeys/Tests/EditorTests_mac.mm:122:1: note: declare 'static' if the function is not intended to be used outside of this translation unit
+  122 | int visibleWindows()
+      | ^
+      | static 
+/Users/runner/work/SmartKeys/SmartKeys/Tests/EditorTests_mac.mm:136:6: warning: no previous prototype for function 'runKeyboardUnitTests' [-Wmissing-prototypes]
+  136 | void runKeyboardUnitTests (const std::function<void (bool, const char*)>& check)
+      |      ^
+/Users/runner/work/SmartKeys/SmartKeys/Tests/EditorTests_mac.mm:136:1: note: declare 'static' if the function is not intended to be used outside of this translation unit
+  136 | void runKeyboardUnitTests (const std::function<void (bool, const char*)>& check)
+      | ^
+      | static 
+5 warnings generated.
+[182/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_graphics/juce_graphics.mm.o
+[183/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/Source/ComputerKeyboard_mac.mm.o
+[184/232] Building CXX object CMakeFiles/SmartKeysCatalogTests.dir/_deps/juce-src/modules/juce_audio_devices/juce_audio_devices.mm.o
+[185/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_2.cpp.o
+[186/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_gui_extra/juce_gui_extra.mm.o
+[187/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_4.cpp.o
+[188/232] Building C object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_graphics/juce_graphics_Sheenbidi.c.o
+[189/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_5.cpp.o
+[190/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_audio_processors/juce_audio_processors.mm.o
+[191/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_core/juce_core_CompilationTime.cpp.o
+[192/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics_3.cpp.o
+[193/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_events/juce_events.mm.o
+[194/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless_ara.cpp.o
+[195/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless_lv2_libs.cpp.o
+[196/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_data_structures/juce_data_structures.mm.o
+[197/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_gui_basics/juce_gui_basics.mm.o
+[198/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_audio_basics/juce_audio_basics.mm.o
+[199/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_core/juce_core.mm.o
+[200/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_audio_utils/juce_audio_utils.mm.o
+[201/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless.mm.o
+[202/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_graphics/juce_graphics_Harfbuzz.cpp.o
+[203/232] Building CXX object CMakeFiles/SmartKeysHostTests.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless_ara.cpp.o
+[204/232] Building CXX object CMakeFiles/SmartKeysHostTests.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless_lv2_libs.cpp.o
+[205/232] Building CXX object CMakeFiles/SmartKeysHostTests.dir/Tests/MacActivity.mm.o
+[206/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_audio_formats/juce_audio_formats.mm.o
+[207/232] Building CXX object CMakeFiles/SmartKeysHostTests.dir/_deps/juce-src/modules/juce_core/juce_core_CompilationTime.cpp.o
+[208/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_graphics/juce_graphics.mm.o
+[209/232] Building CXX object CMakeFiles/SmartKeysHostTests.dir/Tests/HostTests.cpp.o
+/Users/runner/work/SmartKeys/SmartKeys/Tests/HostTests.cpp:1816:46: warning: implicit conversion loses floating-point precision: 'double' to 'float' [-Wimplicit-float-conversion]
+ 1816 |         daw = host.runRealtime (1.2, 261.63, 0.3);
+      |                    ~~~~~~~~~~~               ^~~
+/Users/runner/work/SmartKeys/SmartKeys/Tests/HostTests.cpp:1913:5: warning: '~PortTap' overrides a destructor but is not marked 'override' [-Winconsistent-missing-destructor-override]
+ 1913 |     ~PortTap()
+      |     ^
+/Users/runner/work/SmartKeys/SmartKeys/build-mic/_deps/juce-src/modules/juce_audio_devices/midi_io/juce_MidiDevices.h:270:13: note: overridden virtual function is here
+  270 |     virtual ~MidiInputCallback()  = default;
+      |             ^
+/Users/runner/work/SmartKeys/SmartKeys/Tests/HostTests.cpp:135:26: warning: unused variable 'gProcessAllocations' [-Wunused-variable]
+  135 | static std::atomic<long> gProcessAllocations { 0 };
+      |                          ^~~~~~~~~~~~~~~~~~~
+/Users/runner/work/SmartKeys/SmartKeys/Tests/HostTests.cpp:1988:10: warning: private field 'offset' is not used [-Wunused-private-field]
+ 1988 |     long offset = 0;
+      |          ^
+4 warnings generated.
+[210/232] Building CXX object CMakeFiles/SmartKeysEditorTests.dir/_deps/juce-src/modules/juce_audio_devices/juce_audio_devices.mm.o
+[211/232] Building CXX object CMakeFiles/SmartKeysHostTests.dir/_deps/juce-src/modules/juce_events/juce_events.mm.o
+[212/232] Building CXX object CMakeFiles/SmartKeysMicProbe.dir/Tests/MicProbe.cpp.o
+/Users/runner/work/SmartKeys/SmartKeys/Tests/MicProbe.cpp:200:33: warning: comparing floating point with == or != is unsafe [-Wfloat-equal]
+  200 |           && (after.nominalRate != before.nominalRate || after.bufferFrames != before.bufferFrames))
+      |               ~~~~~~~~~~~~~~~~~ ^  ~~~~~~~~~~~~~~~~~~
+/Users/runner/work/SmartKeys/SmartKeys/Tests/MicProbe.cpp:134:24: warning: variable 'updates' set but not used [-Wunused-but-set-variable]
+  134 |     int freqCount = 0, updates = 0;
+      |                        ^
+2 warnings generated.
+[213/232] Building CXX object CMakeFiles/SmartKeysMicProbe.dir/Source/SystemMicInput.cpp.o
+[214/232] Building CXX object CMakeFiles/SmartKeysMicProbe.dir/Source/MicPermission_mac.mm.o
+[215/232] Building CXX object CMakeFiles/SmartKeysMicProbe.dir/_deps/juce-src/modules/juce_core/juce_core_CompilationTime.cpp.o
+[216/232] Building CXX object CMakeFiles/SmartKeysHostTests.dir/_deps/juce-src/modules/juce_audio_basics/juce_audio_basics.mm.o
+[217/232] Building CXX object CMakeFiles/SmartKeysHostTests.dir/_deps/juce-src/modules/juce_audio_devices/juce_audio_devices.mm.o
+[218/232] Linking CXX executable SmartKeysTests_artefacts/Release/SmartKeysTests
+[219/232] Linking CXX CFBundle shared module SmartKeysTestSynth_artefacts/Release/AU/SmartKeysTestSynth.component/Contents/MacOS/SmartKeysTestSynth
+[220/232] Linking CXX CFBundle shared module SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3/Contents/MacOS/SmartKeysTestSynth
+/Users/runner/work/SmartKeys/SmartKeys/build-mic/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3: code object is not signed at all
+In architecture: x86_64
+-- Replacing invalid signature with ad-hoc signature
+removing moduleinfo.json
+creating /Users/runner/work/SmartKeys/SmartKeys/build-mic/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3/Contents/Resources/moduleinfo.json
+[221/232] Linking CXX CFBundle shared module SmartKeysTestFx_artefacts/Release/AU/SmartKeysTestFx.component/Contents/MacOS/SmartKeysTestFx
+[222/232] Linking CXX CFBundle shared module SmartKeysTestFx_artefacts/Release/VST3/SmartKeysTestFx.vst3/Contents/MacOS/SmartKeysTestFx
+/Users/runner/work/SmartKeys/SmartKeys/build-mic/SmartKeysTestFx_artefacts/Release/VST3/SmartKeysTestFx.vst3: code object is not signed at all
+In architecture: x86_64
+-- Replacing invalid signature with ad-hoc signature
+removing moduleinfo.json
+creating /Users/runner/work/SmartKeys/SmartKeys/build-mic/SmartKeysTestFx_artefacts/Release/VST3/SmartKeysTestFx.vst3/Contents/Resources/moduleinfo.json
+[223/232] Linking CXX executable SmartKeysCatalogTests_artefacts/Release/SmartKeysCatalogTests
+[224/232] Linking CXX executable SmartKeysEditorTests_artefacts/Release/SmartKeysEditorTests
+[225/232] Building CXX object CMakeFiles/SmartKeysMicProbe.dir/_deps/juce-src/modules/juce_audio_basics/juce_audio_basics.mm.o
+[226/232] Building CXX object CMakeFiles/SmartKeysHostTests.dir/_deps/juce-src/modules/juce_audio_processors_headless/juce_audio_processors_headless.mm.o
+[227/232] Building CXX object CMakeFiles/SmartKeysHostTests.dir/_deps/juce-src/modules/juce_core/juce_core.mm.o
+[228/232] Linking CXX executable SmartKeysHostTests_artefacts/Release/SmartKeysHostTests
+[229/232] Building CXX object CMakeFiles/SmartKeysMicProbe.dir/_deps/juce-src/modules/juce_core/juce_core.mm.o
+[230/232] Linking CXX executable SmartKeysMicProbe_artefacts/Release/SmartKeysMicProbe
+[231/232] Linking CXX CFBundle shared module SmartKeys_artefacts/Release/VST3/SmartKeys.vst3/Contents/MacOS/SmartKeys
+/Users/runner/work/SmartKeys/SmartKeys/build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3: code object is not signed at all
+In architecture: x86_64
+-- Replacing invalid signature with ad-hoc signature
+removing moduleinfo.json
+creating /Users/runner/work/SmartKeys/SmartKeys/build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3/Contents/Resources/moduleinfo.json
