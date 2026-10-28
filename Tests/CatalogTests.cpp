@@ -31,9 +31,15 @@
       8. Un VST3 que se declara instrumento pero se llama "AGridder Inst" o
          "Element" no se ofrece (se aparta); uno que al cargarlo no tiene salida
          de audio sale de la lista y se recuerda.
+      9. 2.0.3, sólo los que tocan acordes: copias VST3 del instrumento de
+         prueba que se llaman "Battery 4", con la categoría "Instrument|Drum" o
+         "Arcade" de Output no se ofrecen; con "Instrument|Sampler" (como
+         Kontakt), sí; una lista guardada con baterías se limpia al abrir. En
+         la Mac, un AU con la etiqueta "Drums" (SMARTKEYS_EXPECT_TAGGED_AU=1).
 
     Uso: SmartKeysCatalogTests <carpeta con SmartKeysTestSynth.vst3 y SmartKeysTestFx.vst3 [y SmartKeys.vst3]>
-         (SMARTKEYS_EXPECT_TEST_AU=1: el AU de prueba y el AU de efecto de prueba deben estar registrados)
+         (SMARTKEYS_EXPECT_TEST_AU=1: el AU de prueba y el AU de efecto de prueba deben estar registrados;
+          SMARTKEYS_EXPECT_TAGGED_AU=1: también "SmartKeysTestTagged", una copia con la etiqueta "Drums")
 
   ==============================================================================
 */
@@ -237,6 +243,85 @@ int main (int argc, char* argv[])
                  && C::isLoadableInstrument (describe ("Kaleidoscope", "Acme", true))
                  && C::isLoadableInstrument (describe ("Diva", "u-he", true)),
                "sintes, samplers y romplers siguen (Kontakt, Analog Lab, Omnisphere, Pigments, Diva…)");
+
+        // 2.0.3: sólo instrumentos que tocan acordes (progresiones y armonías)
+        auto category = [&] (const char* name, const char* maker, const char* cat)
+        {
+            auto d = describe (name, maker, true);
+            d.category = cat;
+            return d;
+        };
+        auto none = [&] (std::initializer_list<PluginDescription> list)
+        {
+            for (const auto& d : list)
+                if (C::isLoadableInstrument (d))
+                {
+                    std::cout << "     (se ofrece: " << d.name << " · " << d.manufacturerName << ")" << std::endl;
+                    return false;
+                }
+            return true;
+        };
+        auto all = [&] (std::initializer_list<PluginDescription> list)
+        {
+            for (const auto& d : list)
+                if (! C::isLoadableInstrument (d))
+                {
+                    std::cout << "     (no se ofrece: " << d.name << " · " << d.manufacturerName << ")" << std::endl;
+                    return false;
+                }
+            return true;
+        };
+
+        check (none ({ describe ("Battery 4", "Native Instruments", true), describe ("Addictive Drums 2", "XLN Audio", true),
+                       describe ("Superior Drummer 3", "Toontrack", true), describe ("EZdrummer 3", "Toontrack", true),
+                       describe ("XO", "XLN Audio", true), describe ("Kick 3", "Sonic Academy", true),
+                       describe ("Kick3", "Sonic Academy", true), describe ("Microtonic", "Sonic Charge", true),
+                       describe ("Nerve", "Xfer Records", true), describe ("Sitala", "Decomposer", true),
+                       describe ("BFD3", "inMusic Brands", true), describe ("Geist2", "FXpansion", true),
+                       describe ("Groove Agent 5", "Steinberg", true), describe ("Steven Slate Drums 5.5", "Steven Slate", true),
+                       describe ("SSD5", "Steven Slate Drums", true), describe ("GGD Invasion", "GetGood Drums", true),
+                       describe ("MT-PowerDrumKit", "Manda Audio", true), describe ("DrumGizmo", "DrumGizmo", true),
+                       describe ("Tremor", "Native Instruments", true), describe ("Spark 2", "Arturia", true),
+                       describe ("Atlas 2", "Algonaut", true), describe ("Punchbox", "D16 Group", true),
+                       describe ("Nepheton 2", "D16 Group", true), describe ("Drumazon 2", "D16 Group", true),
+                       describe ("TR-808", "Roland", true), describe ("TR-909", "Roland", true),
+                       describe ("Maschine 2", "Native Instruments", true), describe ("Heartbeat", "Muon Software", true),
+                       describe ("Perfect Drums", "Naughty Seal", true), describe ("Percussion Kit", "Acme", true),
+                       describe ("Strike", "AIR Music Technology", true), describe ("Punch", "Rob Papen", true),
+                       describe ("Modo Drum", "IK Multimedia", true), describe ("MPC Beats", "Akai Professional", true) }),
+               "baterías, cajas de ritmos y percusiones no se ofrecen (Battery, Addictive Drums, EZdrummer, XO, Kick 3, TR-808…)");
+        check (none ({ category ("Nova Kit", "Acme", "Instrument|Drum"), category ("Nova Kit", "Acme", "Instrument|Sampler|Drum"),
+                       category ("Nova Kit", "Acme", "Synth|Drums") }),
+               "por su categoría: VST3 \"Instrument|Drum\" o Audio Unit con la etiqueta \"Drums\"");
+        check (none ({ category ("Arcade", "Output", "Instrument|Sampler"), describe ("Stylus RMX", "Spectrasonics", true),
+                       describe ("Serato Sample", "Serato", true), describe ("Loopmash", "Steinberg", true),
+                       describe ("Breaktweaker", "iZotope", true), describe ("Phrase Player", "Acme", true),
+                       describe ("Beatmaker", "Acme", true), describe ("Construction Kit Player", "Acme", true),
+                       describe ("Cinematic SFX", "Acme", true), describe ("Vocal Loops", "Acme", true),
+                       describe ("Egoist", "Sugar Bytes", true), describe ("Transfuser", "AIR Music Technology", true) }),
+               "reproductores de loops, frases y samples ya hechos no se ofrecen (Arcade, Stylus RMX, Serato Sample…)");
+        check (all ({ category ("Kontakt 7", "Native Instruments", "Instrument|Sampler"), category ("HALion 7", "Steinberg", "Instrument|Sampler"),
+                      category ("Decent Sampler", "Decent Samples", "Instrument|Sampler"), describe ("EZkeys 2", "Toontrack", true),
+                      describe ("EZbass", "Toontrack", true), describe ("Addictive Keys", "XLN Audio", true),
+                      describe ("Keyscape", "Spectrasonics", true), describe ("Trilian", "Spectrasonics", true),
+                      describe ("Nexus", "reFX", true), describe ("LABS", "Spitfire Audio", true),
+                      describe ("Pianoteq 8", "Modartt", true), describe ("Falcon", "UVI", true),
+                      describe ("Exhale", "Output", true), describe ("SampleTank 4", "IK Multimedia", true),
+                      describe ("Spark Keys", "Acme", true), describe ("Atlas Pads", "Acme", true),
+                      describe ("Jupiter-8 V4", "Arturia", true), describe ("JUNO-106", "Roland", true),
+                      describe ("TB-303", "Roland", true), describe ("Upbeat Keys", "Acme", true),
+                      describe ("Punch Bass", "Acme", true), describe ("Strike Pads", "Acme", true),
+                      describe ("Groovy Keys", "Acme", true), describe ("Rhythmic Pads", "Acme", true),
+                      describe ("Augmented MALLETS", "Arturia", true), describe ("Chromaphone 3", "Applied Acoustics Systems", true) }),
+               "pianos, sintes, samplers (Kontakt, HALion) y bajos siguen; los nombres parecidos también (Spark Keys, Punch Bass, Groovy Keys…)");
+        check (all ({ describe ("Tuned Percussion", "Acme", true), describe ("Marimba", "Acme", true),
+                      describe ("Vibraphone", "Acme", true), describe ("Glockenspiel", "Acme", true),
+                      describe ("Kalimba", "Acme", true), describe ("Handpan", "Acme", true) }),
+               "la percusión afinada sí toca acordes: marimba, vibráfono, glockenspiel, kalimba, handpan");
+        check (C::isDrumTag ("Drums") && C::isDrumTag ("Percussion") && C::isDrumTag (String (CharPointer_UTF8 ("Bater\xc3\xad" "a")))
+                 && C::isDrumTag (String (CharPointer_UTF8 ("Percusi\xc3\xb3n"))) && C::isDrumTag ("Batterie")
+                 && ! C::isDrumTag ("Synthesizer") && ! C::isDrumTag ("Sampler") && ! C::isDrumTag ("Bass"),
+               "etiquetas de Audio Unit: Drums / Percussion (también traducidas: Batería, Percusión); Synthesizer o Sampler no");
     }
 
     //==========================================================================
@@ -268,6 +353,19 @@ int main (int argc, char* argv[])
         {
             check (contains (list, "SmartKeysTestSynth", "AudioUnit"), "el instrumento de prueba instalado como AU aparece");
             check (! listedByName (list, "SmartKeysTestFx"), "el efecto de prueba instalado como AU (aufx) no aparece");
+        }
+
+        // 2.0.3: una copia del AU de prueba con la etiqueta "Drums" (la instala la CI)
+        if (SystemStats::getEnvironmentVariable ("SMARTKEYS_EXPECT_TAGGED_AU", {}) == "1")
+        {
+            String taggedCategory;
+            for (const auto& d : smartkeys::listAudioUnitInstruments())
+                if (d.name == "SmartKeysTestTagged")
+                    taggedCategory = d.category;
+            std::cout << "     SmartKeysTestTagged: categoría \"" << taggedCategory << "\"" << std::endl;
+            check (taggedCategory == "Synth|Drums", "un AU con la etiqueta \"Drums\" se reconoce sin abrirlo (categoría Synth|Drums)");
+            check (! listedByName (list, "SmartKeysTestTagged") && contains (list, "SmartKeysTestSynth", "AudioUnit"),
+                   "y no se ofrece (el instrumento de prueba, sin esa etiqueta, sí)");
         }
     }
    #endif
@@ -650,6 +748,86 @@ int main (int argc, char* argv[])
             check (contains (catalog.getInstruments(), "SmartKeysTestSynth", "VST3"),
                    "\"Volver a buscar todos\" le da otra oportunidad");
         }
+    }
+
+    //==========================================================================
+    std::cout << "\n-- 9. Sólo los que tocan acordes: baterías y loops fuera (VST3 de verdad)" << std::endl;
+    {
+        // Copias del instrumento de prueba que se presentan como una batería ("Battery 4"), con la
+        // categoría VST3 de batería, como un reproductor de loops ("Arcade" de Output) y como un
+        // sampler de instrumentos (como Kontakt: ése sí)
+        const auto synth = pluginFolder.getChildFile ("SmartKeysTestSynth.vst3");
+        const auto original = synth.getChildFile ("Contents").getChildFile ("Resources").getChildFile ("moduleinfo.json").loadFileAsString();
+
+        struct Copy { const char* file; const char* name; const char* vendor; const char* subCategory; };
+        const Copy copies[] = {
+            { "Battery 4.vst3",    "Battery 4",    "Native Instruments", "Synth" },
+            { "Nova Kit.vst3",     "Nova Kit",     "MIWN Test",          "Drum" },
+            { "Arcade.vst3",       "Arcade",       "Output",             "Sampler" },
+            { "Keys Sampler.vst3", "Keys Sampler", "MIWN Test",          "Sampler" },
+        };
+
+        bool made = original.contains ("\"SmartKeysTestSynth\"") && original.contains ("\"Synth\",");
+        for (const auto& c : copies)
+        {
+            const auto bundle = pluginFolder.getChildFile (c.file);
+            bundle.deleteRecursively();
+            made = made && synth.copyDirectoryTo (bundle);
+            const auto info = bundle.getChildFile ("Contents").getChildFile ("Resources").getChildFile ("moduleinfo.json");
+            made = made && info.replaceWithText (original.replace ("\"SmartKeysTestSynth\"", "\"" + String (c.name) + "\"")
+                                                         .replace ("\"MIWN Test\"", "\"" + String (c.vendor) + "\"")
+                                                         .replace ("\"Synth\",", "\"" + String (c.subCategory) + "\","),
+                                                 false, false, nullptr);
+        }
+        check (made, "copias: \"Battery 4\", \"Nova Kit\" (Instrument|Drum), \"Arcade\" de Output y \"Keys Sampler\" (Instrument|Sampler)");
+
+        auto blacklisted = [&] (const char* file)
+        {
+            for (const auto& id : savedBlacklist())
+                if (sameFile (id, pluginFolder.getChildFile (file)))
+                    return true;
+            return false;
+        };
+
+        {
+            PluginCatalog catalog;
+            scanAndWait (catalog, true);
+            const auto list = catalog.getInstruments();
+            for (const auto& d : list)
+                if (d.pluginFormatName == "VST3")
+                    std::cout << "     VST3: " << d.manufacturerName << " · " << d.name << "  [" << d.category << "]" << std::endl;
+            check (! listedByName (list, "Battery 4"), "una batería (\"Battery 4\") no se ofrece");
+            check (! listedByName (list, "Nova Kit"), "un instrumento con la categoría VST3 \"Instrument|Drum\" tampoco");
+            check (! listedByName (list, "Arcade"), "ni un reproductor de loops (\"Arcade\" de Output)");
+            check (contains (list, "Keys Sampler", "VST3") && contains (list, "SmartKeysTestSynth", "VST3"),
+                   "un sampler de instrumentos (\"Instrument|Sampler\", como Kontakt) y el sinte de prueba sí");
+            check (blacklisted ("Battery 4.vst3") && blacklisted ("Nova Kit.vst3") && blacklisted ("Arcade.vst3")
+                     && ! blacklisted ("Keys Sampler.vst3"),
+                   "sus archivos quedan apartados (\"Buscar nuevos\" no los vuelve a abrir)");
+        }
+
+        // Una lista guardada por la 2.0.2 con baterías y loops se limpia al abrirla
+        if (auto xml = XmlDocument::parse (savedListFile()))
+        {
+            xml->addChildElement (describe ("Addictive Drums 2", "XLN Audio", true).createXml().release());
+            xml->addChildElement (describe ("XO", "XLN Audio", true).createXml().release());
+            xml->addChildElement (describe ("Stylus RMX", "Spectrasonics", true).createXml().release());
+            xml->writeTo (savedListFile());
+        }
+        check (listedByName (savedTypes(), "Addictive Drums 2") && listedByName (savedTypes(), "XO"),
+               "lista guardada por la 2.0.2 con Addictive Drums, XO y Stylus RMX");
+        {
+            PluginCatalog catalog;
+            const auto list = catalog.getInstruments();
+            check (! listedByName (list, "Addictive Drums 2") && ! listedByName (list, "XO") && ! listedByName (list, "Stylus RMX")
+                     && contains (list, "Keys Sampler", "VST3"),
+                   "al abrir no se ofrecen (los instrumentos siguen)");
+        }
+        check (! listedByName (savedTypes(), "Addictive Drums 2") && ! listedByName (savedTypes(), "Stylus RMX"),
+               "y la lista se guarda limpia");
+
+        for (const auto& c : copies)
+            pluginFolder.getChildFile (c.file).deleteRecursively();
     }
 
     userData.deleteRecursively();

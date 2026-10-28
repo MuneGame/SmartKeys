@@ -24,6 +24,11 @@
         los que dicen en su nombre o categoría efecto, analizador, ruteo, MIDI,
         utilidad o control; ni los que no tienen salida de audio (si al
         cargarlo resulta que no tiene, sale de la lista); ni el propio SmartKeys.
+      - SÓLO LOS QUE TOCAN ACORDES (2.0.3): fuera las baterías y percusiones
+        (VST3 "Instrument|Drum", Audio Unit con la etiqueta "Drums", nombres
+        como Battery, XO, EZdrummer, Kick 3…) y los reproductores de loops,
+        frases y samples ya hechos (Arcade, Stylus RMX, Serato Sample…).
+        Kontakt y los demás samplers siguen, y la percusión afinada también.
       - Carga protegida: si el programa se cerró mientras se creaba un plugin,
         al abrir otra vez el proyecto ese plugin no se carga solo (se avisa y
         se puede reintentar a mano). Así un plugin roto no deja el proyecto
@@ -78,11 +83,15 @@ public:
 
     // ¿Se puede cargar en la ranura? Un instrumento (isInstrument) que no sea SmartKeys, ni un
     // anfitrión de plugins / patcher / navegador de samples, cuyo nombre y categoría no digan
-    // efecto, analizador, ruteo, MIDI, utilidad o control y, si se saben sus canales, con
-    // salida de audio
+    // efecto, analizador, ruteo, MIDI, utilidad o control, que toque acordes (ni batería ni
+    // percusión ni loops) y, si se saben sus canales, con salida de audio
     static bool isLoadableInstrument (const juce::PluginDescription&);
     static bool isHostOrBrowser (const juce::PluginDescription&);       // nombre / fabricante
     static bool hasNonGeneratorName (const juce::PluginDescription&);   // nombre / categoría
+    static bool isDrumsOrLoops (const juce::PluginDescription&);        // nombre / categoría / fabricante
+
+    // ¿Una etiqueta de Audio Unit de batería o percusión? ("Drums"; también traducida: "Batería")
+    static bool isDrumTag (const juce::String& tag);
 
     // Al cargarlo no tenía salida de audio: ya no se ofrece (se guarda; "Volver a buscar
     // todos" le da otra oportunidad)
@@ -119,7 +128,8 @@ private:
 };
 
 #if JUCE_MAC
-// Instrumentos Audio Unit registrados (kAudioUnitType_MusicDevice), sin instanciarlos
+// Instrumentos Audio Unit registrados (kAudioUnitType_MusicDevice), sin instanciarlos. Los que
+// el sistema etiqueta como batería o percusión llevan la categoría "Synth|Drums".
 juce::Array<juce::PluginDescription> listAudioUnitInstruments();
 #endif
 

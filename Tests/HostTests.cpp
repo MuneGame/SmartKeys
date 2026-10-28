@@ -487,8 +487,11 @@ public:
         const double blockMs = 1000.0 * blockSize / sampleRate;
         double next = Time::getMillisecondCounterHiRes();
         const double end = next + seconds * 1000.0;
+        realtimeLateMs = 0.0;
         while (Time::getMillisecondCounterHiRes() < end)
         {
+            // Cuánto llega tarde este bloque (la máquina de pruebas atascada, no el plugin)
+            realtimeLateMs = jmax (realtimeLateMs, Time::getMillisecondCounterHiRes() - next);
             auto r = run ({}, sineHz, amplitude);
             total.midi.insert (total.midi.end(), r.midi.begin(), r.midi.end());
             total.outputRms = jmax (total.outputRms, r.outputRms);
@@ -499,6 +502,8 @@ public:
         }
         return total;
     }
+
+    double realtimeLateMs = 0.0;   // el bloque más atrasado del último runRealtime
 
 private:
     std::unique_ptr<AudioPluginInstance> plugin;
@@ -664,9 +669,32 @@ struct SynthLog
     int countNoteOn() const        { int n = 0; for (auto& e : events) n += e.isNoteOn() ? 1 : 0; return n; }
 };
 
+// El instrumento de prueba escribe lo que recibe cada 10 ms (su temporizador, en el hilo de
+// mensajes). Se espera a que el archivo deje de crecer durante 100 ms: así está todo escrito
+// aunque la máquina de pruebas vaya atascada (hasta 3 s)
+void waitForSynthLog (double minMs)
+{
+    const double start = Time::getMillisecondCounterHiRes();
+    double quietSince = start;
+    int64 lastSize = gSynthLog.getSize();
+    for (;;)
+    {
+        MessageManager::getInstance()->runDispatchLoopUntil (20);
+        const double now = Time::getMillisecondCounterHiRes();
+        const int64 size = gSynthLog.getSize();
+        if (size != lastSize)
+        {
+            lastSize = size;
+            quietSince = now;
+        }
+        if ((now - start >= minMs && now - quietSince >= 100.0) || now - start >= 3000.0)
+            return;
+    }
+}
+
 int synthLogLines()
 {
-    MessageManager::getInstance()->runDispatchLoopUntil (60);   // lo pendiente del instrumento, ya escrito
+    waitForSynthLog (60.0);   // lo pendiente del instrumento, ya escrito
     StringArray l;
     gSynthLog.readLines (l);
     l.removeEmptyStrings();
@@ -675,7 +703,7 @@ int synthLogLines()
 
 SynthLog readSynthLog (int fromLine)
 {
-    MessageManager::getInstance()->runDispatchLoopUntil (80);   // el instrumento escribe cada 10 ms
+    waitForSynthLog (80.0);   // el instrumento escribe cada 10 ms
 
     StringArray all;
     gSynthLog.readLines (all);
@@ -1768,26 +1796,49 @@ void testSystemMic (const String& path)
     host.setChoice ("Mode", 0);
     host.setChoice ("Chord Type", 0);
     host.setChoice ("Mic Gate", 0);
-    host.setBool ("Mic Voice Controller", true);
+    // 1) Entrada del plugin en silencio digital: el micrófono del sistema. 2) El DAW manda voz
+    //    por la entrada del plugin: manda esa (Do4 -> Do mayor). 3) La entrada vuelve al silencio:
+    //    el micrófono del sistema vuelve solo. Con la máquina de pruebas atascada (el propio
+    //    bucle de la prueba llega tarde más de 2 bloques) la voz llega a trompicones: se repite
+    //    (hasta 3 veces). Si la prueba iba a su hora, cuenta tal cual.
+    constexpr double stallMs = 22.0;
+    BlockResult sing, daw, back;
+    std::set<int> on, onDaw, onBack;
+    for (int attempt = 1; attempt <= 3; ++attempt)
+    {
+        host.setBool ("Mic Voice Controller", true);
+        sing = host.runRealtime (2.0);
+        double late = host.realtimeLateMs;
+        daw = host.runRealtime (1.2, 261.63, 0.3);
+        late = jmax (late, host.realtimeLateMs);
+        back = host.runRealtime (5.0);
+        late = jmax (late, host.realtimeLateMs);
 
-    auto sing = host.runRealtime (2.0);   // entrada del plugin: silencio digital
-    const auto on = sing.notesOn (1);
+        on = sing.notesOn (1);
+        onDaw = daw.notesOn (1);
+        onBack = back.notesOn (1);
+        const bool ok = on.size() == 3 && pitchClasses (on) == std::set<int> { 9, 0, 4 }
+                        && sing.outputRms > 1.0e-3f && sing.channelsUsed() == std::set<int> { 1 }
+                        && pitchClasses (onDaw) == std::set<int> { 0, 4, 7 } && daw.notesOff (1) == on
+                        && pitchClasses (onBack) == std::set<int> { 9, 0, 4 };
+        if (ok || late <= stallMs || attempt == 3)
+            break;
+
+        std::cout << "     (la máquina de pruebas se atascó " << String (late, 1) << " ms: se repite)" << std::endl;
+        host.setBool ("Mic Voice Controller", false);
+        host.runRealtime (1.0);   // suelta lo que suene
+    }
+
     std::cout << "     entrada del plugin en silencio, micrófono del sistema con La3 -> " << describe (on) << std::endl;
     check (on.size() == 3 && pitchClasses (on) == std::set<int> { 9, 0, 4 },
            "MIC VOICE lee el micrófono del sistema sin ruteo: La3 -> La menor completo por MIDI");
     check (sing.outputRms > 1.0e-3f, "y el instrumento cargado lo toca");
     check (sing.channelsUsed() == std::set<int> { 1 }, "por el canal 1");
 
-    // Si el DAW manda voz por la entrada del plugin, manda esa: Do4 -> Do mayor
-    auto daw = host.runRealtime (1.2, 261.63, 0.3);
-    const auto onDaw = daw.notesOn (1);
-    std::cout << "     el DAW manda Do4 por la entrada -> " << describe (onDaw) << std::endl;
+    std::cout << "     el DAW manda Do4 por la entrada -> " << describe (onDaw) << "; se sueltan " << describe (daw.notesOff (1)) << std::endl;
     check (pitchClasses (onDaw) == std::set<int> { 0, 4, 7 } && daw.notesOff (1) == on,
            "con audio en la entrada del plugin, se usa esa voz (se suelta La menor, suena Do mayor)");
 
-    // La entrada vuelve al silencio: el micrófono del sistema vuelve solo
-    auto back = host.runRealtime (5.0);
-    const auto onBack = back.notesOn (1);
     std::cout << "     la entrada vuelve al silencio -> " << describe (onBack) << std::endl;
     check (pitchClasses (onBack) == std::set<int> { 9, 0, 4 }, "al callar la entrada, vuelve a sonar la voz del micrófono del sistema");
 
@@ -1967,7 +2018,27 @@ struct PortScenario
     std::vector<PortEvent> port;     // lo que salió por el teclado
     double t0 = 0.0;
     int echoes = 0;                  // eventos devueltos al plugin (bucle simulado)
+    double lateMs = 0.0;             // el bloque más atrasado del hilo de audio de la prueba
 };
+
+// Con la máquina de pruebas atascada (su propio hilo de audio llega tarde más de 2 bloques),
+// una medida de tiempo no vale: se repite (hasta 3 veces). Si la prueba iba a su hora, cuenta.
+constexpr double kHarnessStallMs = 22.0;
+
+template <typename RunFn>
+PortScenario runTimedPortScenario (RunFn&& run)
+{
+    PortScenario sc;
+    for (int attempt = 1; attempt <= 3; ++attempt)
+    {
+        sc = run();
+        if (sc.lateMs <= kHarnessStallMs)
+            break;
+        std::cout << "     (la máquina de pruebas se atascó " << String (sc.lateMs, 1) << " ms"
+                  << (attempt < 3 ? ": se repite)" : ")") << std::endl;
+    }
+    return sc;
+}
 
 // Espera precisa hasta 'targetMs' (duerme y, el último milisegundo y medio, cede el procesador)
 void waitUntilMs (double targetMs)
@@ -2022,6 +2093,12 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
 
     AudioThread audio ([&]
     {
+        // El tiempo empieza cuando el hilo de audio arranca de verdad (como el de un DAW cuando el
+        // dispositivo empieza a pedir bloques): en la Mac de GitHub, arrancar un hilo de tiempo
+        // real puede tardar ~100 ms, y contar desde antes obligaba a procesar de golpe los
+        // bloques atrasados
+        sc.t0 = Time::getMillisecondCounterHiRes() + 2.0;
+
         size_t nextUser = 0, nextSecond = 0;
         for (int k = 0; k < numBlocks; ++k)
         {
@@ -2096,7 +2173,6 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
         waitUntilMs (sc.t0 + (double) numBlocks * blockMs);
     });
 
-    sc.t0 = Time::getMillisecondCounterHiRes() + 2.0;
     if (! audio.startRealtimeThread (Thread::RealtimeOptions{}.withPeriodMs (blockMs).withMaximumProcessingTimeMs (blockMs * 0.8)))
         audio.startThread (Thread::Priority::highest);
 
@@ -2106,6 +2182,7 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
 
     for (auto& e : tap.poll())
         sc.port.push_back (e);
+    sc.lateMs = maxBlockLateMs;
 
     if (SystemStats::getEnvironmentVariable ("SMARTKEYS_PORT_DEBUG", {}).isNotEmpty() && (! sc.out.midi.empty() || ! sc.port.empty()))
         std::cout << "     [hilo de audio de la prueba] bloque más atrasado: " << String (maxBlockLateMs, 2) << " ms" << std::endl;
@@ -2259,8 +2336,12 @@ void testChordPort (const String& path)
 
     std::cout << "\n-- P2. Una tecla -> el acorde COMPLETO sale por el teclado, todas las notas a la vez" << std::endl;
     {
-        auto sc = runPortScenario (host, *tap, 0.8, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
-                                                      { 400.0, MidiMessage::noteOff (1, 54) } }, false);
+        auto sc = runTimedPortScenario ([&]
+        {
+            runPortScenario (host, *tap, 0.1, {}, false);   // descarta lo anterior
+            return runPortScenario (host, *tap, 0.8, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                       { 400.0, MidiMessage::noteOff (1, 54) } }, false);
+        });
         std::set<double> outSamples;
         for (auto& m : sc.out.midi)
             if (m.isNoteOn())
@@ -2298,9 +2379,12 @@ void testChordPort (const String& path)
     {
         host.setText ("Strum Speed", "41");
         host.setChoice ("Strum Direction", 1);
-        runPortScenario (host, *tap, 0.1, {}, false);
-        auto sc = runPortScenario (host, *tap, 1.1, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
-                                                      { 800.0, MidiMessage::noteOff (1, 54) } }, false);
+        auto sc = runTimedPortScenario ([&]
+        {
+            runPortScenario (host, *tap, 0.1, {}, false);
+            return runPortScenario (host, *tap, 1.1, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                       { 800.0, MidiMessage::noteOff (1, 54) } }, false);
+        });
         std::map<int, double> outAt, portAt;
         for (auto& m : sc.out.midi)
             if (m.isNoteOn() && outAt.count (m.getNoteNumber()) == 0)
@@ -2323,8 +2407,12 @@ void testChordPort (const String& path)
         check (hangingPortNotes (sc.port) == 0, "al soltar, ninguna nota colgada");
 
         // FL Studio parte su búfer y procesa los trozos de golpe: el desfase se conserva igual
-        auto fl = runPortScenario (host, *tap, 1.1, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
-                                                      { 800.0, MidiMessage::noteOff (1, 54) } }, false, 4);
+        auto fl = runTimedPortScenario ([&]
+        {
+            runPortScenario (host, *tap, 0.1, {}, false);
+            return runPortScenario (host, *tap, 1.1, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
+                                                       { 800.0, MidiMessage::noteOff (1, 54) } }, false, 4);
+        });
         std::map<int, double> flAt;
         for (auto& e : fl.port)
             if (e.isNoteOn() && flAt.count (e.data1) == 0)

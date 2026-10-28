@@ -13,12 +13,17 @@
     ("AudioUnit:Synths/aumu,SUBT,MANU") para que la carga y los proyectos
     guardados encuentren el mismo plugin.
 
+    2.0.3: las etiquetas de cada uno ("Drums", "Synthesizer"…), también del
+    registro (AVAudioUnitComponentManager, sin abrirlos). Los de batería o
+    percusión llevan la categoría "Synth|Drums" y el catálogo no los ofrece.
+
   ==============================================================================
 */
 
 #include "PluginCatalog.h"
 
 #include <AudioToolbox/AudioToolbox.h>
+#import <AVFoundation/AVFoundation.h>
 
 namespace smartkeys
 {
@@ -32,9 +37,40 @@ static juce::String osTypeToString (OSType type)
     return juce::String (s, 4);
 }
 
+// Los instrumentos que el sistema etiqueta como batería o percusión ("SUBT,MANU" de cada uno).
+// macOS da las etiquetas estándar traducidas ("Batería") y las del usuario.
+static juce::StringArray drumTaggedInstruments()
+{
+    juce::StringArray result;
+
+    @autoreleasepool
+    {
+        AudioComponentDescription wanted {};
+        wanted.componentType = kAudioUnitType_MusicDevice;
+
+        NSArray<AVAudioUnitComponent*>* components = [[AVAudioUnitComponentManager sharedAudioUnitComponentManager]
+                                                          componentsMatchingDescription: wanted];
+        for (AVAudioUnitComponent* component in components)
+        {
+            bool drums = false;
+            for (NSString* tag in [component allTagNames])
+                drums = drums || PluginCatalog::isDrumTag (juce::String::fromUTF8 ([tag UTF8String]));
+
+            if (drums)
+            {
+                const auto desc = [component audioComponentDescription];
+                result.add (osTypeToString (desc.componentSubType) + "," + osTypeToString (desc.componentManufacturer));
+            }
+        }
+    }
+
+    return result;
+}
+
 juce::Array<juce::PluginDescription> listAudioUnitInstruments()
 {
     juce::Array<juce::PluginDescription> result;
+    const auto drumTagged = drumTaggedInstruments();
 
     AudioComponentDescription wanted {};
     wanted.componentType = kAudioUnitType_MusicDevice;
@@ -75,7 +111,8 @@ juce::Array<juce::PluginDescription> listAudioUnitInstruments()
         d.manufacturerName = manufacturer;
         d.version = version;
         d.pluginFormatName = "AudioUnit";
-        d.category = "Synth";
+        d.category = drumTagged.contains (osTypeToString (desc.componentSubType) + "," + osTypeToString (desc.componentManufacturer))
+                         ? "Synth|Drums" : "Synth";
         d.isInstrument = true;
         d.fileOrIdentifier = "AudioUnit:Synths/" + osTypeToString (desc.componentType) + ","
                            + osTypeToString (desc.componentSubType) + ","

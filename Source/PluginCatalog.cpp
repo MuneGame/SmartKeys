@@ -51,6 +51,107 @@ namespace
         "splice bridge",
     };
 
+    // SÓLO INSTRUMENTOS QUE TOCAN ACORDES (2.0.3). SmartKeys les manda progresiones y armonías:
+    // fuera las baterías y percusiones (cajas de ritmos, samplers de batería) y los reproductores
+    // de loops, frases y samples ya hechos. Kontakt y los demás samplers siguen (cargan pianos,
+    // cuerdas…), igual que la percusión afinada (marimba, vibráfono…), que sí toca acordes.
+    //
+    //  - batería y percusión: palabras enteras en el nombre o en la categoría (VST3:
+    //    "Instrument|Drum"; Audio Unit: su etiqueta "Drums", ver HostingMac.mm)
+    constexpr const char* kRhythmWords[] = {
+        "drum", "drums", "drummer", "drumkit", "drumkits", "percussion", "percussions", "perc", "percs",
+        "kick", "kicks", "snare", "snares", "hihat", "hihats", "cymbal", "cymbals", "clap", "claps",
+        "conga", "congas", "bongo", "bongos", "tabla", "cajon", "taiko", "djembe", "timbales",
+        "beat", "beats", "groove", "grooves", "groovebox",
+        "808", "909", "606", "707", "727",   // cajas de ritmos de Roland (TR-808…)
+    };
+
+    //    y en el fabricante ("GetGood Drums", "Steven Slate Drums")
+    constexpr const char* kRhythmMakerWords[] = { "drum", "drums", "drummer", "percussion" };
+
+    //  - trozos de nombres pegados: EZdrummer, DrumGizmo, MTPowerDrumKit, Kick3, Beatmaker…
+    constexpr const char* kRhythmParts[] = {
+        "drum", "percussion", "snare", "hihat", "kick", "beatmaker", "beatbox", "breakbeat",
+        "heartbeat", "groovebox", "grooveagent", "ssdsampler",
+    };
+
+    //  - loops, frases y samples ya hechos: palabras enteras en el nombre o en la categoría
+    //    ("Sampler" no: Kontakt, HALion o Decent Sampler cargan instrumentos que tocan acordes)
+    constexpr const char* kLoopWords[] = {
+        "loop", "loops", "looper", "phrase", "phrases", "breaks", "breakbeat", "breakbeats",
+        "oneshot", "oneshots", "sample", "samples", "slicer", "construction", "sfx", "foley",
+    };
+    constexpr const char* kLoopParts[] = { "loopmash", "breaktweaker" };
+
+    //  - los conocidos cuyo nombre no lo dice (con su fabricante si el nombre solo es ambiguo)
+    struct KnownPlugin
+    {
+        const char* name;    // palabra entera del nombre
+        const char* maker;   // palabra entera del fabricante (nullptr: cualquiera)
+    };
+    constexpr KnownPlugin kKnownRhythmAndLoops[] = {
+        { "battery", nullptr },          // Native Instruments Battery
+        { "xo", nullptr },               // XLN Audio XO
+        { "microtonic", nullptr },       // Sonic Charge Microtonic
+        { "nerve", nullptr },            // Xfer Records Nerve
+        { "sitala", nullptr },
+        { "bfd", nullptr }, { "bfd2", nullptr }, { "bfd3", nullptr },
+        { "geist", nullptr }, { "geist2", nullptr },
+        { "tremor", nullptr },           // Native Instruments Tremor
+        { "punchbox", nullptr },         // D16 Group
+        { "nepheton", nullptr },         // D16 Group (808)
+        { "nithonat", nullptr },         // D16 Group (606)
+        { "maschine", nullptr },         // groovebox de Native Instruments
+        { "mpc", nullptr },              // groovebox de Akai
+        { "ssd5", nullptr },             // Steven Slate Drums
+        { "transfuser", nullptr },       // AIR Transfuser (loops y ritmos)
+        { "spark", "arturia" },          // Arturia Spark (caja de ritmos)
+        { "atlas", "algonaut" },         // Algonaut Atlas (samples de batería)
+        { "backbone", "steinberg" },     // Steinberg Backbone (diseño de baterías)
+        { "trigger", "slate" },          // Slate Trigger (reemplazo de batería)
+        { "strike", "air" },             // AIR Strike (batería)
+        { "boom", "air" },               // AIR Boom (caja de ritmos)
+        { "punch", "papen" },            // Rob Papen Punch (batería)
+        { "egoist", "sugar" },           // Sugar Bytes Egoist (loops troceados)
+        { "adm", "audiorealism" },       // AudioRealism Drum Machine
+        { "stylus", "spectrasonics" },   // Stylus RMX (grooves)
+        { "arcade", "output" },          // Output Arcade (loops)
+    };
+
+    //  - la percusión afinada sí toca acordes: con una de estas palabras, "percussion" no basta
+    constexpr const char* kTunedPercussionWords[] = {
+        "tuned", "marimba", "vibraphone", "vibes", "glockenspiel", "glock", "celesta", "celeste",
+        "xylophone", "kalimba", "handpan", "steelpan", "mallet", "mallets",
+    };
+
+    //  - etiquetas de Audio Unit de batería o percusión, también traducidas por macOS
+    constexpr const char* kDrumTagWords[] = {
+        "drum", "drums", "percussion", "percussions",
+        "bateria", "percusion", "percussao", "batterie", "batteria", "percussioni", "schlagzeug", "perkussion",
+    };
+
+    // "Batería" -> "bateria" (las etiquetas traducidas se comparan sin acentos)
+    juce::String withoutAccents (const juce::String& text)
+    {
+        return text.toLowerCase().replaceCharacters (juce::String (juce::CharPointer_UTF8 ("\xc3\xa1\xc3\xa0\xc3\xa2\xc3\xa4\xc3\xa3"
+                                                                                            "\xc3\xa9\xc3\xa8\xc3\xaa\xc3\xab"
+                                                                                            "\xc3\xad\xc3\xac\xc3\xae\xc3\xaf"
+                                                                                            "\xc3\xb3\xc3\xb2\xc3\xb4\xc3\xb6\xc3\xb5"
+                                                                                            "\xc3\xba\xc3\xb9\xc3\xbb\xc3\xbc"
+                                                                                            "\xc3\xa7\xc3\xb1")),
+                                                     "aaaaaeeeeiiiiooooouuuucn");
+    }
+
+    // Sólo letras y números, en minúsculas: "EZdrummer 3" -> "ezdrummer3"
+    juce::String lettersOf (const juce::String& text)
+    {
+        juce::String letters;
+        for (auto c : text.toLowerCase())
+            if (juce::CharacterFunctions::isLetterOrDigit (c))
+                letters << juce::String::charToString (c);
+        return letters;
+    }
+
     // " palabra1 palabra2 " en minúsculas: todo lo que no es letra o número separa
     juce::String wordsOf (const juce::String& text)
     {
@@ -185,11 +286,54 @@ bool PluginCatalog::hasNonGeneratorName (const juce::PluginDescription& d)
             return true;
 
     // Nombres pegados ("AGridder", "AudioGridderInst"): sólo letras y números
-    juce::String letters;
-    for (auto c : (d.name + " " + d.descriptiveName).toLowerCase())
-        if (juce::CharacterFunctions::isLetterOrDigit (c))
-            letters << juce::String::charToString (c);
+    const auto letters = lettersOf (d.name + " " + d.descriptiveName);
     for (auto* part : kNotAGeneratorParts)
+        if (letters.contains (part))
+            return true;
+    return false;
+}
+
+bool PluginCatalog::isDrumTag (const juce::String& tag)
+{
+    const auto words = wordsOf (withoutAccents (tag));
+    for (auto* word : kDrumTagWords)
+        if (containsWord (words, word))
+            return true;
+    return false;
+}
+
+bool PluginCatalog::isDrumsOrLoops (const juce::PluginDescription& d)
+{
+    const auto nameWords = wordsOf (d.name + " " + d.descriptiveName);
+    const auto words = wordsOf (d.name + " " + d.descriptiveName + " " + d.category);
+    const auto makerWords = wordsOf (d.manufacturerName);
+    const auto letters = lettersOf (d.name + " " + d.descriptiveName);
+
+    // Loops, frases y samples ya hechos
+    for (auto* word : kLoopWords)
+        if (containsWord (words, word))
+            return true;
+    for (auto* part : kLoopParts)
+        if (letters.contains (part))
+            return true;
+
+    // Los conocidos (Battery, XO, Arturia Spark, Output Arcade…)
+    for (const auto& known : kKnownRhythmAndLoops)
+        if (containsWord (nameWords, known.name) && (known.maker == nullptr || containsWord (makerWords, known.maker)))
+            return true;
+
+    // Batería y percusión (la percusión afinada sí toca acordes)
+    for (auto* word : kTunedPercussionWords)
+        if (containsWord (nameWords, word))
+            return false;
+
+    for (auto* word : kRhythmWords)
+        if (containsWord (words, word))
+            return true;
+    for (auto* word : kRhythmMakerWords)
+        if (containsWord (makerWords, word))
+            return true;
+    for (auto* part : kRhythmParts)
         if (letters.contains (part))
             return true;
     return false;
@@ -197,7 +341,7 @@ bool PluginCatalog::hasNonGeneratorName (const juce::PluginDescription& d)
 
 bool PluginCatalog::isLoadableInstrument (const juce::PluginDescription& d)
 {
-    if (! d.isInstrument || isSmartKeysItself (d) || isHostOrBrowser (d) || hasNonGeneratorName (d))
+    if (! d.isInstrument || isSmartKeysItself (d) || isHostOrBrowser (d) || hasNonGeneratorName (d) || isDrumsOrLoops (d))
         return false;
 
     // Si se saben sus canales (tiene entradas declaradas) y no tiene salidas, no suena

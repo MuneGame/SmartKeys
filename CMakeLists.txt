@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SmartKeys VERSION 2.0.2 LANGUAGES C CXX)
+project(SmartKeys VERSION 2.0.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -300,7 +300,9 @@ if(SMARTKEYS_BUILD_HOST_TESTS)
     target_sources(SmartKeysCatalogTests PRIVATE Tests/CatalogTests.cpp Source/PluginCatalog.cpp Source/Presets.cpp
                                                  Source/HostedInstrument.cpp)
     if(APPLE)
+        # Audio Unit del sistema; 2.0.3: sus etiquetas ("Drums"), de AVAudioUnitComponentManager
         target_sources(SmartKeysCatalogTests PRIVATE Source/HostingMac.mm)
+        target_link_libraries(SmartKeysCatalogTests PRIVATE "-framework AVFoundation")
     endif()
     target_include_directories(SmartKeysCatalogTests PRIVATE Source)
     target_compile_definitions(SmartKeysCatalogTests PRIVATE

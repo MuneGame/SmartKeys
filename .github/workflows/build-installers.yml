@@ -43,6 +43,12 @@
 #  La búsqueda descarta AGridder / Element y utilidades que se declaran
 #  instrumento.
 #
+#  2.0.3 — sólo instrumentos que tocan acordes: fuera baterías, percusiones y
+#  reproductores de loops. Copias del instrumento de prueba que se llaman
+#  "Battery 4", con la categoría VST3 "Instrument|Drum" o "Arcade" de Output no
+#  aparecen (un "sampler" como Kontakt, sí); en la Mac, una copia del AU de
+#  prueba con la etiqueta "Drums" tampoco.
+#
 #  Se ejecuta en cada push a main o manualmente desde la pestaña "Actions".
 #  Los instaladores se publican en la Release v<versión> y en la rama "installers".
 # ==============================================================================
@@ -57,7 +63,7 @@ permissions:
   contents: write
 
 env:
-  SK_VERSION: "2.0.2"
+  SK_VERSION: "2.0.3"
 
 jobs:
   macos:
@@ -285,9 +291,22 @@ jobs:
           mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
           cp -R build-mic/SmartKeysTestSynth_artefacts/Release/AU/SmartKeysTestSynth.component \
                 build-mic/SmartKeysTestFx_artefacts/Release/AU/SmartKeysTestFx.component "$HOME/Library/Audio/Plug-Ins/Components/"
+          # 2.0.3: una copia del instrumento de prueba con la etiqueta "Drums" (otro código y otro
+          # nombre): la lista de SmartKeys no debe ofrecerla
+          T="$HOME/Library/Audio/Plug-Ins/Components/SmartKeysTestTagged.component"
+          rm -rf "$T"
+          cp -R build-mic/SmartKeysTestSynth_artefacts/Release/AU/SmartKeysTestSynth.component "$T"
+          P="$T/Contents/Info.plist"
+          plutil -replace CFBundleIdentifier -string com.miwn.smartkeys.testsynth.tagged "$P"
+          plutil -replace AudioComponents.0.subtype -string Tsyd "$P"
+          plutil -replace AudioComponents.0.name -string "MIWN Test: SmartKeysTestTagged" "$P"
+          plutil -remove AudioComponents.0.tags "$P" 2>/dev/null || true
+          plutil -insert AudioComponents.0.tags -json '["Drums"]' "$P"
+          plutil -p "$P" | grep -A4 -i -e '"tags"' -e '"subtype"' || true
+          codesign --force --sign - "$T"
           killall -9 AudioComponentRegistrar || true
           sleep 3
-          auval -a | grep -i -e Tsyn -e Tsfx -e "MIWN Test" || true
+          auval -a | grep -i -e Tsyn -e Tsyd -e Tsfx -e "MIWN Test" || true
           auval -v aumu Tsyn Miwt | tail -n 12
           auval -v aufx Tsfx Miwt | tail -n 4
 
@@ -306,6 +325,7 @@ jobs:
       - name: Catálogo de instrumentos (Audio Unit del sistema y búsqueda de VST3)
         env:
           SMARTKEYS_EXPECT_TEST_AU: "1"
+          SMARTKEYS_EXPECT_TAGGED_AU: "1"
         run: |
           mkdir -p "$RUNNER_TEMP/vst3scan"
           cp -R build-mic/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3 \
@@ -501,6 +521,7 @@ jobs:
           NOTES="Instaladores de SmartKeys $SK_VERSION (MIWN) compilados y probados automáticamente (commit ${GITHUB_SHA::7}).
           - macOS: SmartKeys-$SK_VERSION-macOS.pkg (Apple Silicon + Intel; VST3, AU y Standalone)
           - Windows: SmartKeys-$SK_VERSION-Windows-Setup.exe (VST3 y Standalone)
+          2.0.3: la búsqueda de instrumentos sólo ofrece los que tocan acordes (sintes, pianos, samplers como Kontakt, cuerdas, bajos…): fuera baterías, cajas de ritmos, percusiones (Battery, Addictive Drums, EZdrummer, XO, Kick…) y reproductores de loops y samples ya hechos (Arcade, Stylus RMX, Serato Sample…); la percusión afinada (marimba, vibráfono) sigue.
           2.0.2: la interfaz del instrumento cargado se ve DENTRO de la ventana de SmartKeys (VIEW: SMARTKEYS / SYNTH; la ventana toma su tamaño y sigue su zoom; cambiar de vista es instantáneo y no corta el sonido); el teclado de la computadora sigue tocando acordes aunque toques una perilla o elijas un preset en el plugin; la búsqueda sólo ofrece sintes, samplers y romplers (fuera AGridder, Element, patchers, utilidades MIDI / de ruteo y lo que no tenga salida de audio); un doble clic en una perilla la devuelve a su valor por defecto como un solo cambio para el DAW.
           2.0.1: una tecla, un acorde (un NoteOn repetido, un rebote del ratón en el borde de una tecla o la misma tecla por dos canales ya no disparan dos acordes ni tartamudean); panel KEY con 12 botones separados (sólo la tónica en magenta, nunca toca notas); la ventana del instrumento ya no le quita el teclado a SmartKeys; la búsqueda sólo ofrece instrumentos (sin efectos, patchers ni navegadores de samples).
           2.0: SmartKeys es un contenedor de instrumentos (estilo Kontakt / PatchWork). Carga un VST3 o un Audio Unit en su ranura (+ LOAD PLUGIN), le toca los acordes completos (con STRUM) y su sonido sale por SmartKeys; su interfaz se abre desde SmartKeys; BYPASS / UNLOAD; presets propios de SmartKeys. Ya no tiene piano interno.
