@@ -487,12 +487,14 @@ public:
         const double blockMs = 1000.0 * blockSize / sampleRate;
         double next = Time::getMillisecondCounterHiRes();
         const double end = next + seconds * 1000.0;
-        realtimeLateMs = 0.0;
+        realtimeLateMs = realtimeProcessMs = 0.0;
         while (Time::getMillisecondCounterHiRes() < end)
         {
-            // Cuánto llega tarde este bloque (la máquina de pruebas atascada, no el plugin)
-            realtimeLateMs = jmax (realtimeLateMs, Time::getMillisecondCounterHiRes() - next);
+            // Cuánto llega tarde este bloque (la máquina de pruebas atascada) y cuánto tarda el plugin
+            const double processStart = Time::getMillisecondCounterHiRes();
+            realtimeLateMs = jmax (realtimeLateMs, processStart - next);
             auto r = run ({}, sineHz, amplitude);
+            realtimeProcessMs = jmax (realtimeProcessMs, Time::getMillisecondCounterHiRes() - processStart);
             total.midi.insert (total.midi.end(), r.midi.begin(), r.midi.end());
             total.outputRms = jmax (total.outputRms, r.outputRms);
             next += blockMs;
@@ -503,7 +505,8 @@ public:
         return total;
     }
 
-    double realtimeLateMs = 0.0;   // el bloque más atrasado del último runRealtime
+    double realtimeLateMs = 0.0;     // el bloque más atrasado del último runRealtime
+    double realtimeProcessMs = 0.0;  // y el que más tardó en procesarse
 
 private:
     std::unique_ptr<AudioPluginInstance> plugin;
@@ -1802,17 +1805,20 @@ void testSystemMic (const String& path)
     //    bucle de la prueba llega tarde más de 2 bloques) la voz llega a trompicones: se repite
     //    (hasta 3 veces). Si la prueba iba a su hora, cuenta tal cual.
     constexpr double stallMs = 22.0;
+    constexpr int attempts = 6;
     BlockResult sing, daw, back;
     std::set<int> on, onDaw, onBack;
-    for (int attempt = 1; attempt <= 3; ++attempt)
+    for (int attempt = 1; attempt <= attempts; ++attempt)
     {
         host.setBool ("Mic Voice Controller", true);
         sing = host.runRealtime (2.0);
-        double late = host.realtimeLateMs;
+        double late = host.realtimeLateMs, process = host.realtimeProcessMs;
         daw = host.runRealtime (1.2, 261.63, 0.3);
         late = jmax (late, host.realtimeLateMs);
+        process = jmax (process, host.realtimeProcessMs);
         back = host.runRealtime (5.0);
         late = jmax (late, host.realtimeLateMs);
+        process = jmax (process, host.realtimeProcessMs);
 
         on = sing.notesOn (1);
         onDaw = daw.notesOn (1);
@@ -1821,10 +1827,11 @@ void testSystemMic (const String& path)
                         && sing.outputRms > 1.0e-3f && sing.channelsUsed() == std::set<int> { 1 }
                         && pitchClasses (onDaw) == std::set<int> { 0, 4, 7 } && daw.notesOff (1) == on
                         && pitchClasses (onBack) == std::set<int> { 9, 0, 4 };
-        if (ok || late <= stallMs || attempt == 3)
+        if (ok || late <= stallMs || process > stallMs || attempt == attempts)
             break;
 
-        std::cout << "     (la máquina de pruebas se atascó " << String (late, 1) << " ms: se repite)" << std::endl;
+        std::cout << "     (la máquina de pruebas se atascó " << String (late, 1) << " ms; el processBlock más largo, "
+                  << String (process, 2) << " ms: se repite)" << std::endl;
         host.setBool ("Mic Voice Controller", false);
         host.runRealtime (1.0);   // suelta lo que suene
     }
@@ -2019,23 +2026,27 @@ struct PortScenario
     double t0 = 0.0;
     int echoes = 0;                  // eventos devueltos al plugin (bucle simulado)
     double lateMs = 0.0;             // el bloque más atrasado del hilo de audio de la prueba
+    double processMs = 0.0;          // el bloque que más tardó en procesarse (processBlock del plugin)
 };
 
-// Con la máquina de pruebas atascada (su propio hilo de audio llega tarde más de 2 bloques),
-// una medida de tiempo no vale: se repite (hasta 3 veces). Si la prueba iba a su hora, cuenta.
+// Con la máquina de pruebas atascada (su propio hilo de audio llega tarde más de 2 bloques
+// aunque el processBlock del plugin fue rápido), una medida de tiempo no vale: se repite (hasta 6
+// veces). Si la prueba iba a su hora, cuenta. Si el que tardó fue el processBlock, cuenta tal
+// cual: eso sí sería de SmartKeys.
 constexpr double kHarnessStallMs = 22.0;
+constexpr int kTimedAttempts = 6;
 
 template <typename RunFn>
 PortScenario runTimedPortScenario (RunFn&& run)
 {
     PortScenario sc;
-    for (int attempt = 1; attempt <= 3; ++attempt)
+    for (int attempt = 1; attempt <= kTimedAttempts; ++attempt)
     {
         sc = run();
-        if (sc.lateMs <= kHarnessStallMs)
+        if (sc.lateMs <= kHarnessStallMs || sc.processMs > kHarnessStallMs)
             break;
-        std::cout << "     (la máquina de pruebas se atascó " << String (sc.lateMs, 1) << " ms"
-                  << (attempt < 3 ? ": se repite)" : ")") << std::endl;
+        std::cout << "     (la máquina de pruebas se atascó " << String (sc.lateMs, 1) << " ms; el processBlock más largo, "
+                  << String (sc.processMs, 2) << " ms" << (attempt < kTimedAttempts ? ": se repite)" : ")") << std::endl;
     }
     return sc;
 }
@@ -2089,7 +2100,7 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
     PortScenario sc;
     const double blockMs = 1000.0 * Host::blockSize / Host::sampleRate;
     const int numBlocks = (int) std::floor (seconds * 1000.0 / blockMs) + 1;
-    double maxBlockLateMs = 0.0;
+    double maxBlockLateMs = 0.0, maxProcessMs = 0.0;
 
     AudioThread audio ([&]
     {
@@ -2104,7 +2115,9 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
         {
             const double blockStart = sc.t0 + (double) k * blockMs;
             waitUntilMs (blockStart);
-            maxBlockLateMs = jmax (maxBlockLateMs, Time::getMillisecondCounterHiRes() - blockStart);
+            const double processStart = Time::getMillisecondCounterHiRes();
+            maxBlockLateMs = jmax (maxBlockLateMs, processStart - blockStart);
+            const ScopeGuard measureProcess { [&] { maxProcessMs = jmax (maxProcessMs, Time::getMillisecondCounterHiRes() - processStart); } };
 
             std::vector<std::pair<int, MidiMessage>> ev;
             for (auto& e : tap.poll())
@@ -2183,9 +2196,11 @@ PortScenario runPortScenario (Host& host, PortTap& tap, double seconds, std::vec
     for (auto& e : tap.poll())
         sc.port.push_back (e);
     sc.lateMs = maxBlockLateMs;
+    sc.processMs = maxProcessMs;
 
     if (SystemStats::getEnvironmentVariable ("SMARTKEYS_PORT_DEBUG", {}).isNotEmpty() && (! sc.out.midi.empty() || ! sc.port.empty()))
-        std::cout << "     [hilo de audio de la prueba] bloque más atrasado: " << String (maxBlockLateMs, 2) << " ms" << std::endl;
+        std::cout << "     [hilo de audio de la prueba] bloque más atrasado: " << String (maxBlockLateMs, 2)
+                  << " ms (el processBlock más largo: " << String (maxProcessMs, 2) << " ms)" << std::endl;
 
     if (SystemStats::getEnvironmentVariable ("SK_PORT_DEBUG", {}).isNotEmpty() && (! sc.out.midi.empty() || ! sc.port.empty()))
     {
