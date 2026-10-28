@@ -1,0 +1,270 @@
+# SmartKeys — nombres reales de instrumentos para CatalogTests (sección 0).
+# fuera | nombre | fabricante : baterías, cajas de ritmos, percusiones, loops, samples ya hechos, troceadores
+# dentro | nombre | fabricante : instrumentos que tocan acordes (sintes, pianos, samplers, bajos, percusión afinada)
+fuera|Battery 4|Native Instruments
+fuera|Battery Now|Native Instruments
+fuera|Addictive Drums 2|XLN Audio
+fuera|XO|XLN Audio
+fuera|Superior Drummer 3|Toontrack
+fuera|EZdrummer 3|Toontrack
+fuera|Steven Slate Drums 5.5|Steven Slate
+fuera|SSD5|Steven Slate Drums
+fuera|BFD3|inMusic Brands
+fuera|Groove Agent 5|Steinberg
+fuera|Groove Agent SE 5|Steinberg
+fuera|Backbone|Steinberg
+fuera|Kick 3|Sonic Academy
+fuera|KICK 2|Sonic Academy
+fuera|Microtonic|Sonic Charge
+fuera|Nerve|Xfer Records
+fuera|Sitala|Decomposer
+fuera|Spark 2|Arturia
+fuera|Atlas 2|Algonaut
+fuera|Punchbox|D16 Group
+fuera|Nepheton 2|D16 Group
+fuera|Nithonat 2|D16 Group
+fuera|Drumazon 2|D16 Group
+fuera|TR-808|Roland
+fuera|TR-909|Roland
+fuera|TR-606|Roland
+fuera|TR-707|Roland
+fuera|TR-727|Roland
+fuera|Maschine 2|Native Instruments
+fuera|MPC|Akai Professional
+fuera|MPC Beats|Akai Professional
+fuera|Strike|AIR Music Technology
+fuera|Boom|AIR Music Technology
+fuera|Transfuser|AIR Music Technology
+fuera|Punch|Rob Papen
+fuera|Punch-BD|Rob Papen
+fuera|Egoist|Sugar Bytes
+fuera|DrumComputer|Sugar Bytes
+fuera|Drumatic 4|E-phonic
+fuera|Tremor|Native Instruments
+fuera|Geist2|FXpansion
+fuera|MT-PowerDrumKit|Manda Audio
+fuera|DrumGizmo|DrumGizmo
+fuera|Perfect Drums|Naughty Seal Audio
+fuera|GGD Invasion|GetGood Drums
+fuera|KVLT Drums III|Ugritone
+fuera|Modo Drum|IK Multimedia
+fuera|Heartbeat|Muon Software
+fuera|Beatmaker|Acme
+fuera|Arcade|Output
+fuera|Stylus RMX|Spectrasonics
+fuera|Serato Sample|Serato
+fuera|Loopmash|Steinberg
+fuera|Breaktweaker|iZotope
+fuera|Trigger 2|Steven Slate
+fuera|Percussion Kit|Acme
+fuera|Cajon|Acme
+fuera|Taiko Drums|Acme
+fuera|Hand Percussion|Acme
+fuera|808 Studio II|Initial Audio
+fuera|ADM|AudioRealism
+fuera|BM-DOPE|UJAM
+fuera|BM-EPIC|UJAM
+fuera|VD-SOLID|UJAM
+fuera|ChopBeast2|W.A.Production
+fuera|Chopper|Acme
+fuera|Slices|Acme
+fuera|LANDR Samples|LANDR
+fuera|RGTN Drumkits 2|Road to Fame Music
+dentro|Serum|Xfer Records
+dentro|Serum 2|Xfer Records
+dentro|Vital|Vital Audio
+dentro|Massive|Native Instruments
+dentro|Massive X|Native Instruments
+dentro|FM8|Native Instruments
+dentro|Absynth 5|Native Instruments
+dentro|Kontakt 7|Native Instruments
+dentro|Kontakt 8|Native Instruments
+dentro|Reaktor 6|Native Instruments
+dentro|Monark|Native Instruments
+dentro|Super 8|Native Instruments
+dentro|Omnisphere|Spectrasonics
+dentro|Keyscape|Spectrasonics
+dentro|Trilian|Spectrasonics
+dentro|Analog Lab V|Arturia
+dentro|Analog Lab Pro|Arturia
+dentro|Pigments|Arturia
+dentro|Mini V4|Arturia
+dentro|Jup-8 V4|Arturia
+dentro|Prophet-5 V|Arturia
+dentro|CS-80 V4|Arturia
+dentro|DX7 V|Arturia
+dentro|Piano V3|Arturia
+dentro|Stage-73 V2|Arturia
+dentro|Wurli V3|Arturia
+dentro|B-3 V2|Arturia
+dentro|Mellotron V|Arturia
+dentro|Augmented STRINGS|Arturia
+dentro|Augmented VOICES|Arturia
+dentro|Augmented GRAND PIANO|Arturia
+dentro|Augmented MALLETS|Arturia
+dentro|Augmented YANGTZE|Arturia
+dentro|SQ80 V|Arturia
+dentro|OP-Xa V|Arturia
+dentro|Jun-6 V|Arturia
+dentro|Emulator II V|Arturia
+dentro|MiniFreak V|Arturia
+dentro|Synclavier V|Arturia
+dentro|LABS|Spitfire Audio
+dentro|BBC Symphony Orchestra|Spitfire Audio
+dentro|Abbey Road One|Spitfire Audio
+dentro|Spitfire Audio|Spitfire Audio
+dentro|Nexus|reFX
+dentro|Sylenth1|LennarDigital
+dentro|Spire|Reveal Sound
+dentro|VPS Avenger|Vengeance Sound
+dentro|Avenger 2|Vengeance Sound
+dentro|Diva|u-he
+dentro|Hive 2|u-he
+dentro|Zebra2|u-he
+dentro|Zebra3|u-he
+dentro|Repro-5|u-he
+dentro|Bazille|u-he
+dentro|ACE|u-he
+dentro|Phase Plant|Kilohearts
+dentro|Falcon|UVI
+dentro|UVI Workstation|UVI
+dentro|HALion 7|Steinberg
+dentro|HALion Sonic 7|Steinberg
+dentro|Retrologue 2|Steinberg
+dentro|Padshop 2|Steinberg
+dentro|Dexed|Digital Suburban
+dentro|Surge XT|Surge Synth Team
+dentro|Odin2|TheWaveWarden
+dentro|OB-Xd|discoDSP
+dentro|TAL-U-NO-LX|TAL-Togu Audio Line
+dentro|TAL-Sampler|TAL-Togu Audio Line
+dentro|TAL-BassLine-101|TAL-Togu Audio Line
+dentro|Helm|Matt Tytel
+dentro|Synth1|Daichi
+dentro|Electra2|Tone2
+dentro|Icarus2|Tone2
+dentro|ANA 2|Sonic Academy
+dentro|Ultra Analog VA-3|Applied Acoustics Systems
+dentro|Chromaphone 3|Applied Acoustics Systems
+dentro|Lounge Lizard EP-5|Applied Acoustics Systems
+dentro|Strum GS-2|Applied Acoustics Systems
+dentro|Pianoteq 8|Modartt
+dentro|Keyzone Classic|Bitsonic
+dentro|Addictive Keys|XLN Audio
+dentro|EZkeys 2|Toontrack
+dentro|EZbass|Toontrack
+dentro|MODO BASS 2|IK Multimedia
+dentro|SampleTank 4|IK Multimedia
+dentro|Syntronik 2|IK Multimedia
+dentro|Hammond B-3X|IK Multimedia
+dentro|Pianoverse|IK Multimedia
+dentro|Ivory 3 German D|Synthogy
+dentro|Decent Sampler|Decent Samples
+dentro|sforzando|Plogue
+dentro|Shortcircuit XT|Surge Synth Team
+dentro|Alter/Ego|Plogue
+dentro|Synthesizer V Studio|Dreamtonics
+dentro|Exhale|Output
+dentro|Scaler 3|Plugin Boutique
+dentro|Heat Up 3|Initial Audio
+dentro|Sektor|Initial Audio
+dentro|Zenology|Roland
+dentro|JUPITER-8|Roland
+dentro|JUNO-106|Roland
+dentro|JX-8P|Roland
+dentro|SH-101|Roland
+dentro|TB-303|Roland
+dentro|D-50|Roland
+dentro|JD-800|Roland
+dentro|SRX ORCHESTRA|Roland
+dentro|SRX DANCE|Roland
+dentro|System-8|Roland
+dentro|M1|KORG
+dentro|Wavestation|KORG
+dentro|TRITON|KORG
+dentro|MS-20|KORG
+dentro|Polysix|KORG
+dentro|Mono/Poly|KORG
+dentro|ARP 2600|KORG
+dentro|Prophecy|KORG
+dentro|Gadget|KORG
+dentro|Hype|AIR Music Technology
+dentro|Loom II|AIR Music Technology
+dentro|Vacuum Pro|AIR Music Technology
+dentro|Xpand!2|AIR Music Technology
+dentro|Structure|AIR Music Technology
+dentro|DB-33|AIR Music Technology
+dentro|Mini Grand|AIR Music Technology
+dentro|Velvet|AIR Music Technology
+dentro|Bassline|AIR Music Technology
+dentro|Electric|AIR Music Technology
+dentro|Kontakt Player|Native Instruments
+dentro|Una Corda|Native Instruments
+dentro|The Grandeur|Native Instruments
+dentro|Noire|Native Instruments
+dentro|Session Guitarist|Native Instruments
+dentro|Bass Fingers|Waves
+dentro|Bass Slapper|Waves
+dentro|Electric 88 Piano|Waves
+dentro|Grand Rhapsody Piano|Waves
+dentro|Codex|Waves
+dentro|Flow Motion|Waves
+dentro|Clavinet|Waves
+dentro|Upright Piano|Acme
+dentro|Organ|Acme
+dentro|Cinematic Strings|Acme
+dentro|Kalimba|Acme
+dentro|Marimba Pro|Acme
+dentro|Steelpan|Acme
+dentro|Handpan|Acme
+dentro|Vibraphone|Acme
+dentro|Ample Guitar M|Ample Sound
+dentro|Ample Bass P|Ample Sound
+dentro|Shreddage 3|Impact Soundworks
+dentro|Sitar|Acme
+dentro|Koto|Acme
+dentro|Harp|Acme
+dentro|Choir|Acme
+dentro|Mellow Keys|Acme
+dentro|Upbeat Keys|Acme
+dentro|Spark Keys|Acme
+dentro|Atlas Pads|Acme
+dentro|Punch Bass|Acme
+dentro|Boom Bass|Acme
+dentro|Strike Pads|Acme
+dentro|Breath|Acme
+dentro|Rhythmic Pads|Acme
+dentro|Groovy Keys|Acme
+dentro|Ozone Synth|Acme
+dentro|Pulse|Acme
+dentro|OPS7|Plogue
+dentro|chipsounds|Plogue
+dentro|Polymax|Univers Sons
+dentro|Arturia Mini|Arturia
+dentro|Model D|Moog Music
+dentro|Mariana|Moog Music
+dentro|Minimoog Model D|Moog Music
+dentro|Animoog|Moog Music
+dentro|Obsession|Acme
+dentro|Vocal Synth 2|iZotope
+dentro|Iris 2|iZotope
+dentro|Equator 2|ROLI
+dentro|Cypher2|ROLI
+dentro|Strobe2|FXpansion
+dentro|Tremolo Keys|Acme
+dentro|Vaults|Crow Hill
+dentro|Orbital|Loopsfy
+dentro|Riot|Wooloops
+dentro|Splice INSTRUMENT|Splice
+dentro|chipsynth C64|Plogue Art et Technologie
+dentro|PAPU|SocaLabs
+dentro|UADx PolyMAX Synth|Universal Audio (UADx)
+dentro|ChordAXE Lite|ARTonic Music
+dentro|Klimper Main|polydigm
+dentro|VG-IRON|UJAM
+dentro|VB-ROWDY|UJAM
+dentro|USYNTH CORE|UJAM
+dentro|VP-PURE|UJAM
+dentro|DLSMusicDevice|Apple
+dentro|AUSampler|Apple
+dentro|AUMIDISynth|Apple

@@ -318,6 +318,59 @@ int main (int argc, char* argv[])
                       describe ("Vibraphone", "Acme", true), describe ("Glockenspiel", "Acme", true),
                       describe ("Kalimba", "Acme", true), describe ("Handpan", "Acme", true) }),
                "la percusión afinada sí toca acordes: marimba, vibráfono, glockenspiel, kalimba, handpan");
+        // 2.0.4: lo que se colaba en una Mac de verdad (UJAM Beatmaker, un troceador de samples)
+        // y lo que debe seguir de esa misma lista
+        check (none ({ describe ("BM-DOPE", "UJAM", true), describe ("BM-EPIC", "UJAM", true), describe ("VD-SOLID", "UJAM", true),
+                       describe ("ChopBeast2", "W.A.Production", true), describe ("Chopper", "Acme", true),
+                       describe ("Slices", "Acme", true), describe ("LANDR Samples", "LANDR", true),
+                       describe ("RGTN Drumkits 2", "Road to Fame Music", true) }),
+               "UJAM Beatmaker / Virtual Drummer (BM-DOPE, VD-SOLID) y troceadores de samples (ChopBeast2) no se ofrecen");
+        check (all ({ describe ("Kontakt 7", "Native Instruments", true), describe ("LABS", "Spitfire Audio", true),
+                      describe ("Vaults", "Crow Hill", true), describe ("Orbital", "Loopsfy", true),
+                      describe ("Riot", "Wooloops", true), describe ("Splice INSTRUMENT", "Splice", true),
+                      describe ("chipsynth C64", "Plogue Art et Technologie", true), describe ("PAPU", "SocaLabs", true),
+                      describe ("UADx PolyMAX Synth", "Universal Audio (UADx)", true), describe ("ChordAXE Lite", "ARTonic Music", true),
+                      describe ("VG-IRON", "UJAM", true), describe ("VB-ROWDY", "UJAM", true), describe ("USYNTH CORE", "UJAM", true),
+                      describe ("DLSMusicDevice", "Apple", true), describe ("AUSampler", "Apple", true) }),
+               "los demás de esa Mac siguen: Kontakt, LABS, Vaults, Orbital, Riot, Splice INSTRUMENT, chipsynth, PolyMAX, UJAM guitarra / bajo / USYNTH");
+        // Nombres reales de instrumentos (Tests/PluginNames.txt): fuera / dentro
+        {
+            StringArray lines;
+            File (SMARTKEYS_TESTS_DIR).getChildFile ("PluginNames.txt").readLines (lines);
+            int out = 0, in = 0, wrongOut = 0, wrongIn = 0;
+            for (const auto& line : lines)
+            {
+                if (line.startsWith ("#") || line.trim().isEmpty())
+                    continue;
+                StringArray f;
+                f.addTokens (line, "|", {});
+                if (f.size() < 3)
+                    continue;
+                const bool loadable = C::isLoadableInstrument (describe (f[1], f[2], true));
+                if (f[0] == "fuera")
+                {
+                    ++out;
+                    if (loadable)
+                    {
+                        ++wrongOut;
+                        std::cout << "     (se ofrece: " << f[1] << " · " << f[2] << ")" << std::endl;
+                    }
+                }
+                else if (f[0] == "dentro")
+                {
+                    ++in;
+                    if (! loadable)
+                    {
+                        ++wrongIn;
+                        std::cout << "     (no se ofrece: " << f[1] << " · " << f[2] << ")" << std::endl;
+                    }
+                }
+            }
+            std::cout << "     Tests/PluginNames.txt: " << out << " baterías, loops y troceadores; " << in
+                      << " instrumentos que tocan acordes" << std::endl;
+            check (out >= 60 && wrongOut == 0, "con sus nombres reales, ninguna batería, loop ni troceador se ofrece");
+            check (in >= 150 && wrongIn == 0, "y todos los instrumentos que tocan acordes se ofrecen");
+        }
         check (C::isDrumTag ("Drums") && C::isDrumTag ("Percussion") && C::isDrumTag (String (CharPointer_UTF8 ("Bater\xc3\xad" "a")))
                  && C::isDrumTag (String (CharPointer_UTF8 ("Percusi\xc3\xb3n"))) && C::isDrumTag ("Batterie")
                  && ! C::isDrumTag ("Synthesizer") && ! C::isDrumTag ("Sampler") && ! C::isDrumTag ("Bass"),

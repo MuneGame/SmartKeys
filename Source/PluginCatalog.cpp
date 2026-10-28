@@ -77,11 +77,13 @@ namespace
 
     //  - loops, frases y samples ya hechos: palabras enteras en el nombre o en la categoría
     //    ("Sampler" no: Kontakt, HALion o Decent Sampler cargan instrumentos que tocan acordes)
+    //    y los que trocean un sample (cada tecla, un trozo: no tocan acordes)
     constexpr const char* kLoopWords[] = {
         "loop", "loops", "looper", "phrase", "phrases", "breaks", "breakbeat", "breakbeats",
         "oneshot", "oneshots", "sample", "samples", "slicer", "construction", "sfx", "foley",
+        "chop", "chops", "chopper", "choppers", "slice", "slices",
     };
-    constexpr const char* kLoopParts[] = { "loopmash", "breaktweaker" };
+    constexpr const char* kLoopParts[] = { "loopmash", "breaktweaker", "chopbeast" };
 
     //  - los conocidos cuyo nombre no lo dice (con su fabricante si el nombre solo es ambiguo)
     struct KnownPlugin
@@ -104,6 +106,8 @@ namespace
         { "maschine", nullptr },         // groovebox de Native Instruments
         { "mpc", nullptr },              // groovebox de Akai
         { "ssd5", nullptr },             // Steven Slate Drums
+        { "bm", "ujam" },                // UJAM Beatmaker (BM-DOPE, BM-EPIC…)
+        { "vd", "ujam" },                // UJAM Virtual Drummer (VD-SOLID…)
         { "transfuser", nullptr },       // AIR Transfuser (loops y ritmos)
         { "spark", "arturia" },          // Arturia Spark (caja de ritmos)
         { "atlas", "algonaut" },         // Algonaut Atlas (samples de batería)

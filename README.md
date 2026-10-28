@@ -15,6 +15,11 @@
 
 ---
 
+## Novedades de la versión 2.0.4
+
+- **Más baterías y troceadores fuera de la lista**, revisando la lista de instrumentos de una Mac de verdad: los **Beatmaker** y **Virtual Drummer** de UJAM (BM-DOPE, BM-EPIC, VD-SOLID…) y los **troceadores de samples**, donde cada tecla toca un trozo y no un acorde (ChopBeast, y los que dicen *chop, chopper, slice*). Los demás instrumentos de esa Mac siguen: Kontakt, LABS, Vaults, Orbital, Riot, Splice INSTRUMENT, chipsynth C64, PAPU, PolyMAX, y las guitarras, bajos y sintes de UJAM.
+- **Los instrumentos propios de FL Studio (FLEX, FL Keys, Sytrus, Harmor…) no se pueden cargar dentro de SmartKeys.** No son plugins VST3 ni AU: son archivos internos de FL (`FL Studio 2026.app/Contents/Resources/FL/Plugins/Fruity/Generators/FLEX/FLEX_x64.dylib`…) que sólo FL Studio sabe abrir, y ningún otro plugin puede cargarlos. La versión plugin de FL Studio (`Image-Line › FL Studio`) tampoco sirve: es FL Studio entero y no se usa dentro del propio FL Studio. Para tocarlos con los acordes de SmartKeys, engánchalos con la [forma B](#b-en-otro-instrumento-flex-serum-kontakt) (3 pasos en FL).
+
 ## Novedades de la versión 2.0.3
 
 - **La lista de instrumentos sólo trae los que tocan progresiones y armonías.** SmartKeys les manda acordes, así que quedan fuera:
@@ -82,10 +87,10 @@ La 1.5.0 trajo `MIC VOICE` sin sidechain (SmartKeys lee él mismo el micrófono 
 
 ## Descargar los instaladores (sin compilar nada)
 
-GitHub compila y prueba SmartKeys en cada cambio y publica los instaladores en la página **Releases** de este repositorio (**SmartKeys 2.0.3**):
+GitHub compila y prueba SmartKeys en cada cambio y publica los instaladores en la página **Releases** de este repositorio (**SmartKeys 2.0.4**):
 
-- **Mac:** `SmartKeys-2.0.3-macOS.pkg`. Funciona en Mac con chip Apple e Intel. Instala SmartKeys (VST3, AU y app).
-- **Windows:** `SmartKeys-2.0.3-Windows-Setup.exe`. Instala SmartKeys (VST3 y app).
+- **Mac:** `SmartKeys-2.0.4-macOS.pkg`. Funciona en Mac con chip Apple e Intel. Instala SmartKeys (VST3, AU y app).
+- **Windows:** `SmartKeys-2.0.4-Windows-Setup.exe`. Instala SmartKeys (VST3 y app).
 
 **Los dos instaladores eliminan automáticamente la versión anterior** (y la vieja SmartKeys FX) antes de copiar la nueva. No hace falta borrar nada a mano. El registro de lo que se borró en Mac queda en `/tmp/smartkeys-install.log`.
 
@@ -360,8 +365,8 @@ Al tocar una perilla del instrumento, su vista nativa se queda con el foco del t
   - Trozos de nombres pegados (EZdrummer, DrumGizmo, MT-PowerDrumKit, Kick3, Beatmaker, Heartbeat).
   - VST3: la subcategoría `Drum` ("Instrument|Drum").
   - Audio Unit: la etiqueta `Drums` o `Percussion` del componente, leída del registro con `AVAudioUnitComponentManager` sin abrirlo. macOS puede darla traducida ("Batería", "Percusión", "Batterie"…), así que se compara sin acentos en varios idiomas. Esos AU llevan la categoría `Synth|Drums`.
-- **Loops, frases y samples ya hechos:** palabras enteras en el nombre o en la categoría: *loop(s), looper, phrase(s), breaks, breakbeat, oneshot(s), sample(s), slicer, construction, SFX, foley*. *Sampler* no cuenta: Kontakt, HALion o Decent Sampler cargan pianos y cuerdas.
-- **Los conocidos cuyo nombre no lo dice:** Battery, XO, Microtonic, Nerve, Sitala, BFD, Geist, Tremor, Punchbox, Nepheton, Nithonat, Maschine, MPC, SSD5. Con su fabricante, porque el nombre solo es ambiguo: Spark (Arturia), Atlas (Algonaut), Backbone (Steinberg), Trigger (Slate), Stylus RMX (Spectrasonics) y Arcade (Output). "Spark Keys" o "Atlas Pads" de otro fabricante siguen.
+- **Loops, frases y samples ya hechos:** palabras enteras en el nombre o en la categoría: *loop(s), looper, phrase(s), breaks, breakbeat, oneshot(s), sample(s), slicer, construction, SFX, foley*; y los troceadores de samples (2.0.4): *chop(s), chopper, slice(s)* y ChopBeast. *Sampler* no cuenta: Kontakt, HALion o Decent Sampler cargan pianos y cuerdas.
+- **Los conocidos cuyo nombre no lo dice:** Battery, XO, Microtonic, Nerve, Sitala, BFD, Geist, Tremor, Punchbox, Nepheton, Nithonat, Maschine, MPC, SSD5, Transfuser; los BM-… y VD-… de UJAM (Beatmaker y Virtual Drummer, 2.0.4). Con su fabricante, porque el nombre solo es ambiguo: Spark (Arturia), Atlas (Algonaut), Backbone (Steinberg), Trigger (Slate), Stylus RMX (Spectrasonics) y Arcade (Output). "Spark Keys" o "Atlas Pads" de otro fabricante siguen.
 - **Percusión afinada:** con *tuned, marimba, vibraphone, vibes, glockenspiel, celesta, xylophone, kalimba, handpan, steelpan* o *mallets* en el nombre, las palabras de percusión no cuentan, porque sí tocan acordes.
 - Se aplica igual que el filtro de la 2.0.2: la búsqueda de VST3 aparta esos archivos (*Buscar nuevos* ya no los abre), la lista guardada por una versión anterior se limpia al abrirla y el menú nunca los muestra. Un proyecto que ya tenía uno cargado lo sigue abriendo.
 
@@ -513,6 +518,7 @@ SmartKeys/
 │   ├── EditorTests.cpp / _mac.mm  La ventana de SmartKeys en un "DAW": vista SYNTH, ZOOM, teclas de verdad
 │   ├── TestFx.cpp                 Efecto de prueba (VST3 / AU de efecto): la búsqueda nunca debe ofrecerlo
 │   ├── CatalogTests.cpp           Catálogo de instrumentos (AU del sistema, búsqueda VST3 sólo de instrumentos) y presets
+│   ├── PluginNames.txt            Nombres reales: baterías / loops fuera, instrumentos que tocan acordes dentro
 │   ├── MacActivity.h/.mm          Evita App Nap en el host de pruebas (macOS), con la actividad retenida
 │   └── MicProbe.cpp               Sonda del micrófono del sistema para una Mac real (CI con BlackHole)
 └── Installer/
@@ -528,7 +534,8 @@ SmartKeys/
 
 ## Verificación realizada
 
-- **Sólo instrumentos que tocan acordes (2.0.3)** (`CatalogTests.cpp`; el catálogo completo: 79 comprobaciones aquí y en Windows, 87 en una Mac Intel con macOS 15, también con AddressSanitizer + UBSan sin errores):
+- **La lista de instrumentos de una Mac de verdad (2.0.4)**: con los instrumentos instalados en la MacBook de un usuario (leídos de sus `Info.plist` y `moduleinfo.json`, sin abrir ninguno), BM-DOPE de UJAM, ChopBeast2, LANDR Samples y RGTN Drumkits no se ofrecen; Kontakt 7, LABS, Vaults, Orbital, Riot, Splice INSTRUMENT, chipsynth C64, PAPU, PolyMAX, ChordAXE y los de Apple sí. Con la lista de nombres reales de `Tests/PluginNames.txt` (instrumentos comerciales y gratuitos con su fabricante), las 69 baterías, reproductores de loops y troceadores quedan fuera y los 198 instrumentos que tocan acordes, dentro.
+- **Sólo instrumentos que tocan acordes (2.0.3)** (`CatalogTests.cpp`; el catálogo completo: 83 comprobaciones aquí y en Windows, 91 en una Mac Intel con macOS 15):
   - Con sus nombres y fabricantes reales, 34 baterías, cajas de ritmos y percusiones no se ofrecen (Battery 4, Addictive Drums 2, Superior Drummer 3, EZdrummer 3, XO, Kick 3, Microtonic, Nerve, Sitala, BFD3, Geist2, Groove Agent 5, Steven Slate Drums, GetGood Drums, MT-PowerDrumKit, Tremor, Spark de Arturia, Atlas de Algonaut, Punchbox, TR-808, TR-909, Maschine 2, MPC Beats, Modo Drum, Strike…), ni 12 reproductores de loops, frases y samples ya hechos (Arcade, Stylus RMX, Serato Sample, Loopmash, Breaktweaker, Egoist, Transfuser…), ni un instrumento con la categoría VST3 `Instrument|Drum` o la etiqueta de Audio Unit `Drums`.
   - Siguen 26 instrumentos que tocan acordes: Kontakt, HALion y Decent Sampler (`Instrument|Sampler`), EZkeys, EZbass, Addictive Keys, Keyscape, Trilian, Nexus, LABS, Pianoteq, Falcon, Exhale, SampleTank, Jupiter-8, JUNO-106, TB-303, Chromaphone, Augmented MALLETS… y nombres parecidos de otros fabricantes (Spark Keys, Atlas Pads, Punch Bass, Strike Pads, Groovy Keys, Rhythmic Pads). También la percusión afinada: marimba, vibráfono, glockenspiel, kalimba, handpan.
   - Etiquetas de Audio Unit: *Drums* y *Percussion*, también traducidas (*Batería*, *Percusión*, *Batterie*); *Synthesizer*, *Sampler* o *Bass* no cuentan.
@@ -566,7 +573,7 @@ SmartKeys/
   - **Guardar y abrir el proyecto** (otra instancia de SmartKeys): el instrumento vuelve con **su propio sonido** (su estado) y su latencia. Un instrumento que no está instalado se conserva al guardar. Uno que devuelve NaN: ese bloque sale en silencio.
   - **Carga protegida**: si el programa se cerró mientras se creaba un instrumento, el proyecto no lo vuelve a crear solo, pero lo conserva.
   - **0 asignaciones** de memoria en 2000 bloques con el instrumento cargado (acordes, STRUM, cambios de modo, All Notes Off).
-  - **Catálogo** (`CatalogTests.cpp`, 79 comprobaciones; 87 en la Mac, con los Audio Unit): la búsqueda de VST3 encuentra el instrumento de prueba y no ofrece a SmartKeys ni al efecto de prueba; la lista se guarda; un plugin que cerró el programa al examinarlo queda fuera; en la Mac, los Audio Unit del sistema sin abrir ninguno (el instrumento de prueba aparece como AU); los presets de fábrica y del usuario; y unos 7500 bloques de audio mientras el hilo de mensajes hace 60 cambios al azar en la ranura (cargar, quitar, BYPASS, preparar, estado), sin un NaN.
+  - **Catálogo** (`CatalogTests.cpp`, 83 comprobaciones; 91 en la Mac, con los Audio Unit): la búsqueda de VST3 encuentra el instrumento de prueba y no ofrece a SmartKeys ni al efecto de prueba; la lista se guarda; un plugin que cerró el programa al examinarlo queda fuera; en la Mac, los Audio Unit del sistema sin abrir ninguno (el instrumento de prueba aparece como AU); los presets de fábrica y del usuario; y unos 7500 bloques de audio mientras el hilo de mensajes hace 60 cambios al azar en la ranura (cargar, quitar, BYPASS, preparar, estado), sin un NaN.
 - **Teclado "SmartKeys Chords" en una Mac de verdad** (GitHub Actions, Mac Intel con macOS 15, CoreMIDI real; 50 comprobaciones). El VST3 compilado crea el teclado y la prueba lo abre como lo hace FL Studio, como una entrada MIDI:
   - F#3 en Fa mayor sale como **F3 A3 C4 a la vez** (las 3 notas en 0,02 ms), 10,4 ms después de la tecla (un bloque de audio).
   - Con STRUM 41 ms DESC salen C4, A3 a +47,3 ms y F3 a +107,2 ms (esperado: +47,1 y +106,6), igual que en la salida MIDI; también con el búfer partido en trozos.

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SmartKeys VERSION 2.0.3 LANGUAGES C CXX)
+project(SmartKeys VERSION 2.0.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -307,7 +307,8 @@ if(SMARTKEYS_BUILD_HOST_TESTS)
     target_include_directories(SmartKeysCatalogTests PRIVATE Source)
     target_compile_definitions(SmartKeysCatalogTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_STANDALONE_APPLICATION=1 JUCE_PLUGINHOST_VST3=1
-        JUCE_MODAL_LOOPS_PERMITTED=1)
+        JUCE_MODAL_LOOPS_PERMITTED=1
+        SMARTKEYS_TESTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Tests")   # Tests/PluginNames.txt (nombres reales)
     target_link_libraries(SmartKeysCatalogTests
         PRIVATE
             juce::juce_audio_processors
