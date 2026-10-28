@@ -395,7 +395,7 @@ jobs:
             build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 \
             --synth build-mic/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3 --system-mic-only | tee host-mic.txt
           code=${PIPESTATUS[0]}
-          echo "::notice title=MIC VOICE en el VST3::$(grep -E 'ok|FALLO|comprobaciones|->' host-mic.txt | tr '\n' ' ')"
+          echo "::notice title=MIC VOICE en el VST3::$(grep -E 'ok|FALLO|omitida|comprobaciones|->' host-mic.txt | tr '\n' ' ')"
           kill $(cat afplay.pid) 2>/dev/null || true
           exit $code
 
@@ -410,7 +410,7 @@ jobs:
             build-mic/SmartKeys_artefacts/Release/VST3/SmartKeys.vst3 \
             --synth build-mic/SmartKeysTestSynth_artefacts/Release/VST3/SmartKeysTestSynth.vst3 --port-only 2>&1 | tee host-port.txt
           code=${PIPESTATUS[0]}
-          echo "::notice title=SmartKeys Chords (CoreMIDI)::$(grep -E 'ok|FALLO|comprobaciones|->|teclado:|trozos|ecos|disponible|SmartKeys Chords\]' host-port.txt | tr '\n' ' ')"
+          echo "::notice title=SmartKeys Chords (CoreMIDI)::$(grep -E 'ok|FALLO|omitida|comprobaciones|->|teclado:|trozos|ecos|disponible|SmartKeys Chords\]' host-port.txt | tr '\n' ' ')"
           exit $code
 
       - name: Guardar el registro de las pruebas (si algo falló)
