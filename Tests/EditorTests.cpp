@@ -22,6 +22,8 @@
       7. (macOS) El teclado de la computadora pieza por pieza: foco en
          SmartKeys, en el plugin, en un campo de texto, en otra vista del DAW
          de la misma ventana, en otra ventana; Cmd / Ctrl; repeticiones.
+      8. Doble clic en una perilla de SmartKeys (STRUM, GAIN, GATE): vuelve a
+         su valor por defecto y el DAW recibe un solo gesto.
 
     Uso: SmartKeysEditorTests <SmartKeys.vst3> <SmartKeysTestSynth.vst3> [--au]
 
@@ -30,6 +32,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_extra/juce_gui_extra.h>
+#include "UiCommon.h"   // smartkeys::ui::PolledSliderAttachment (las perillas de SmartKeys)
 #include <atomic>
 #include <cstdlib>
 #include <iostream>
@@ -341,6 +344,93 @@ void clickHeader (PluginWindow& w, int x, int y)
     clickEditor (w, x + jmax (0, roundToInt ((w.getEditor().getWidth() - 850) * 0.5)), y);
 }
 
+//==============================================================================
+// 8. Doble clic en una perilla: juce::Slider avisa del doble clic con un gesto DENTRO del arrastre
+//    que ya empezó el segundo clic (mouseDown -> mouseDoubleClick -> mouseUp). El enlace de
+//    SmartKeys manda al DAW un solo gesto.
+struct KnobProcessor final : public AudioProcessor
+{
+    KnobProcessor()
+    {
+        addParameter (strum = new AudioParameterFloat (ParameterID { "strum", 1 }, "Strum", 0.0f, 200.0f, 0.0f));
+    }
+
+    using AudioProcessor::processBlock;
+
+    const String getName() const override                         { return "Knob"; }
+    void prepareToPlay (double, int) override                      {}
+    void releaseResources() override                               {}
+    void processBlock (AudioBuffer<float>&, MidiBuffer&) override  {}
+    double getTailLengthSeconds() const override                   { return 0.0; }
+    bool acceptsMidi() const override                              { return false; }
+    bool producesMidi() const override                             { return false; }
+    AudioProcessorEditor* createEditor() override                  { return nullptr; }
+    bool hasEditor() const override                                { return false; }
+    int getNumPrograms() override                                  { return 1; }
+    int getCurrentProgram() override                               { return 0; }
+    void setCurrentProgram (int) override                          {}
+    const String getProgramName (int) override                     { return {}; }
+    void changeProgramName (int, const String&) override           {}
+    void getStateInformation (MemoryBlock&) override               {}
+    void setStateInformation (const void*, int) override           {}
+
+    AudioParameterFloat* strum = nullptr;
+};
+
+struct GestureCounter final : public AudioProcessorParameter::Listener
+{
+    void parameterValueChanged (int, float) override {}
+
+    void parameterGestureChanged (int, bool starting) override
+    {
+        ++(starting ? begins : ends);
+        depth += starting ? 1 : -1;
+        maxDepth = jmax (maxDepth, depth);
+    }
+
+    int begins = 0, ends = 0, depth = 0, maxDepth = 0;
+};
+
+void testKnobDoubleClick()
+{
+    std::cout << "\n-- Doble clic en una perilla de SmartKeys (STRUM, GAIN, GATE)" << std::endl;
+
+    KnobProcessor processor;
+    GestureCounter gestures;
+    processor.strum->addListener (&gestures);
+
+    Slider knob (Slider::RotaryHorizontalVerticalDrag, Slider::NoTextBox);
+    auto attachment = std::make_unique<smartkeys::ui::PolledSliderAttachment> (*processor.strum, knob);
+
+    {
+        Slider::ScopedDragNotification drag (knob);   // un arrastre normal
+        knob.setValue (150.0, sendNotificationSync);
+    }
+    check (gestures.begins == 1 && gestures.ends == 1 && approximatelyEqual (processor.strum->get(), 150.0f),
+           "arrastrar la perilla: un gesto para el DAW y el valor nuevo (150 ms)");
+
+    {
+        auto secondClick = std::make_unique<Slider::ScopedDragNotification> (knob);   // mouseDown del segundo clic
+        {
+            Slider::ScopedDragNotification doubleClick (knob);                      // mouseDoubleClick
+            knob.setValue (knob.getDoubleClickReturnValue(), sendNotificationSync);
+        }
+        secondClick = nullptr;                                                       // mouseUp
+    }
+    check (approximatelyEqual (processor.strum->get(), 0.0f), "doble clic: la perilla vuelve a su valor por defecto (0 ms)");
+    check (gestures.begins == 2 && gestures.ends == 2 && gestures.maxDepth == 1,
+           "y el DAW recibe un solo gesto (ninguno dentro de otro)");
+
+    auto unfinished = std::make_unique<Slider::ScopedDragNotification> (knob);
+    knob.setValue (80.0, sendNotificationSync);
+    attachment = nullptr;   // la ventana se cierra a mitad del arrastre
+    check (gestures.begins == 3 && gestures.ends == 3, "cerrar la ventana a mitad de un arrastre: el gesto termina igual");
+    unfinished = nullptr;
+    check (gestures.ends == 3 && gestures.depth == 0, "y el final del arrastre no manda otro");
+
+    processor.strum->removeListener (&gestures);
+}
+
 constexpr int kHeader = 106;
 
 //==============================================================================
@@ -469,6 +559,8 @@ int main (int argc, char* argv[])
    #endif
 
     edtest::prepareApplication();
+
+    testKnobDoubleClick();
 
     AudioPluginFormatManager formats;
     addDefaultFormatsToManager (formats);

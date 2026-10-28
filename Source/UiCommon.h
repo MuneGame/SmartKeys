@@ -189,6 +189,10 @@ public:
     {
         if (auto* s = slider.getComponent())
             s->removeListener (this);
+
+        // La ventana se cerró a mitad de un arrastre: el DAW recibe el final del gesto
+        if (dragDepth > 0)
+            attachment.endGesture();
     }
 
 private:
@@ -201,12 +205,26 @@ private:
         }
     }
     void sliderValueChanged (juce::Slider* s) override { if (! ignoreCallbacks) attachment.setValueAsPartOfGesture ((float) s->getValue()); }
-    void sliderDragStarted (juce::Slider*) override    { attachment.beginGesture(); }
-    void sliderDragEnded (juce::Slider*) override      { attachment.endGesture(); }
+
+    // Un doble clic (volver al valor por defecto) llega como un gesto DENTRO de otro: el segundo
+    // clic ya empezó un arrastre cuando juce::Slider avisa del doble clic. El DAW recibe un solo
+    // gesto: empieza con el primero y termina con el último.
+    void sliderDragStarted (juce::Slider*) override
+    {
+        if (dragDepth++ == 0)
+            attachment.beginGesture();
+    }
+
+    void sliderDragEnded (juce::Slider*) override
+    {
+        if (dragDepth > 0 && --dragDepth == 0)
+            attachment.endGesture();
+    }
 
     juce::Component::SafePointer<juce::Slider> slider;
     PolledParameterAttachment attachment;
     bool ignoreCallbacks = false;
+    int dragDepth = 0;
 };
 
 class PolledComboBoxAttachment : private juce::ComboBox::Listener
