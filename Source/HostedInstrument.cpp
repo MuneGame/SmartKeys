@@ -790,7 +790,15 @@ juce::AudioProcessorEditor* HostedInstrument::getEditor (bool createIfNeeded)
     // Sin preguntar antes hasEditor(): en un VST3 eso crea y destruye otra interfaz completa
     // sólo para saber si tiene (algunos plugins se cuelgan con dos seguidas).
     auto& p = *current->instance;
-    juce::AudioProcessorEditor* created = p.createEditorAndMakeActive();
+    juce::AudioProcessorEditor* created = nullptr;
+    {
+        // macOS: lo que la creación deja pendiente en el "autorelease pool" (la vista de un Audio
+        // Unit) se suelta aquí mismo: esa vista vive exactamente lo que viva su interfaz aquí
+        JUCE_AUTORELEASEPOOL
+        {
+            created = p.createEditorAndMakeActive();
+        }
+    }
     if (created == nullptr)
         created = new juce::GenericAudioProcessorEditor (p);   // un plugin sin interfaz: sus parámetros
 

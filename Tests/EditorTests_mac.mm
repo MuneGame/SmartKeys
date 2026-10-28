@@ -49,8 +49,12 @@ void prepareApplication()
     [NSApp activateIgnoringOtherApps: YES];
 }
 
+// Clics y teclas: como los del usuario, cada uno en su vuelta del bucle de eventos (con su
+// "autorelease pool")
 bool click (juce::Component& inWindow, juce::Point<int> screenPosition)
 {
+  @autoreleasepool
+  {
     NSWindow* window = windowOf (inWindow);
     if (window == nil)
         return false;
@@ -83,6 +87,7 @@ bool click (juce::Component& inWindow, juce::Point<int> screenPosition)
         pump (80);
     }
     return true;
+  }
 }
 
 static NSEvent* keyEvent (NSWindow* window, NSEventType type, NSString* characters, NSEventModifierFlags flags, BOOL repeat)
@@ -101,6 +106,8 @@ static NSEvent* keyEvent (NSWindow* window, NSEventType type, NSString* characte
 
 bool key (juce::Component& inWindow, char c, bool isDown)
 {
+  @autoreleasepool
+  {
     NSWindow* window = windowOf (inWindow);
     if (window == nil)
         return false;
@@ -109,15 +116,19 @@ bool key (juce::Component& inWindow, char c, bool isDown)
     [NSApp postEvent: keyEvent (window, isDown ? NSEventTypeKeyDown : NSEventTypeKeyUp, characters, 0, NO) atStart: NO];
     pump (40);
     return true;
+  }
 }
 
 int visibleWindows()
 {
+  @autoreleasepool
+  {
     int n = 0;
     for (NSWindow* w in [NSApp windows])
         if ([w isVisible] && [w frame].size.width > 100 && [w frame].size.height > 100)
             ++n;
     return n;
+  }
 }
 
 //==============================================================================
