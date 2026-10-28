@@ -15,6 +15,10 @@
       - SMARTKEYS_TESTSYNTH_LOAD_MS=<ms>: tarda en crearse (carga lenta).
       - CC 102 con valor 127: ese bloque devuelve NaN (SmartKeys debe silenciarlo).
       - Su estado guarda cuántas notas ha recibido y su parámetro "Tone".
+      - Su interfaz (como la de un sinte de verdad): la perilla "Tone", un botón
+        ZOOM que cambia su tamaño (520 x 320 <-> 1000 x 640, como el zoom de
+        Serum) y un campo de texto "Buscar". Apunta EDITOR OPEN / EDITOR SIZE /
+        EDITOR CLOSED y cada cambio de Tone (TONE <valor>).
 
   ==============================================================================
 */
@@ -29,6 +33,8 @@ namespace
 {
 
 std::atomic<int> gNextInstanceId { 1 };
+
+class TestSynthEditor;
 
 class TestSynthProcessor final : public juce::AudioProcessor,
                                  private juce::Timer
@@ -49,7 +55,8 @@ public:
         if (loadMs > 0)
             juce::Thread::sleep (loadMs);
 
-        line ("CREATED latency=" + juce::String (getLatencySamples()));
+        line ("CREATED latency=" + juce::String (getLatencySamples()) + " module="
+              + juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFileNameWithoutExtension().replaceCharacter (' ', '_'));
         startTimer (10);
     }
 
@@ -186,10 +193,14 @@ public:
     using AudioProcessor::processBlock;
 
     //==========================================================================
-    juce::AudioProcessorEditor* createEditor() override   { return new juce::GenericAudioProcessorEditor (*this); }
+    juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override                       { return true; }
 
-    const juce::String getName() const override           { return "SmartKeysTestSynth"; }
+    // Su interfaz apunta lo que pasa en ella (hilo de mensajes)
+    void editorLine (const juce::String& s)               { line (s); }
+    juce::AudioParameterFloat& getTone() noexcept         { return *tone; }
+
+    const juce::String getName() const override           { return JucePlugin_Name; }
     bool acceptsMidi() const override                     { return true; }
     bool producesMidi() const override                    { return false; }
     double getTailLengthSeconds() const override          { return 0.05; }
@@ -239,7 +250,18 @@ private:
         writeIndex.store (w + 1, std::memory_order_release);
     }
 
-    void timerCallback() override   { flush(); }
+    void timerCallback() override
+    {
+        flush();
+
+        // Cada cambio de Tone (desde su interfaz, el DAW o su estado)
+        const float t = tone->get();
+        if (std::abs (t - loggedTone) > 1.0e-4f)
+        {
+            loggedTone = t;
+            line ("TONE " + juce::String (t, 3));
+        }
+    }
 
     void flush()
     {
@@ -281,6 +303,7 @@ private:
 
     const int id = gNextInstanceId.fetch_add (1);
     juce::AudioParameterFloat* tone = nullptr;
+    float loggedTone = 0.25f;
     juce::File logFile;
     juce::CriticalSection fileLock;
 
@@ -297,6 +320,74 @@ private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TestSynthProcessor)
 };
+
+//==============================================================================
+// La interfaz del instrumento de prueba: una perilla, un botón que cambia su tamaño (como el
+// zoom de un sinte) y un campo de texto
+class TestSynthEditor final : public juce::AudioProcessorEditor
+{
+public:
+    static constexpr int kSmallWidth = 520, kSmallHeight = 320, kBigWidth = 1000, kBigHeight = 640;
+
+    explicit TestSynthEditor (TestSynthProcessor& p)
+        : AudioProcessorEditor (p), owner (p), toneAttachment (p.getTone(), toneSlider)
+    {
+        setOpaque (true);
+
+        toneSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+        toneSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 64, 24);
+        addAndMakeVisible (toneSlider);
+
+        zoomButton.onClick = [this] { setZoomed (! zoomed); };
+        addAndMakeVisible (zoomButton);
+
+        search.setTextToShowWhenEmpty ("Buscar", juce::Colours::grey);
+        addAndMakeVisible (search);
+
+        setSize (kSmallWidth, kSmallHeight);
+        owner.editorLine ("EDITOR OPEN " + juce::String (getWidth()) + "x" + juce::String (getHeight()));
+    }
+
+    ~TestSynthEditor() override
+    {
+        owner.editorLine ("EDITOR CLOSED");
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (juce::Colour (0xFF20303A));
+        g.setColour (juce::Colours::white);
+        g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
+        g.drawText (JucePlugin_Name, 20, 12, getWidth() - 40, 30, juce::Justification::centredLeft, false);
+    }
+
+    void resized() override
+    {
+        toneSlider.setBounds (20, 60, getWidth() - 40, 40);
+        zoomButton.setBounds (20, 120, 120, 32);
+        search.setBounds (160, 120, 200, 32);
+    }
+
+private:
+    void setZoomed (bool shouldZoom)
+    {
+        zoomed = shouldZoom;
+        setSize (zoomed ? kBigWidth : kSmallWidth, zoomed ? kBigHeight : kSmallHeight);
+        owner.editorLine ("EDITOR SIZE " + juce::String (getWidth()) + "x" + juce::String (getHeight()));
+    }
+
+    TestSynthProcessor& owner;
+    juce::Slider toneSlider;
+    juce::SliderParameterAttachment toneAttachment;
+    juce::TextButton zoomButton { "ZOOM" };
+    juce::TextEditor search;
+    bool zoomed = false;
+};
+
+juce::AudioProcessorEditor* TestSynthProcessor::createEditor()
+{
+    return new TestSynthEditor (*this);
+}
 
 } // namespace
 

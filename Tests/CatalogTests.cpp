@@ -6,7 +6,10 @@
     presets propios:
 
       0. Qué se puede cargar en la ranura: sólo instrumentos (isInstrument), ni
-         SmartKeys ni anfitriones de plugins / patchers / navegadores de samples.
+         SmartKeys ni anfitriones de plugins / patchers / navegadores de samples,
+         ni utilidades de ruteo que se declaran instrumento (AGridder, Element),
+         ni nombres o categorías de efecto, analizador, ruteo, MIDI, utilidad o
+         control, ni sin salida de audio; Kontakt, Analog Lab, Omnisphere… sí.
       1. Audio Unit (macOS): la lista de instrumentos del sistema sale sin abrir
          ningún plugin (DLSMusicDevice de Apple siempre está; el instrumento de
          prueba si se instaló; el efecto de prueba nunca) y SmartKeys no se
@@ -25,6 +28,9 @@
       7. Sólo instrumentos: "Buscar nuevos" no vuelve a abrir un efecto apartado
          (aunque cambie), "Volver a buscar todos" sí; y una lista guardada por
          una versión anterior con efectos o anfitriones se limpia al abrir.
+      8. Un VST3 que se declara instrumento pero se llama "AGridder Inst" o
+         "Element" no se ofrece (se aparta); uno que al cargarlo no tiene salida
+         de audio sale de la lista y se recuerda.
 
     Uso: SmartKeysCatalogTests <carpeta con SmartKeysTestSynth.vst3 y SmartKeysTestFx.vst3 [y SmartKeys.vst3]>
          (SMARTKEYS_EXPECT_TEST_AU=1: el AU de prueba y el AU de efecto de prueba deben estar registrados)
@@ -193,6 +199,44 @@ int main (int argc, char* argv[])
                  && ! C::isHostOrBrowser (describe ("Unifyer Pad", "Acme", true))
                  && ! C::isHostOrBrowser (describe ("Serum", "Xfer Records", true)),
                "palabras enteras: Dispatcher, Unifyer o Sytrus no son anfitriones");
+
+        // 2.0.2: utilidades de ruteo y anfitriones que se declaran instrumento (con salidas)
+        check (! C::isLoadableInstrument (describe ("AGridder Inst", "e47", true))
+                 && ! C::isLoadableInstrument (describe ("AGridderInst", "e47", true))
+                 && ! C::isLoadableInstrument (describe ("AudioGridderInst", "e47", true))
+                 && ! C::isLoadableInstrument (describe ("AGridder", "e47", true)),
+               "AGridder / AudioGridder (plugins por la red) no se ofrece");
+        check (! C::isLoadableInstrument (describe ("Element", "Kushview", true))
+                 && ! C::isLoadableInstrument (describe ("Element", "Acme", true))
+                 && ! C::isLoadableInstrument (describe ("Komplete Kontrol", "Native Instruments", true)),
+               "Element (anfitrión modular) y Komplete Kontrol no se ofrecen");
+        check (! C::isLoadableInstrument (describe ("Patcher", "Acme", true))
+                 && ! C::isLoadableInstrument (describe ("MyPatcher", "Acme", true))
+                 && ! C::isLoadableInstrument (describe ("MIDI Monitor", "Acme", true))
+                 && ! C::isLoadableInstrument (describe ("Control", "Acme", true))
+                 && ! C::isLoadableInstrument (describe ("Spectrum Analyzer", "Acme", true))
+                 && ! C::isLoadableInstrument (describe ("Signal Routing", "Acme", true))
+                 && ! C::isLoadableInstrument (describe ("Gain Utility", "Acme", true))
+                 && ! C::isLoadableInstrument (describe ("Effect Rack", "Acme", true))
+                 && ! C::isLoadableInstrument (describe ("Synth FX", "Acme", true)),
+               "nombres con Patcher, MIDI, Control, Analyzer, Routing, Utility, Effect o Fx no se ofrecen");
+        auto fxCategory = describe ("Vocoder Pro", "Acme", true);
+        fxCategory.category = "Fx|Instrument";
+        check (! C::isLoadableInstrument (fxCategory), "categoría con Fx (\"Fx|Instrument\") no se ofrece");
+        auto noOutput = describe ("Sidechain Gate", "Acme", true);
+        noOutput.numInputChannels = 2;
+        noOutput.numOutputChannels = 0;
+        check (! C::isLoadableInstrument (noOutput), "un instrumento con entradas y sin salida de audio no se ofrece");
+        check (C::isLoadableInstrument (describe ("Kontakt 7", "Native Instruments", true))
+                 && C::isLoadableInstrument (describe ("Analog Lab V", "Arturia", true))
+                 && C::isLoadableInstrument (describe ("Omnisphere", "Spectrasonics", true))
+                 && C::isLoadableInstrument (describe ("Keyscape", "Spectrasonics", true))
+                 && C::isLoadableInstrument (describe ("Pigments", "Arturia", true))
+                 && C::isLoadableInstrument (describe ("Massive X", "Native Instruments", true))
+                 && C::isLoadableInstrument (describe ("Electra2", "Tone2", true))
+                 && C::isLoadableInstrument (describe ("Kaleidoscope", "Acme", true))
+                 && C::isLoadableInstrument (describe ("Diva", "u-he", true)),
+               "sintes, samplers y romplers siguen (Kontakt, Analog Lab, Omnisphere, Pigments, Diva…)");
     }
 
     //==========================================================================
@@ -540,6 +584,72 @@ int main (int argc, char* argv[])
         for (const auto& d : savedTypes())
             clean &= PluginCatalog::isLoadableInstrument (d);
         check (clean && contains (savedTypes(), "SmartKeysTestSynth", "VST3"), "y la lista se guarda limpia en disco");
+    }
+
+    //==========================================================================
+    std::cout << "\n-- 8. Utilidades que se declaran instrumento (AGridder, Element) y sin salida de audio" << std::endl;
+    {
+        // Una copia del instrumento de prueba que se presenta como "AGridder Inst" (como
+        // AudioGridder: se declara instrumento, con salidas, y no suena por sí mismo)
+        const auto synth = pluginFolder.getChildFile ("SmartKeysTestSynth.vst3");
+        const auto gridder = pluginFolder.getChildFile ("AGridder Inst.vst3");
+        gridder.deleteRecursively();
+        const bool copied = synth.copyDirectoryTo (gridder);
+        const auto info = gridder.getChildFile ("Contents").getChildFile ("Resources").getChildFile ("moduleinfo.json");
+        const auto original = info.loadFileAsString();
+        const bool renamed = copied && original.contains ("\"SmartKeysTestSynth\"")
+                               && info.replaceWithText (original.replace ("\"SmartKeysTestSynth\"", "\"AGridder Inst\""),
+                                                        false, false, nullptr);
+        check (renamed && original.contains ("\"Instrument\""),
+               "copia del instrumento de prueba que se llama \"AGridder Inst\" (se declara instrumento)");
+
+        auto gridderBlacklisted = [&]
+        {
+            for (const auto& id : savedBlacklist())
+                if (sameFile (id, gridder))
+                    return true;
+            return false;
+        };
+
+        {
+            PluginCatalog catalog;
+            scanAndWait (catalog, false);
+            const auto list = catalog.getInstruments();
+            check (! listedByName (list, "AGridder Inst") && contains (list, "SmartKeysTestSynth", "VST3"),
+                   "la búsqueda no ofrece AGridder (el instrumento de verdad sigue)");
+            check (gridderBlacklisted(), "y aparta su archivo (\"Buscar nuevos\" no lo vuelve a abrir)");
+
+            // Ahora se llama "Element" (anfitrión modular de Kushview): tampoco
+            info.replaceWithText (original.replace ("\"SmartKeysTestSynth\"", "\"Element\""), false, false, nullptr);
+            scanAndWait (catalog, true);
+            check (! listedByName (catalog.getInstruments(), "Element") && contains (catalog.getInstruments(), "SmartKeysTestSynth", "VST3")
+                     && gridderBlacklisted(),
+                   "\"Volver a buscar todos\": Element tampoco se ofrece");
+        }
+        gridder.deleteRecursively();
+
+        // Un instrumento que al cargarlo resulta no tener salida de audio sale de la lista (y se
+        // recuerda); "Volver a buscar todos" le da otra oportunidad
+        {
+            PluginCatalog catalog;
+            scanAndWait (catalog, true);
+            PluginDescription synthDescription;
+            for (const auto& d : catalog.getInstruments())
+                if (d.name == "SmartKeysTestSynth" && d.pluginFormatName == "VST3")
+                    synthDescription = d;
+            check (synthDescription.fileOrIdentifier.isNotEmpty() && ! catalog.isExcluded (synthDescription),
+                   "el instrumento de prueba está en la lista");
+            catalog.excludeNonGenerator (synthDescription);
+            check (catalog.isExcluded (synthDescription) && ! contains (catalog.getInstruments(), "SmartKeysTestSynth", "VST3"),
+                   "si al cargarlo no tuviera salida de audio, sale de la lista");
+        }
+        {
+            PluginCatalog catalog;   // otra instancia: lo recuerda
+            check (! contains (catalog.getInstruments(), "SmartKeysTestSynth", "VST3"), "y lo recuerda al abrir otra vez");
+            scanAndWait (catalog, true);
+            check (contains (catalog.getInstruments(), "SmartKeysTestSynth", "VST3"),
+                   "\"Volver a buscar todos\" le da otra oportunidad");
+        }
     }
 
     userData.deleteRecursively();

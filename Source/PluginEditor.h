@@ -12,6 +12,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
 #include "UiCommon.h"
+#include "ComputerKeyboard.h"
 
 namespace smartkeys::ui
 {
@@ -227,6 +228,25 @@ private:
     juce::String prefix, title, subtitle;
 };
 
+// VIEW: [ SMARTKEYS | SYNTH ]. SMARTKEYS muestra las escalas, KEY y el LIVE KEYBOARD; SYNTH
+// muestra, dentro de la misma ventana, la interfaz del instrumento cargado.
+class ViewSwitch : public juce::Component
+{
+public:
+    ViewSwitch();
+    void paint (juce::Graphics&) override;   // el rótulo "VIEW"
+    void resized() override;
+
+    void setSynth (bool showSynth);                 // sin avisar
+    void setSynthAvailable (bool available);        // SYNTH sólo con un instrumento cargado
+    bool isSynth() const noexcept                   { return synthButton.getToggleState(); }
+
+    std::function<void (bool showSynth)> onChange;  // clic del usuario
+
+private:
+    juce::TextButton smartKeysButton { "SMARTKEYS" }, synthButton { "SYNTH" };
+};
+
 // Preset de SmartKeys: "PRESET / Neo-Soul · D Dorian ▾". Clic: menú de presets.
 class PresetBox : public juce::Component,
                   public juce::SettableTooltipClient
@@ -291,7 +311,7 @@ private:
 
 //==============================================================================
 class SmartKeysAudioProcessorEditor : public juce::AudioProcessorEditor,
-                                      public smartkeys::HostedInstrument::KeyboardTarget,
+                                      private juce::ComponentListener,
                                       private juce::Timer
 {
 public:
@@ -300,28 +320,41 @@ public:
 
     static constexpr int kWidth = 850;
     static constexpr int kHeight = 658;
+    static constexpr int kHeaderHeight = 106;   // vista SYNTH: logo, modos, GAIN y la fila INSTRUMENT
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
     bool keyPressed (const juce::KeyPress&) override;
     bool keyStateChanged (bool isKeyDown) override;
-    void focusLost (FocusChangeType) override                   { scheduleKeyFocusCheck(); }
-    void focusOfChildComponentChanged (FocusChangeType) override { scheduleKeyFocusCheck(); }
-    void hostedWindowLostKeyboard() override                     { scheduleKeyFocusCheck(); }
 
 private:
-    // Teclado de la PC -> notas (con cada tecla; y 60 veces por segundo mientras una ventana de
-    // SmartKeys tiene el teclado, por si se perdió alguna). Si el foco se va a otra ventana que no
-    // es de SmartKeys ni la del instrumento (que le pasa las teclas), ahí no llega el KeyUp: las
-    // notas del teclado de la PC se sueltan (nunca quedan colgadas).
-    bool pollComputerKeys();
+    // Teclado de la PC -> notas. ComputerKeyboard lee las teclas aunque el foco lo tenga la
+    // interfaz del instrumento cargado (vista SYNTH); aquí cada tecla se convierte en su nota.
+    void onComputerKey (int keyIndex, bool isDown);
     void releaseComputerKeys();
-    void scheduleKeyFocusCheck() noexcept           { keyFocusCheckAtMs = juce::Time::getMillisecondCounterHiRes() + 60.0; }
-    double keyFocusCheckAtMs = 0.0;
 
     // Al elegir otra KEY: se suelta lo que tocaban el ratón y el teclado de la PC
     void releaseUiNotes();
+
+    // VISTAS: SMARTKEYS (escalas, KEY, LIVE KEYBOARD…) o SYNTH (la interfaz del instrumento
+    // cargado, dentro de esta misma ventana, debajo de la fila INSTRUMENT). En SYNTH la ventana
+    // toma el tamaño de la interfaz del plugin (y lo sigue si el plugin cambia su zoom).
+    void setSynthView (bool show);
+    void updateSynthView();                         // temporizador: instrumento cambiado / quitado
+    void applyViewSize();
+    float getSynthHeaderScale() const noexcept;     // la escala de SmartKeys (la cabecera en SYNTH)
+    void componentMovedOrResized (juce::Component&, bool wasMoved, bool wasResized) override;
+
+    // Donde se muestra la interfaz del plugin (fondo oscuro; un aviso mientras se carga)
+    struct HostedView : public juce::Component
+    {
+        void paint (juce::Graphics&) override;
+        void setMessage (const juce::String&);
+
+    private:
+        juce::String message;
+    };
 
     // Todo el contenido vive en un componente de 850 x 658 que se escala al redimensionar
     struct Content : public juce::Component
@@ -361,9 +394,10 @@ private:
     juce::Slider gainSlider;
     smartkeys::ui::ChordPortStatus portStatus;        // "MIDI ● SmartKeys Chords"
 
-    // Fila INSTRUMENT (2.0): ranura, ventana del plugin, BYPASS, UNLOAD y presets
+    // Fila INSTRUMENT: ranura, VIEW (SMARTKEYS | SYNTH), BYPASS, UNLOAD y presets
     smartkeys::ui::InstrumentSlot instrumentSlot;
-    juce::TextButton showGuiButton { "SHOW PLUGIN GUI" }, bypassButton { "BYPASS" }, unloadButton { "UNLOAD" };
+    smartkeys::ui::ViewSwitch viewSwitch;
+    juce::TextButton bypassButton { "BYPASS" }, unloadButton { "UNLOAD" };
     smartkeys::ui::PresetBox presetBox;
 
     // Tira MIC: controlador de voz, medidor, gate y "Mic: A3 -> Acorde: Am"
@@ -393,13 +427,9 @@ private:
     uint64_t shownEvent = ~(uint64_t) 0, shownLo = ~(uint64_t) 0, shownHi = ~(uint64_t) 0;
     int shownVoiceNote = -2;
 
-    // Teclado de la computadora (A W S E D F T G Y H U J K, Z/X = octava).
-    // computerKeysDown: la tecla se vio pulsada; computerKeyNotes: la nota que suena por ella
-    // (-1: ninguna, p. ej. se soltó a la fuerza al elegir otra KEY: hasta que la tecla se
-    // suelte de verdad no vuelve a tocar nada)
-    static constexpr const char* kKeyMap = "awsedftgyhujk";
-    std::array<bool, 13> computerKeysDown {};
-    std::array<int, 13> computerKeyNotes {};
+    // Teclado de la computadora (A W S E D F T G Y H U J K, Z/X = octava): la nota que suena
+    // por cada tecla (-1: ninguna) y la octava
+    std::array<int, smartkeys::ComputerKeyboard::kNumNoteKeys> computerKeyNotes {};
     int computerOctave = 4;
 
     // ACORDES AL PIANO ROLL: aviso cuando se toca con el teclado de FL (que FL graba)
@@ -410,10 +440,18 @@ private:
     // Lo que muestra la fila INSTRUMENT (se refresca cuando cambia)
     uint32_t shownHostedChange = ~0u, shownCatalogChange = ~0u;
     juce::String shownPresetName { "\x01" }, shownFailure;
-    bool shownWindowOpen = false, shownInvalidAudio = false;
+    bool shownSynthView = false, shownInvalidAudio = false;
 
     // Encima de todo: guardar / borrar preset
     smartkeys::ui::PresetDialog presetDialog;
+
+    // Vista SYNTH: la interfaz del plugin (su dueño es la ranura; aquí sólo se muestra)
+    HostedView hostedView;
+    juce::Component::SafePointer<juce::AudioProcessorEditor> shownEditor;
+    bool synthView = false, synthLayoutPending = false, changingView = false;
+
+    // El teclado de la computadora (se destruye antes que todo lo demás: ver el destructor)
+    std::unique_ptr<smartkeys::ComputerKeyboard> computerKeyboard;
 
     // Enlaces por sondeo (el hilo de audio nunca avisa a la interfaz).
     // Declarados DESPUÉS de todos los controles: se destruyen antes que ellos.

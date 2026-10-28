@@ -1372,6 +1372,70 @@ void InstrumentSlot::paint (juce::Graphics& g)
 }
 
 //==============================================================================
+// ViewSwitch: VIEW [ SMARTKEYS | SYNTH ]
+//==============================================================================
+namespace
+{
+    constexpr int kViewLabelWidth = 30;
+}
+
+ViewSwitch::ViewSwitch()
+{
+    for (auto* b : { &smartKeysButton, &synthButton })
+    {
+        b->getProperties().set (fontSizeProperty, 11.0f);
+        // Un clic aquí no le quita el teclado de la PC al teclado de notas
+        b->setWantsKeyboardFocus (false);
+        b->setMouseClickGrabsKeyboardFocus (false);
+        addAndMakeVisible (b);
+    }
+
+    smartKeysButton.setTooltip (u8 ("Vista SMARTKEYS: escalas, KEY, MIC VOICE y el LIVE KEYBOARD."));
+    synthButton.setTooltip (u8 ("Vista SYNTH: la interfaz del instrumento cargado, aquí mismo, dentro de SmartKeys (sus "
+                                "presets y perillas). El teclado de la PC sigue tocando acordes aunque toques el plugin."));
+    smartKeysButton.setToggleState (true, juce::dontSendNotification);
+
+    auto choose = [this] (bool showSynth)
+    {
+        if (showSynth == isSynth())
+            return;
+        setSynth (showSynth);
+        if (onChange != nullptr)
+            onChange (showSynth);
+    };
+    smartKeysButton.onClick = [choose] { choose (false); };
+    synthButton.onClick = [choose] { choose (true); };
+    setSynthAvailable (false);
+}
+
+void ViewSwitch::setSynth (bool showSynth)
+{
+    smartKeysButton.setToggleState (! showSynth, juce::dontSendNotification);
+    synthButton.setToggleState (showSynth, juce::dontSendNotification);
+}
+
+void ViewSwitch::setSynthAvailable (bool available)
+{
+    if (synthButton.isEnabled() != available)
+        synthButton.setEnabled (available);
+}
+
+void ViewSwitch::paint (juce::Graphics& g)
+{
+    g.setColour (Colours::label);
+    g.setFont (makeFont (8.5f, true).withExtraKerningFactor (0.2f));
+    g.drawText ("VIEW", getLocalBounds().removeFromLeft (kViewLabelWidth), juce::Justification::centredLeft, false);
+}
+
+void ViewSwitch::resized()
+{
+    auto r = getLocalBounds();
+    r.removeFromLeft (kViewLabelWidth);
+    smartKeysButton.setBounds (r.removeFromLeft (r.getWidth() * 55 / 100));
+    synthButton.setBounds (r);
+}
+
+//==============================================================================
 // PresetBox
 //==============================================================================
 void PresetBox::setName (const juce::String& newName)
@@ -1668,27 +1732,26 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     gateSlider.setTooltip (u8 ("Umbral del micrófono: por debajo, la voz no dispara notas"));
 
     //--------------------------------------------------------------------------
-    // Fila INSTRUMENT (2.0): la ranura (el instrumento que toca los acordes), su
-    // ventana, BYPASS, UNLOAD y los presets de SmartKeys
+    // Fila INSTRUMENT: la ranura (el instrumento que toca los acordes), VIEW
+    // (SMARTKEYS | SYNTH: su interfaz dentro de esta ventana), BYPASS, UNLOAD y
+    // los presets de SmartKeys
     instrumentSlot.onClick = [this] { showInstrumentMenu(); };
     content.addAndMakeVisible (instrumentSlot);
 
-    for (auto* b : { &showGuiButton, &bypassButton, &unloadButton })
+    viewSwitch.onChange = [this] (bool showSynth)
+    {
+        audioProcessor.setSynthViewWanted (showSynth);
+        setSynthView (showSynth);
+        updateInstrumentRow (true);
+        grabKeyboardFocus();   // el teclado de la PC toca acordes en las dos vistas
+    };
+    content.addAndMakeVisible (viewSwitch);
+
+    for (auto* b : { &bypassButton, &unloadButton })
     {
         b->getProperties().set (fontSizeProperty, 11.5f);
         content.addAndMakeVisible (b);
     }
-    showGuiButton.setTooltip (u8 ("Abre o cierra la ventana del instrumento cargado: ahí eliges sus presets y mueves sus "
-                                  "perillas. Flota junto a SmartKeys y se cierra con ella."));
-    showGuiButton.onClick = [this]
-    {
-        auto& hosted = audioProcessor.getHostedInstrument();
-        if (hosted.isWindowOpen())
-            hosted.closeWindow();
-        else
-            hosted.showWindow (this);
-        updateInstrumentRow (true);
-    };
     bypassButton.setClickingTogglesState (true);
     bypassButton.setTooltip (u8 ("BYPASS: el instrumento deja de sonar (suelta todas sus notas). Los acordes siguen "
                                  "saliendo por MIDI."));
@@ -1700,12 +1763,14 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     unloadButton.setTooltip (u8 ("UNLOAD: quita el instrumento de la ranura."));
     unloadButton.onClick = [this]
     {
+        audioProcessor.setSynthViewWanted (false);
         audioProcessor.getHostedInstrument().unload();
+        updateSynthView();
         updateInstrumentRow (true);
     };
 
     presetBox.setTooltip (u8 ("Presets de SmartKeys: KEY, SCALE, modo, voicing, STRUM y MIC VOICE (y, si quieres, el "
-                              "instrumento con su sonido). Los presets del instrumento se eligen en su ventana."));
+                              "instrumento con su sonido). Los presets del instrumento se eligen en su interfaz (VIEW: SYNTH)."));
     presetBox.onClick = [this] { showPresetMenu(); };
     content.addAndMakeVisible (presetBox);
 
@@ -1745,7 +1810,8 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
 
     //--------------------------------------------------------------------------
     // KEY · SCALE · ESCALA. Elegir otra tónica suelta lo que tocaban el ratón y el teclado de
-    // la PC (nada queda colgado); si una tecla de la PC sigue pulsada, vuelve a sonar en la tónica nueva
+    // la PC (nada queda colgado); una tecla de la PC que siga pulsada no vuelve a sonar hasta
+    // que se suelte y se pulse otra vez
     keySelector.onKeyChosen = [this] (int) { releaseUiNotes(); };
     content.addAndMakeVisible (keySelector);
     content.addAndMakeVisible (scaleSelector);
@@ -1801,6 +1867,12 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     setWantsKeyboardFocus (true);
     computerKeyNotes.fill (-1);
 
+    // Teclado de la PC: sigue tocando acordes aunque el teclado lo tenga la interfaz del plugin
+    computerKeyboard = std::make_unique<smartkeys::ComputerKeyboard> (*this);
+    computerKeyboard->onNoteKey = [this] (int keyIndex, bool isDown) { onComputerKey (keyIndex, isDown); };
+    computerKeyboard->onOctave = [this] (int delta) { computerOctave = juce::jlimit (0, 8, computerOctave + delta); };
+    computerKeyboard->isAllowed = [this] { return ! presetDialog.isVisible(); };   // escribiendo el nombre de un preset
+
    #if JucePlugin_Build_Standalone
     // En la app Standalone JUCE silencia la entrada por defecto "para evitar
     // realimentación". SmartKeys nunca envía la voz a la salida, así que la
@@ -1820,23 +1892,19 @@ SmartKeysAudioProcessorEditor::SmartKeysAudioProcessorEditor (SmartKeysAudioProc
     // Encima de todo: guardar / borrar preset (oculto)
     content.addChildComponent (presetDialog);
 
-    // La ventana del instrumento cargado vuelve a abrirse si estaba abierta al cerrar SmartKeys
-    audioProcessor.getHostedInstrument().smartKeysEditorOpened (*this);
+    // Vista SYNTH: la interfaz del instrumento cargado, debajo de la cabecera (oculta en SMARTKEYS)
+    addChildComponent (hostedView);
 
+    // Ventana redimensionable en la vista SMARTKEYS (mantiene la proporción); recuerda el tamaño
+    // del proyecto. applyViewSize() fija los límites y el tamaño de la vista; la escala guardada
+    // se usa tal cual (resized() no la cambia mientras cambia de vista).
+    applyViewSize();
+
+    // Primer refresco (y, si SmartKeys se cerró en la vista SYNTH y el instrumento ya está
+    // cargado, se abre en ella, con el tamaño de su interfaz; si todavía se está cargando, el
+    // temporizador la abre después)
     timerCallback();
     startTimerHz (60);
-
-    // Ventana redimensionable (mantiene la proporción); recuerda el tamaño del proyecto.
-    // La escala guardada se lee ANTES de fijar los límites: setResizeLimits() ajusta
-    // el editor (aún de 0×0) al tamaño mínimo y resized() guardaría esa escala.
-    const float savedScale = audioProcessor.getEditorScale();
-    setResizable (true, true);
-    setResizeLimits ((int) (kWidth * 0.7f), (int) (kHeight * 0.7f), kWidth * 2, kHeight * 2);
-    if (auto* editorConstrainer = getConstrainer())
-        editorConstrainer->setFixedAspectRatio ((double) kWidth / (double) kHeight);
-
-    // Última línea: todos los componentes existen y están configurados
-    setSize (juce::roundToInt ((float) kWidth * savedScale), juce::roundToInt ((float) kHeight * savedScale));
 }
 
 SmartKeysAudioProcessorEditor::~SmartKeysAudioProcessorEditor()
@@ -1851,12 +1919,19 @@ SmartKeysAudioProcessorEditor::~SmartKeysAudioProcessorEditor()
     gateAttach.reset();
     gainAttach.reset();
 
-    // 3) Ninguna nota tocada con el ratón o el teclado de la PC queda colgada
+    // 3) Ninguna nota tocada con el ratón o el teclado de la PC queda colgada, y después ya no
+    //    llega ninguna tecla (el teclado de la PC se destruye antes que todo lo demás)
     piano.releaseMouseNote();
     releaseComputerKeys();
+    computerKeyboard.reset();
 
-    // 4) La ventana del instrumento cargado se cierra con la de SmartKeys (y lo recuerda)
-    audioProcessor.getHostedInstrument().smartKeysEditorClosing();
+    // 4) La interfaz del instrumento se cierra con la ventana de SmartKeys (el instrumento sigue
+    //    sonando; se vuelve a crear al abrir SmartKeys). HostedInstrument es su dueño.
+    if (auto* shown = shownEditor.getComponent())
+        shown->removeComponentListener (this);
+    shownEditor = nullptr;
+    audioProcessor.getHostedInstrument().releaseEditor();
+    hostedView.removeAllChildren();
 
     setLookAndFeel (nullptr);
 }
@@ -1943,13 +2018,221 @@ void SmartKeysAudioProcessorEditor::paintContent (juce::Graphics& g)
                 juce::Justification::centredRight, false);
 }
 
+// Linux (app de prueba): las vistas X incrustadas (XEmbed) no siguen solas a su componente
+// cuando se mueve un componente de más arriba (en macOS y Windows, sí): se recolocan aquí
+static void updateEmbeddedNativeViews (juce::Component& component)
+{
+   #if JUCE_LINUX || JUCE_BSD
+    for (auto* child : component.getChildren())
+    {
+        if (auto* embedded = dynamic_cast<juce::XEmbedComponent*> (child))
+            embedded->updateEmbeddedBounds();
+        updateEmbeddedNativeViews (*child);
+    }
+   #else
+    juce::ignoreUnused (component);
+   #endif
+}
+
 void SmartKeysAudioProcessorEditor::resized()
 {
-    const float scale = (float) getWidth() / (float) kWidth;
-    content.setTransform (juce::AffineTransform::scale (scale));
-    content.setBounds (0, 0, kWidth, kHeight);
-    audioProcessor.setEditorScale (scale);
+    if (synthView)
+    {
+        // SYNTH: la cabecera (logo, modos, GAIN y la fila INSTRUMENT) a la escala de SmartKeys,
+        // centrada, y debajo la interfaz del plugin a su tamaño (centrada si es más estrecha)
+        const float scale = getSynthHeaderScale();
+        const int headerHeight = juce::roundToInt ((float) kHeaderHeight * scale);
+        const float offsetX = juce::jmax (0.0f, ((float) getWidth() - (float) kWidth * scale) * 0.5f);
+        content.setTransform (juce::AffineTransform::scale (scale).translated (std::round (offsetX), 0.0f));
+        content.setBounds (0, 0, kWidth, kHeaderHeight);   // lo de debajo de la cabecera queda fuera
+
+        hostedView.setBounds (0, headerHeight, getWidth(), juce::jmax (0, getHeight() - headerHeight));
+        if (auto* shown = shownEditor.getComponent())
+        {
+            shown->setTopLeftPosition (juce::jmax (0, (hostedView.getWidth() - shown->getWidth()) / 2), 0);
+            updateEmbeddedNativeViews (*shown);
+        }
+    }
+    else
+    {
+        const float scale = (float) getWidth() / (float) kWidth;
+        content.setTransform (juce::AffineTransform::scale (scale));
+        content.setBounds (0, 0, kWidth, kHeight);
+
+        // El tamaño que elige el usuario se recuerda (no los pasos intermedios al cambiar de vista)
+        if (! changingView)
+            audioProcessor.setEditorScale (scale);
+    }
     layoutContent();
+}
+
+float SmartKeysAudioProcessorEditor::getSynthHeaderScale() const noexcept
+{
+    return juce::jlimit (0.7f, 2.0f, audioProcessor.getEditorScale());
+}
+
+
+//==============================================================================
+// VISTAS: SMARTKEYS / SYNTH
+//==============================================================================
+void SmartKeysAudioProcessorEditor::HostedView::setMessage (const juce::String& newMessage)
+{
+    if (newMessage != message)
+    {
+        message = newMessage;
+        repaint();
+    }
+}
+
+void SmartKeysAudioProcessorEditor::HostedView::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colour (0xFF1B1D21));
+    if (message.isNotEmpty())
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.7f));
+        g.setFont (makeFont (14.0f, true));
+        g.drawFittedText (message, getLocalBounds().reduced (20), juce::Justification::centred, 2, 0.8f);
+    }
+}
+
+void SmartKeysAudioProcessorEditor::setSynthView (bool show)
+{
+    using Status = smartkeys::HostedInstrument::Status;
+    auto& hosted = audioProcessor.getHostedInstrument();
+    const auto status = hosted.getStatus();
+
+    // La interfaz del plugin: la que ya tiene la ranura o una nueva (createEditorIfNeeded)
+    juce::AudioProcessorEditor* pluginEditor = nullptr;
+    if (show && status == Status::Loaded)
+        pluginEditor = hosted.getEditor (true);
+
+    // Sin interfaz que mostrar (y sin una carga en curso que la traerá): vista SMARTKEYS. Si con
+    // el instrumento cargado no se pudo crear, no se vuelve a intentar sola (lo pide el usuario).
+    if (show && pluginEditor == nullptr && status != Status::Loading)
+    {
+        show = false;
+        if (status == Status::Loaded)
+            audioProcessor.setSynthViewWanted (false);
+    }
+
+    // La interfaz nueva entra en su sitio; la anterior (si la ranura no la destruyó ya) sale.
+    // Al volver a SMARTKEYS se queda dentro, oculta con la vista: volver a SYNTH es instantáneo.
+    if (pluginEditor != nullptr && pluginEditor != shownEditor.getComponent())
+    {
+        if (auto* old = shownEditor.getComponent())
+        {
+            old->removeComponentListener (this);
+            hostedView.removeChildComponent (old);
+        }
+        shownEditor = pluginEditor;
+        hostedView.addAndMakeVisible (pluginEditor);
+        pluginEditor->addComponentListener (this);
+    }
+
+    // Cambiando de instrumento: se ve el anterior hasta que el nuevo está listo; sin ninguno, un aviso
+    hostedView.setMessage (show && shownEditor == nullptr
+                             ? u8 ("Cargando ") + hosted.getDescription().name + u8 ("…")
+                             : juce::String());
+
+    const bool changed = show != synthView;
+    synthView = show;
+    viewSwitch.setSynth (show);
+    hostedView.setVisible (show);
+
+    if (changed || show)
+        applyViewSize();
+
+    if (show)
+        hostedView.toFront (false);
+}
+
+void SmartKeysAudioProcessorEditor::updateSynthView()
+{
+    using Status = smartkeys::HostedInstrument::Status;
+    auto& hosted = audioProcessor.getHostedInstrument();
+    const auto status = hosted.getStatus();
+
+    viewSwitch.setSynthAvailable (status == Status::Loaded);
+
+    // SYNTH si el usuario la eligió y hay instrumento (o se está cambiando por otro estando en
+    // SYNTH). Guardar / borrar un preset se hace en la vista SMARTKEYS (al cerrar, vuelve).
+    const bool wanted = audioProcessor.isSynthViewWanted() && ! presetDialog.isVisible();
+    const bool show = wanted && (status == Status::Loaded || (synthView && status == Status::Loading));
+
+    if (show != synthView)
+    {
+        setSynthView (show);
+        return;
+    }
+
+    if (! synthView)
+        return;
+
+    // Se cambió de instrumento: la interfaz del nuevo (la del anterior ya no existe)
+    if (status == Status::Loaded && (shownEditor == nullptr || shownEditor.getComponent() != hosted.getEditor (false)))
+    {
+        setSynthView (true);
+        return;
+    }
+
+    // El plugin cambió el tamaño de su interfaz (su zoom): la ventana lo sigue
+    if (synthLayoutPending)
+        applyViewSize();
+}
+
+void SmartKeysAudioProcessorEditor::applyViewSize()
+{
+    synthLayoutPending = false;
+    const juce::ScopedValueSetter<bool> changing (changingView, true);
+    const float scale = getSynthHeaderScale();
+
+    if (synthView)
+    {
+        // Tamaño fijo: el de la interfaz del plugin más la cabecera (y nunca más estrecha que
+        // SmartKeys). Si el plugin cambia su tamaño, la ventana lo sigue.
+        int pluginWidth = 0, pluginHeight = 0;
+        if (auto* shown = shownEditor.getComponent())
+        {
+            pluginWidth = shown->getWidth();
+            pluginHeight = shown->getHeight();
+        }
+        else
+        {
+            // Mientras se carga otro instrumento: el mismo espacio que había
+            pluginWidth = getWidth();
+            pluginHeight = juce::jmax (juce::roundToInt ((float) (kHeight - kHeaderHeight) * scale),
+                                       getHeight() - juce::roundToInt ((float) kHeaderHeight * scale));
+        }
+
+        const int width = juce::jmax (juce::roundToInt ((float) kWidth * scale), pluginWidth);
+        const int height = juce::roundToInt ((float) kHeaderHeight * scale) + juce::jmax (1, pluginHeight);
+
+        if (auto* editorConstrainer = getConstrainer())
+            editorConstrainer->setFixedAspectRatio (0.0);
+        setResizable (false, false);
+        setResizeLimits (width, height, width, height);
+        setSize (width, height);
+    }
+    else
+    {
+        if (auto* editorConstrainer = getConstrainer())
+            editorConstrainer->setFixedAspectRatio (0.0);
+        setResizable (true, true);
+        setResizeLimits ((int) (kWidth * 0.7f), (int) (kHeight * 0.7f), kWidth * 2, kHeight * 2);
+        if (auto* editorConstrainer = getConstrainer())
+            editorConstrainer->setFixedAspectRatio ((double) kWidth / (double) kHeight);
+        setSize (juce::roundToInt ((float) kWidth * scale), juce::roundToInt ((float) kHeight * scale));
+    }
+
+    resized();   // también si el tamaño no cambió (la vista sí)
+}
+
+void SmartKeysAudioProcessorEditor::componentMovedOrResized (juce::Component& component, bool, bool wasResized)
+{
+    // La interfaz del plugin cambió de tamaño (su zoom, o al conectarse a la ventana): la
+    // ventana se ajusta en el próximo ciclo del temporizador (nunca dentro de la llamada del plugin)
+    if (wasResized && &component == shownEditor.getComponent())
+        synthLayoutPending = true;
 }
 
 void SmartKeysAudioProcessorEditor::layoutContent()
@@ -1959,10 +2242,10 @@ void SmartKeysAudioProcessorEditor::layoutContent()
     gainSlider.setBounds (692, 15, 142, 28);
     portStatus.setBounds (560, 1, 274, 12);   // "MIDI ● SmartKeys Chords", alineado a la derecha
 
-    // Fila INSTRUMENT: ranura | SHOW PLUGIN GUI | BYPASS | UNLOAD | PRESET
+    // Fila INSTRUMENT: ranura | VIEW: SMARTKEYS · SYNTH | BYPASS | UNLOAD | PRESET
     const int iy = (int) kInstCardY;
-    instrumentSlot.setBounds (22, iy + 4, 318, 36);
-    showGuiButton.setBounds (346, iy + 8, 150, 28);
+    instrumentSlot.setBounds (22, iy + 4, 286, 36);
+    viewSwitch.setBounds (316, iy + 8, 180, 28);
     bypassButton.setBounds (500, iy + 8, 84, 28);
     unloadButton.setBounds (588, iy + 8, 84, 28);
     presetBox.setBounds (680, iy + 4, 148, 36);
@@ -2069,21 +2352,13 @@ void SmartKeysAudioProcessorEditor::timerCallback()
     updateVoiceReadout();
     updateStrumLabel();
     updateDisplay();
+    updateSynthView();
     updateInstrumentRow();
 
-    // Teclado de la PC: lo que se perdiera entre tecla y tecla se corrige; y si el foco se fue a
-    // otra ventana (el KeyUp ya no llega aquí), sus notas se sueltan
-    auto& hostedForKeys = audioProcessor.getHostedInstrument();
-    const bool keysReachUs = hasKeyboardFocus (true) || hostedForKeys.isWindowActive();
-    if (keysReachUs)
-        pollComputerKeys();
-
-    if (keyFocusCheckAtMs > 0.0 && juce::Time::getMillisecondCounterHiRes() >= keyFocusCheckAtMs)
-    {
-        keyFocusCheckAtMs = 0.0;
-        if (! keysReachUs)
-            releaseComputerKeys();
-    }
+    // Teclado de la PC (Windows / Linux: se leen las teclas; en todos: si el teclado ya no llega
+    // a la ventana de SmartKeys, lo que sonaba se suelta)
+    if (computerKeyboard != nullptr)
+        computerKeyboard->poll();
 }
 
 void SmartKeysAudioProcessorEditor::updateStrumLabel()
@@ -2317,18 +2592,17 @@ void SmartKeysAudioProcessorEditor::updateInstrumentRow (bool force)
     const auto catalogChange = catalog.getChangeCounter();
     const auto presetName = audioProcessor.getPresetName();
     const auto failure = hosted.getRecentFailure();
-    const bool windowOpen = hosted.isWindowOpen();
     const bool invalidAudio = hosted.producedInvalidAudio();
 
     if (! force && hostedChange == shownHostedChange && catalogChange == shownCatalogChange && presetName == shownPresetName
-          && failure == shownFailure && windowOpen == shownWindowOpen && invalidAudio == shownInvalidAudio)
+          && failure == shownFailure && synthView == shownSynthView && invalidAudio == shownInvalidAudio)
         return;
 
     shownHostedChange = hostedChange;
     shownCatalogChange = catalogChange;
     shownPresetName = presetName;
     shownFailure = failure;
-    shownWindowOpen = windowOpen;
+    shownSynthView = synthView;
     shownInvalidAudio = invalidAudio;
 
     const auto status = hosted.getStatus();
@@ -2356,7 +2630,7 @@ void SmartKeysAudioProcessorEditor::updateInstrumentRow (bool force)
             if (failure.isNotEmpty())
                 sub = u8 ("No se pudo cargar ") + failure;
             instrumentSlot.setState (hosted.isBypassed() ? Look::Bypassed : Look::Loaded, "Loaded:", d.name, sub);
-            tip = d.name + "  (" + kind + ")\n" + u8 ("Clic: cambiar de instrumento. SHOW PLUGIN GUI abre su ventana.");
+            tip = d.name + "  (" + kind + ")\n" + u8 ("Clic: cambiar de instrumento. VIEW: SYNTH muestra su interfaz aquí mismo.");
             break;
         }
         case Status::Missing:
@@ -2389,9 +2663,8 @@ void SmartKeysAudioProcessorEditor::updateInstrumentRow (bool force)
         instrumentSlot.setTooltip (tip);
 
     const bool loaded = status == Status::Loaded;
-    showGuiButton.setEnabled (loaded);
-    showGuiButton.setToggleState (loaded && windowOpen, juce::dontSendNotification);
-    showGuiButton.setButtonText (loaded && windowOpen ? "HIDE PLUGIN GUI" : "SHOW PLUGIN GUI");
+    viewSwitch.setSynthAvailable (loaded);
+    viewSwitch.setSynth (synthView);
     bypassButton.setEnabled (loaded);
     bypassButton.setToggleState (loaded && hosted.isBypassed(), juce::dontSendNotification);
     unloadButton.setEnabled (status != Status::Empty);
@@ -2404,6 +2677,10 @@ void SmartKeysAudioProcessorEditor::showInstrumentMenu()
     using Status = smartkeys::HostedInstrument::Status;
     auto& hosted = audioProcessor.getHostedInstrument();
     auto& catalog = hosted.getCatalog();
+
+    // El teclado vuelve a SmartKeys (si lo tenía la interfaz del plugin): las flechas y Enter
+    // recorren el menú
+    grabKeyboardFocus();
 
    #if ! JUCE_MAC
     // Windows / Linux: sólo hay VST3. La primera vez se buscan solos.
@@ -2515,9 +2792,14 @@ void SmartKeysAudioProcessorEditor::showInstrumentMenu()
                             if (result == kMenuScanNew)       h.getCatalog().startVst3Scan (false);
                             else if (result == kMenuScanAll)  h.getCatalog().startVst3Scan (true);
                             else if (result == kMenuRetry)    h.retry();
-                            else if (result == kMenuUnload)   h.unload();
+                            else if (result == kMenuUnload)
+                            {
+                                safe->audioProcessor.setSynthViewWanted (false);
+                                h.unload();
+                            }
                             else if (juce::isPositiveAndBelow (result - 1, instruments.size()))
                                 h.load (instruments.getReference (result - 1));
+                            safe->updateSynthView();
                             safe->updateInstrumentRow (true);
                         });
 }
@@ -2528,6 +2810,7 @@ void SmartKeysAudioProcessorEditor::showPresetMenu()
     namespace presets = smartkeys::presets;
     const auto items = presets::list();
     const auto current = audioProcessor.getPresetName();
+    grabKeyboardFocus();   // como en el menú de la ranura
 
     juce::PopupMenu menu;
     menu.addSectionHeader (u8 ("Presets de fábrica"));
@@ -2566,6 +2849,9 @@ void SmartKeysAudioProcessorEditor::showPresetMenu()
                             auto& editor = *safe;
                             if (result == kMenuSavePreset)
                             {
+                                // La ventana para el nombre se muestra en la vista SMARTKEYS (al
+                                // cerrarla se vuelve a SYNTH si estaba ahí)
+                                editor.setSynthView (false);
                                 auto& hosted = editor.audioProcessor.getHostedInstrument();
                                 const bool loaded = hosted.getStatus() == smartkeys::HostedInstrument::Status::Loaded;
                                 const auto name = currentUser >= 0 ? items.getReference (currentUser).name : u8 ("Mi preset");
@@ -2573,6 +2859,7 @@ void SmartKeysAudioProcessorEditor::showPresetMenu()
                             }
                             else if (result == kMenuDeletePreset && currentUser >= 0)
                             {
+                                editor.setSynthView (false);
                                 const auto item = items.getReference (currentUser);
                                 editor.presetDialog.onDelete = [safe, item]
                                 {
@@ -2601,71 +2888,60 @@ void SmartKeysAudioProcessorEditor::showPresetMenu()
 }
 
 //==============================================================================
+// Teclado de la PC. Las notas las toca ComputerKeyboard (lee las teclas aunque el teclado lo
+// tenga la interfaz del plugin); aquí los eventos de JUCE sólo se quedan con esas teclas para
+// que no lleguen al DAW (que haría otra cosa con ellas) mientras SmartKeys tiene el foco.
 bool SmartKeysAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 {
     if (presetDialog.isVisible())
         return false;   // se está escribiendo el nombre de un preset
 
-    const auto c = juce::CharacterFunctions::toLowerCase (key.getTextCharacter());
+    const auto mods = key.getModifiers();
+    if (mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown())
+        return false;   // atajos del DAW / del sistema
 
-    if (key.getModifiers().isCommandDown())
-        return false;
-
-    if (c == 'z') { computerOctave = juce::jmax (0, computerOctave - 1); return true; }
-    if (c == 'x') { computerOctave = juce::jmin (8, computerOctave + 1); return true; }
-
-    for (const char* k = kKeyMap; *k != 0; ++k)
-        if (c == (juce::juce_wchar) *k)
-            return true;
-
-    return false;
+    const auto c = key.getTextCharacter();
+    return smartkeys::ComputerKeyboard::noteKeyIndex (c) >= 0 || smartkeys::ComputerKeyboard::octaveDelta (c) != 0;
 }
 
 bool SmartKeysAudioProcessorEditor::keyStateChanged (bool)
 {
-    return pollComputerKeys();
+    // Windows / Linux: la tecla se lee ya (sin esperar al temporizador)
+    return computerKeyboard != nullptr && computerKeyboard->poll();
 }
 
-bool SmartKeysAudioProcessorEditor::pollComputerKeys()
+void SmartKeysAudioProcessorEditor::onComputerKey (int keyIndex, bool isDown)
 {
-    bool handled = false;
-    const bool command = juce::ModifierKeys::currentModifiers.isCommandDown() || presetDialog.isVisible();
+    if (! juce::isPositiveAndBelow (keyIndex, (int) computerKeyNotes.size()))
+        return;
 
-    for (int i = 0; i < 13; ++i)
+    auto& note = computerKeyNotes[(size_t) keyIndex];
+    if (note >= 0)
     {
-        const bool down = ! command && juce::KeyPress::isKeyCurrentlyDown ((int) kKeyMap[i]);
-        if (down == computerKeysDown[(size_t) i])
-            continue;
-
-        computerKeysDown[(size_t) i] = down;
-        handled = true;
-
-        if (down)
-        {
-            const int note = juce::jlimit (0, 127, (computerOctave + 1) * 12 + i);
-            computerKeyNotes[(size_t) i] = note;
-            audioProcessor.pushScreenNote (note, 100, true);
-        }
-        else if (computerKeyNotes[(size_t) i] >= 0)
-        {
-            audioProcessor.pushScreenNote (computerKeyNotes[(size_t) i], 0, false);
-            computerKeyNotes[(size_t) i] = -1;
-        }
+        audioProcessor.pushScreenNote (note, 0, false);
+        note = -1;
     }
 
-    return handled;
+    if (isDown)
+    {
+        note = juce::jlimit (0, 127, (computerOctave + 1) * 12 + keyIndex);
+        audioProcessor.pushScreenNote (note, 100, true);
+    }
 }
 
 void SmartKeysAudioProcessorEditor::releaseComputerKeys()
 {
-    // Se suelta lo que suena, pero la tecla sigue contando como pulsada: si de verdad lo
-    // está (o el sistema todavía lo cree, porque la soltó en otra ventana), no vuelve a
-    // disparar un acorde por sí sola; tocará otra vez cuando se suelte y se vuelva a pulsar
-    for (size_t i = 0; i < computerKeysDown.size(); ++i)
+    // Se suelta lo que suena. Una tecla que siga pulsada (o que el sistema todavía crea pulsada,
+    // porque se soltó en otra ventana) no vuelve a disparar un acorde por sí sola: tocará otra
+    // vez cuando se suelte y se vuelva a pulsar.
+    if (computerKeyboard != nullptr)
+        computerKeyboard->releaseAll();
+
+    for (auto& note : computerKeyNotes)
     {
-        if (computerKeyNotes[i] >= 0)
-            audioProcessor.pushScreenNote (computerKeyNotes[i], 0, false);
-        computerKeyNotes[i] = -1;
+        if (note >= 0)
+            audioProcessor.pushScreenNote (note, 0, false);
+        note = -1;
     }
 }
 

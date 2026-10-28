@@ -17,28 +17,67 @@ namespace
     constexpr const char* kVst3ListFile   = "Instrumentos VST3.xml";
     constexpr const char* kScanCheckFile  = "Buscando VST3.txt";        // dead man's pedal de la búsqueda
     constexpr const char* kLoadCheckFile  = "Cargando plugin.txt";      // cargas en curso (carga protegida)
+    constexpr const char* kExcludedFile   = "Instrumentos excluidos.txt";   // al cargarlos no tenían salida de audio
 
-    // Se declaran "instrumento" pero no generan sonido por sí mismos: anfitriones de plugins,
-    // patchers y navegadores de samples (se busca en el nombre del plugin y del fabricante)
+    // SÓLO GENERADORES DE SONIDO. Un plugin puede declararse instrumento y no sonar por sí
+    // mismo: anfitriones de plugins (AudioGridder, Element, PatchWork…), patchers, herramientas
+    // MIDI, analizadores, utilidades. Se reconocen por su nombre y su categoría:
+    //
+    //  - palabras enteras en el nombre o en la categoría ("Dispatch Synth" sí; "MIDI Router" no)
+    constexpr const char* kNotAGeneratorWords[] = {
+        "fx", "effect", "effects", "analyzer", "analyser", "analysis", "spectrum", "meter", "scope",
+        "routing", "router", "network", "midi", "utility", "utilities", "tool", "tools",
+        "control", "controller", "external", "patcher", "element", "host", "wrapper", "bridge",
+    };
+
+    //  - trozos de nombres pegados: AGridder / AudioGridder, PatchWork, MyPatcher
+    constexpr const char* kNotAGeneratorParts[] = { "gridder", "patcher", "patchwork" };
+
+    //  - anfitriones de plugins, patchers y navegadores de samples (nombre y fabricante)
     constexpr const char* kHostsAndBrowsers[] = {
         "patchwork",          // Blue Cat's PatchWork
         "bidule",             // Plogue Bidule
-        "patcher",            // patchers
         "unify",              // PlugInGuru Unify
         "carla",              // Carla (KXStudio)
         "metaplugin",         // DDMF Metaplugin
         "gig performer",
         "vienna ensemble",    // Vienna Ensemble Pro (servidor de plugins)
         "fl studio",          // FL Studio como plugin (un DAW entero)
+        "kushview",           // Element (anfitrión modular de plugins)
+        "audiogridder",       // AGridder (plugins por la red)
+        "komplete kontrol",   // anfitrión y navegador de Native Instruments
         "sample manager",     // ADSR Sample Manager
         "loopcloud",
         "splice bridge",
     };
 
-    // La búsqueda de VST3 sólo apunta instrumentos. Un archivo que sólo trae efectos devuelve
-    // "no apto" (false): JUCE lo aparta y las búsquedas de "nuevos" ya no lo abren (con
-    // "Volver a buscar todos" se revisa otra vez). Un archivo que no se pudo abrir sigue como
-    // siempre (se reintenta la próxima vez).
+    // " palabra1 palabra2 " en minúsculas: todo lo que no es letra o número separa
+    juce::String wordsOf (const juce::String& text)
+    {
+        juce::String words (" ");
+        for (auto c : text.toLowerCase())
+            words << (juce::CharacterFunctions::isLetterOrDigit (c) ? juce::String::charToString (c) : juce::String (" "));
+        return words + " ";
+    }
+
+    bool containsWord (const juce::String& words, const char* word)
+    {
+        return words.contains (" " + juce::String (word) + " ");
+    }
+
+    // ¿Trae moduleinfo.json? Entonces JUCE lo describe sin abrirlo y no sabe sus canales
+    bool hasModuleInfo (const juce::String& fileOrIdentifier)
+    {
+        const auto bundle = juce::File::createFileWithoutCheckingPath (fileOrIdentifier);
+        const auto contents = bundle.getChildFile ("Contents");
+        return contents.getChildFile ("Resources").getChildFile ("moduleinfo.json").existsAsFile()
+            || contents.getChildFile ("moduleinfo.json").existsAsFile();
+    }
+
+    // La búsqueda de VST3 sólo apunta generadores de sonido. Un archivo que no trae ninguno
+    // (sólo efectos, anfitriones, herramientas MIDI) devuelve "no apto" (false): JUCE lo aparta
+    // y las búsquedas de "nuevos" ya no lo abren ("Volver a buscar todos" lo revisa otra vez).
+    // Un archivo que no se pudo abrir sigue como siempre (se reintenta la próxima vez).
     class InstrumentsOnlyScanner final : public juce::KnownPluginList::CustomScanner
     {
     public:
@@ -48,8 +87,13 @@ namespace
             juce::OwnedArray<juce::PluginDescription> found;
             format.findAllTypesForFile (found, fileOrIdentifier);
 
+            // Sin moduleinfo.json, JUCE abrió el plugin y sus canales son los de verdad: un
+            // "instrumento" sin salidas de audio no suena
+            const bool channelsKnown = format.getName() != "VST3" || ! hasModuleInfo (fileOrIdentifier);
+
             for (auto* d : found)
-                if (d != nullptr && PluginCatalog::isLoadableInstrument (*d))
+                if (d != nullptr && PluginCatalog::isLoadableInstrument (*d)
+                      && ! (channelsKnown && d->numOutputChannels <= 0))
                     result.add (new juce::PluginDescription (*d));
 
             return ! result.isEmpty() || found.isEmpty();
@@ -84,6 +128,11 @@ PluginCatalog::PluginCatalog()
         crashedLastTime.removeDuplicates (false);
         markers.deleteFile();
     }
+
+    // Instrumentos que al cargarlos resultaron no tener salida de audio
+    folder.getChildFile (kExcludedFile).readLines (excluded);
+    excluded.removeEmptyStrings();
+    excluded.removeDuplicates (false);
 }
 
 PluginCatalog::~PluginCatalog()
@@ -119,21 +168,70 @@ bool PluginCatalog::isSmartKeysItself (const juce::PluginDescription& d)
 
 bool PluginCatalog::isHostOrBrowser (const juce::PluginDescription& d)
 {
-    // Palabras enteras ("Dispatcher" no es "patcher"): todo lo que no es letra o número, espacio
-    juce::String text;
-    for (auto c : (d.name + " " + d.descriptiveName + " " + d.manufacturerName).toLowerCase())
-        text << (juce::CharacterFunctions::isLetterOrDigit (c) ? juce::String::charToString (c) : juce::String (" "));
-    text = " " + text + " ";
+    // Palabras enteras del nombre y del fabricante ("Unifyer" no es "Unify")
+    const auto words = wordsOf (d.name + " " + d.descriptiveName + " " + d.manufacturerName);
+    for (auto* phrase : kHostsAndBrowsers)
+        if (containsWord (words, phrase))
+            return true;
+    return false;
+}
 
-    for (auto* words : kHostsAndBrowsers)
-        if (text.contains (" " + juce::String (words) + " "))
+bool PluginCatalog::hasNonGeneratorName (const juce::PluginDescription& d)
+{
+    // Palabras enteras del nombre y de la categoría (VST3: "Instrument|Synth", "Fx|EQ"…)
+    const auto words = wordsOf (d.name + " " + d.descriptiveName + " " + d.category);
+    for (auto* word : kNotAGeneratorWords)
+        if (containsWord (words, word))
+            return true;
+
+    // Nombres pegados ("AGridder", "AudioGridderInst"): sólo letras y números
+    juce::String letters;
+    for (auto c : (d.name + " " + d.descriptiveName).toLowerCase())
+        if (juce::CharacterFunctions::isLetterOrDigit (c))
+            letters << juce::String::charToString (c);
+    for (auto* part : kNotAGeneratorParts)
+        if (letters.contains (part))
             return true;
     return false;
 }
 
 bool PluginCatalog::isLoadableInstrument (const juce::PluginDescription& d)
 {
-    return d.isInstrument && ! isSmartKeysItself (d) && ! isHostOrBrowser (d);
+    if (! d.isInstrument || isSmartKeysItself (d) || isHostOrBrowser (d) || hasNonGeneratorName (d))
+        return false;
+
+    // Si se saben sus canales (tiene entradas declaradas) y no tiene salidas, no suena
+    return ! (d.numInputChannels > 0 && d.numOutputChannels <= 0);
+}
+
+//==============================================================================
+// Instrumentos que al cargarlos resultaron no tener salida de audio (VST3 descritos por su
+// moduleinfo.json sin abrirlos: sus canales sólo se saben al crearlos)
+void PluginCatalog::excludeNonGenerator (const juce::PluginDescription& d)
+{
+    const auto key = loadKey (d);
+    if (excluded.contains (key))
+        return;
+
+    excluded.add (key);
+    saveExcluded();
+    changeCounter.fetch_add (1, std::memory_order_release);
+}
+
+bool PluginCatalog::isExcluded (const juce::PluginDescription& d) const
+{
+    return excluded.contains (loadKey (d));
+}
+
+void PluginCatalog::saveExcluded()
+{
+    const auto folder = getUserDataFolder();
+    folder.createDirectory();
+    const auto file = folder.getChildFile (kExcludedFile);
+    if (excluded.isEmpty())
+        file.deleteFile();
+    else
+        file.replaceWithText (excluded.joinIntoString ("\n"), false, false);
 }
 
 bool PluginCatalog::pruneNonInstruments()
@@ -171,12 +269,12 @@ juce::Array<juce::PluginDescription> PluginCatalog::getInstruments()
    #if JUCE_MAC
     if (findFormat ("AudioUnit") != nullptr)
         for (const auto& d : listAudioUnitInstruments())   // sólo kAudioUnitType_MusicDevice
-            if (isLoadableInstrument (d))
+            if (isLoadableInstrument (d) && ! isExcluded (d))
                 result.add (d);
    #endif
 
     for (const auto& d : vst3List.getTypes())
-        if (d.pluginFormatName == "VST3" && isLoadableInstrument (d))
+        if (d.pluginFormatName == "VST3" && isLoadableInstrument (d) && ! isExcluded (d))
             result.add (d);
 
     std::sort (result.begin(), result.end(), [] (const juce::PluginDescription& a, const juce::PluginDescription& b)
@@ -205,7 +303,7 @@ int PluginCatalog::countVst3Instruments() const
 {
     int n = 0;
     for (const auto& d : vst3List.getTypes())
-        n += isLoadableInstrument (d) ? 1 : 0;
+        n += isLoadableInstrument (d) && ! isExcluded (d) ? 1 : 0;
     return n;
 }
 
@@ -223,6 +321,8 @@ void PluginCatalog::startVst3Scan (bool rescanEverything)
     {
         vst3List.clear();
         vst3List.clearBlacklistedFiles();
+        excluded.clear();   // otra oportunidad (una versión nueva del plugin puede tener salida de audio)
+        saveExcluded();
     }
 
     instrumentsBeforeScan = countVst3Instruments();

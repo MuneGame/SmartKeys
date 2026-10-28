@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SmartKeys VERSION 2.0.1 LANGUAGES C CXX)
+project(SmartKeys VERSION 2.0.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -64,6 +64,13 @@ if(APPLE)
     list(APPEND SMARTKEYS_HOST_SOURCES Source/HostingMac.mm)
 endif()
 
+# 2.0.2: el teclado de la computadora como teclado de notas, también con el foco en la interfaz
+# del plugin cargado (monitor de eventos en macOS; estado de las teclas en Windows y Linux)
+set(SMARTKEYS_KEYBOARD_SOURCES Source/ComputerKeyboard.cpp)
+if(APPLE)
+    list(APPEND SMARTKEYS_KEYBOARD_SOURCES Source/ComputerKeyboard_mac.mm)
+endif()
+
 #-------------------------------------------------------------------------------
 # SmartKeys — un único plugin de instrumento (Channel Rack de FL Studio / pista
 # MIDI de Ableton). Fabricante: MIWN. 2.0: no tiene sonido propio; toca el
@@ -119,7 +126,8 @@ target_sources(SmartKeys PRIVATE
     Source/PluginEditor.cpp
     ${SMARTKEYS_MIC_SOURCES}
     ${SMARTKEYS_PORT_SOURCES}
-    ${SMARTKEYS_HOST_SOURCES})
+    ${SMARTKEYS_HOST_SOURCES}
+    ${SMARTKEYS_KEYBOARD_SOURCES})
 target_include_directories(SmartKeys PRIVATE Source)
 
 target_compile_definitions(SmartKeys PUBLIC
@@ -143,6 +151,10 @@ target_link_libraries(SmartKeys
 if(APPLE)
     # CoreAudio (lectura del micrófono) y AVFoundation (permiso de micrófono)
     target_link_libraries(SmartKeys PRIVATE "-framework CoreAudio" "-framework AVFoundation")
+elseif(UNIX)
+    # Linux (app de prueba): el teclado de la PC se lee del servidor X
+    find_package(X11 REQUIRED)
+    target_link_libraries(SmartKeys PRIVATE X11::X11)
 endif()
 
 # Instalación local: borrar la versión anterior (y SmartKeys FX de la 1.1–1.4)
@@ -216,9 +228,39 @@ if(SMARTKEYS_BUILD_HOST_TESTS)
         AU_MAIN_TYPE                  kAudioUnitType_MusicDevice
         COPY_PLUGIN_AFTER_BUILD       FALSE)
     target_sources(SmartKeysTestSynth PRIVATE Tests/TestSynth.cpp)
+    # (Las aserciones internas del JUCE del instrumento de prueba no son de SmartKeys: en Linux, al
+    # quitarlo justo después de tocar su interfaz, su propio JUCE avisa de mensajes sin entregar)
     target_compile_definitions(SmartKeysTestSynth PUBLIC
-        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_DISABLE_ASSERTIONS=1)
     target_link_libraries(SmartKeysTestSynth
+        PRIVATE
+            juce::juce_audio_utils
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
+
+    # Otro instrumento de prueba (el mismo código, otro nombre): cambiar de instrumento con su
+    # interfaz a la vista (VIEW: SYNTH)
+    juce_add_plugin(SmartKeysTestSynthB
+        COMPANY_NAME                  "MIWN Test"
+        BUNDLE_ID                     com.miwn.smartkeys.testsynthb
+        PLUGIN_MANUFACTURER_CODE      Miwt
+        PLUGIN_CODE                   Tsyb
+        PRODUCT_NAME                  "SmartKeysTestSynth B"
+        DESCRIPTION                   "SmartKeys test instrument B (not distributed)"
+        VERSION                       ${PROJECT_VERSION}
+        FORMATS                       VST3
+        IS_SYNTH                      TRUE
+        NEEDS_MIDI_INPUT              TRUE
+        NEEDS_MIDI_OUTPUT             FALSE
+        VST3_CATEGORIES               Instrument Synth
+        COPY_PLUGIN_AFTER_BUILD       FALSE)
+    target_sources(SmartKeysTestSynthB PRIVATE Tests/TestSynth.cpp)
+    target_compile_definitions(SmartKeysTestSynthB PUBLIC
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_DISABLE_ASSERTIONS=1)
+    target_link_libraries(SmartKeysTestSynthB
         PRIVATE
             juce::juce_audio_utils
         PUBLIC
@@ -271,6 +313,32 @@ if(SMARTKEYS_BUILD_HOST_TESTS)
         PUBLIC
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags)
+
+    # 2.0.2: la ventana de SmartKeys como en un DAW (VST3 con su interfaz abierta y el instrumento
+    # de prueba en la ranura): vista SYNTH dentro de la ventana, el ZOOM del instrumento, el teclado
+    # de la computadora con el foco en el plugin (clics y teclas de verdad) y, en macOS, el teclado
+    # pieza por pieza
+    juce_add_console_app(SmartKeysEditorTests PRODUCT_NAME "SmartKeysEditorTests" PLUGINHOST_AU TRUE)
+    target_sources(SmartKeysEditorTests PRIVATE Tests/EditorTests.cpp)
+    if(APPLE)
+        target_sources(SmartKeysEditorTests PRIVATE Tests/EditorTests_mac.mm Source/ComputerKeyboard.cpp
+                                                    Source/ComputerKeyboard_mac.mm)
+    endif()
+    target_include_directories(SmartKeysEditorTests PRIVATE Source)
+    target_compile_definitions(SmartKeysEditorTests PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_STANDALONE_APPLICATION=1 JUCE_PLUGINHOST_VST3=1
+        JUCE_MODAL_LOOPS_PERMITTED=1)
+    target_link_libraries(SmartKeysEditorTests
+        PRIVATE
+            juce::juce_audio_processors
+            juce::juce_audio_utils
+            juce::juce_gui_extra
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(SmartKeysEditorTests PRIVATE X11::X11)
+    endif()
 
     juce_add_console_app(SmartKeysHostTests PRODUCT_NAME "SmartKeysHostTests")
     target_sources(SmartKeysHostTests PRIVATE Tests/HostTests.cpp)

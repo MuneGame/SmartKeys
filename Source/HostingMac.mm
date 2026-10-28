@@ -13,15 +13,11 @@
     ("AudioUnit:Synths/aumu,SUBT,MANU") para que la carga y los proyectos
     guardados encuentren el mismo plugin.
 
-    2. La ventana del plugin cargado se comporta como un panel de un DAW.
-
   ==============================================================================
 */
 
 #include "PluginCatalog.h"
-#include "HostedInstrument.h"
 
-#import <AppKit/AppKit.h>
 #include <AudioToolbox/AudioToolbox.h>
 
 namespace smartkeys
@@ -91,20 +87,6 @@ juce::Array<juce::PluginDescription> listAudioUnitInstruments()
     }
 
     return result;
-}
-
-//==============================================================================
-void configureHostedPluginWindow (void* nativeView)
-{
-    auto* view = (NSView*) nativeView;
-    NSWindow* window = view != nil ? [view window] : nil;
-    if (window == nil)
-        return;
-
-    // Se oculta cuando FL Studio (o la app) pasa a segundo plano y vuelve con él;
-    // en pantalla completa flota sobre la ventana del DAW
-    [window setHidesOnDeactivate: YES];
-    [window setCollectionBehavior: [window collectionBehavior] | NSWindowCollectionBehaviorFullScreenAuxiliary];
 }
 
 } // namespace smartkeys

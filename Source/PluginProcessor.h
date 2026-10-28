@@ -188,6 +188,11 @@ public:
     float getEditorScale() const noexcept         { return editorScale.load(); }
     void  setEditorScale (float s) noexcept       { editorScale.store (juce::jlimit (0.6f, 2.0f, s)); }
 
+    // La vista de la ventana: SMARTKEYS (false) o SYNTH (la interfaz del instrumento cargado,
+    // dentro de la ventana). Se guarda con el proyecto.
+    bool isSynthViewWanted() const noexcept       { return synthViewWanted.load(); }
+    void setSynthViewWanted (bool b) noexcept     { synthViewWanted.store (b); }
+
     static juce::StringArray getKeyNames();
 
     // Ranura de instrumento (la interfaz la usa desde el hilo de mensajes)
@@ -305,6 +310,7 @@ private:
 
     std::array<std::atomic<uint64_t>, 2> activeNotesBitmask {};
     std::atomic<float> editorScale { 1.0f };
+    std::atomic<bool> synthViewWanted { false };
 
     juce::MidiBuffer routedMidi;                  // acordes completos (antes del STRUM)
     juce::MidiBuffer expandedChordMidi;           // salida final (con STRUM)

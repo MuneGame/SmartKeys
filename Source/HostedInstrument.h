@@ -9,8 +9,12 @@
     al instrumento VST3 / Audio Unit cargado aquí, y el audio de ese
     instrumento sale por la salida de SmartKeys.
 
+    La interfaz del instrumento se muestra DENTRO de la ventana de SmartKeys
+    (vista SYNTH), nunca en una ventana flotante aparte: HostedInstrument es
+    dueño de ese editor y lo destruye antes que el instrumento.
+
     Hilos:
-      - Crear, cambiar y quitar el instrumento, su ventana y su estado: SÓLO en
+      - Crear, cambiar y quitar el instrumento, su interfaz y su estado: SÓLO en
         el hilo de mensajes. Lo que el DAW pide desde otro hilo (prepareToPlay,
         get/setStateInformation) se apunta en atómicos y se aplica después en
         el hilo de mensajes (temporizador).
@@ -20,7 +24,7 @@
         toca un instrumento a medio crear o ya destruido. El hilo de mensajes
         sólo sujeta el candado para cambiar un puntero.
       - El instrumento viejo se destruye en el hilo de mensajes, siempre
-        después de cerrar su ventana y de que el audio lo haya soltado.
+        después de destruir su interfaz y de que el audio lo haya soltado.
 
   ==============================================================================
 */
@@ -42,14 +46,6 @@ class HostedInstrument : private juce::AudioProcessorListener,
 public:
     enum class Status { Empty = 0, Loading, Loaded, Missing, Failed, Crashed };
 
-    // La ventana de SmartKeys, que toca acordes con el teclado de la PC: se le avisa cuando la
-    // ventana del instrumento deja de tener el teclado (para soltar lo que tocaba la PC)
-    struct KeyboardTarget
-    {
-        virtual ~KeyboardTarget() = default;
-        virtual void hostedWindowLostKeyboard() = 0;
-    };
-
     HostedInstrument();
     ~HostedInstrument() override;
 
@@ -64,15 +60,13 @@ public:
     void setBypassed (bool shouldBypass);
     bool isBypassed() const noexcept                { return bypassed.load (std::memory_order_relaxed); }
 
-    // Ventana flotante del plugin. Se abre SIN quitarle el teclado a SmartKeys; y si se hace
-    // clic en ella, lo que el plugin no use del teclado de la PC (A W S E D…) sigue tocando
-    // acordes en SmartKeys. El MIDI nunca depende de la ventana (abierta, minimizada o cerrada).
-    void showWindow (juce::Component* nextTo);
-    void closeWindow();
-    bool isWindowOpen() const noexcept              { return window != nullptr; }
-    bool isWindowActive() const noexcept;           // tiene el teclado (es la ventana activa)
-    void smartKeysEditorOpened (juce::Component& editor);   // reabre la ventana si estaba abierta
-    void smartKeysEditorClosing();                          // la cierra y lo recuerda
+    // La interfaz del instrumento cargado, para mostrarla DENTRO de la ventana de SmartKeys
+    // (vista SYNTH). HostedInstrument es su dueño: quien la muestra sólo la añade como hija.
+    // nullptr si no hay un instrumento cargado. Un plugin sin interfaz: sus parámetros.
+    // Al cambiar o quitar el instrumento (y al cerrar SmartKeys) se destruye antes que él;
+    // su componente desaparece solo de donde estaba. El MIDI y el audio nunca dependen de ella.
+    juce::AudioProcessorEditor* getEditor (bool createIfNeeded);
+    void releaseEditor();                           // la destruye (guarda antes el sonido del plugin)
 
     Status getStatus() const noexcept               { return (Status) status.load (std::memory_order_acquire); }
     juce::PluginDescription getDescription() const;
@@ -82,7 +76,7 @@ public:
     uint32_t getChangeCounter() const noexcept      { return changeCounter.load (std::memory_order_acquire); }
     PluginCatalog& getCatalog() noexcept            { return *catalog; }
 
-    // Antes de destruir SmartKeys (cierra la ventana y destruye el instrumento)
+    // Antes de destruir SmartKeys (destruye su interfaz y el instrumento)
     void shutdown();
 
     //==========================================================================
@@ -111,7 +105,6 @@ public:
 
 private:
     struct Slot;
-    class Window;
 
     void startLoad (const juce::PluginDescription&, const juce::MemoryBlock& stateToApply, bool userAction);
     void finishLoad (uint32_t generation, const juce::PluginDescription& requested,
@@ -128,8 +121,6 @@ private:
     void applyPendingRestore();
     void refreshStateCache();
     void updateLatency();
-    void windowCloseRequested();
-    void placeWindow (Window&, juce::Component* nextTo);
     void forgetLoadMark (const juce::PluginDescription&);
 
     void render (Slot&, juce::AudioBuffer<float>&, int firstChannel, int numChannels,
@@ -152,10 +143,7 @@ private:
 
     // Hilo de mensajes
     std::unique_ptr<Slot> current;
-    std::unique_ptr<Window> window;
-    bool reopenWindow = false;
-    juce::Component::SafePointer<juce::Component> reopenNextTo;
-    juce::Component::SafePointer<juce::Component> keyTarget;   // la ventana de SmartKeys (teclado de la PC)
+    std::unique_ptr<juce::AudioProcessorEditor> editor;   // su interfaz (dentro de la ventana de SmartKeys)
     uint32_t loadGeneration = 0;
     juce::PluginDescription loadingDescription;
     juce::MemoryBlock loadingState;
@@ -192,11 +180,5 @@ private:
     JUCE_DECLARE_WEAK_REFERENCEABLE (HostedInstrument)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HostedInstrument)
 };
-
-#if JUCE_MAC
-// La ventana del plugin cargado se comporta como un panel de un DAW: se oculta
-// cuando el programa pasa a segundo plano y flota sobre él en pantalla completa
-void configureHostedPluginWindow (void* nativeView);
-#endif
 
 } // namespace smartkeys
