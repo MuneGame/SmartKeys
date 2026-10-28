@@ -2032,7 +2032,9 @@ struct PortScenario
 // Con la máquina de pruebas atascada (su propio hilo de audio llega tarde más de 2 bloques
 // aunque el processBlock del plugin fue rápido), una medida de tiempo no vale: se repite (hasta 6
 // veces). Si la prueba iba a su hora, cuenta. Si el que tardó fue el processBlock, cuenta tal
-// cual: eso sí sería de SmartKeys.
+// cual: eso sí sería de SmartKeys. Cada intento empieza como al darle play (prepareToPlay): tras
+// un atasco, el reloj de muestras del teclado se acerca despacio al real (1 % por bloque) y un
+// intento limpio justo después aún heredaría unos milisegundos.
 constexpr double kHarnessStallMs = 22.0;
 constexpr int kTimedAttempts = 6;
 
@@ -2353,6 +2355,7 @@ void testChordPort (const String& path)
     {
         auto sc = runTimedPortScenario ([&]
         {
+            host.prepare (Host::blockSize);                  // como al darle play: el reloj del teclado, de cero
             runPortScenario (host, *tap, 0.1, {}, false);   // descarta lo anterior
             return runPortScenario (host, *tap, 0.8, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
                                                        { 400.0, MidiMessage::noteOff (1, 54) } }, false);
@@ -2396,6 +2399,7 @@ void testChordPort (const String& path)
         host.setChoice ("Strum Direction", 1);
         auto sc = runTimedPortScenario ([&]
         {
+            host.prepare (Host::blockSize);   // como al darle play: el reloj del teclado, de cero
             runPortScenario (host, *tap, 0.1, {}, false);
             return runPortScenario (host, *tap, 1.1, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
                                                        { 800.0, MidiMessage::noteOff (1, 54) } }, false);
@@ -2424,6 +2428,7 @@ void testChordPort (const String& path)
         // FL Studio parte su búfer y procesa los trozos de golpe: el desfase se conserva igual
         auto fl = runTimedPortScenario ([&]
         {
+            host.prepare (Host::blockSize);   // como al darle play: el reloj del teclado, de cero
             runPortScenario (host, *tap, 0.1, {}, false);
             return runPortScenario (host, *tap, 1.1, { { 100.0, MidiMessage::noteOn (1, 54, (uint8) 100) },
                                                        { 800.0, MidiMessage::noteOff (1, 54) } }, false, 4);
